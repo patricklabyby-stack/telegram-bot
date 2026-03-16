@@ -24,7 +24,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const waitingGreeting = new Map();
+const waitingGreeting = new Map(); // chatId -> { userId, mode: "create" | "edit" }
 
 // ---------- DB ----------
 async function initDB() {
@@ -47,7 +47,7 @@ async function getGreeting(chatId) {
   return result.rows.length ? result.rows[0].text : null;
 }
 
-async function setGreeting(chatId, text) {
+async function createOrUpdateGreeting(chatId, text) {
   await pool.query(
     `
     INSERT INTO greetings (chat_id, text, updated_at)
@@ -87,15 +87,10 @@ bot.onText(/\/start/, async (msg) => {
 
 Команды:
 create greeting
+edit greeting
 show greeting
 delete greeting
 cancel greeting
-
-Как работает:
-1. Пишешь: create greeting
-2. Бот просит текст
-3. Пишешь текст
-4. Бот сохраняет его
 
 Можно использовать {name}
 
@@ -115,11 +110,12 @@ bot.on("message", async (msg) => {
     if (msg.new_chat_members || msg.left_chat_member) return;
 
     const lower = text.toLowerCase();
-    const waiting = waitingGreeting.get(chatId);
 
-    // если бот ждёт текст приветствия
-    if (waiting) {
-      if (waiting.userId !== userId) return;
+    // если бот ждёт текст
+    if (waitingGreeting.has(chatId)) {
+      const session = waitingGreeting.get(chatId);
+
+      if (session.userId !== userId) return;
 
       if (lower === "cancel greeting") {
         waitingGreeting.delete(chatId);
@@ -129,6 +125,7 @@ bot.on("message", async (msg) => {
 
       if (
         lower === "create greeting" ||
+        lower === "edit greeting" ||
         lower === "show greeting" ||
         lower === "delete greeting"
       ) {
@@ -139,13 +136,18 @@ bot.on("message", async (msg) => {
         return;
       }
 
-      await setGreeting(chatId, text);
+      await createOrUpdateGreeting(chatId, text);
       waitingGreeting.delete(chatId);
-      await bot.sendMessage(chatId, "✅ Приветствие сохранено.");
+
+      if (session.mode === "create") {
+        await bot.sendMessage(chatId, "✅ Приветствие создано.");
+      } else {
+        await bot.sendMessage(chatId, "✅ Приветствие изменено.");
+      }
       return;
     }
 
-    // создать / заменить приветствие
+    // create greeting
     if (lower === "create greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -154,15 +156,54 @@ bot.on("message", async (msg) => {
         return;
       }
 
-      waitingGreeting.set(chatId, { userId });
-      await bot.sendMessage(
-        chatId,
-        "✏️ Напишите текст приветствия.\nМожно использовать {name}\n\nДля отмены: cancel greeting"
-      );
+      const existing = await getGreeting(chatId);
+
+      if (existing) {
+        await bot.sendMessage(
+          chatId,
+          "❌ Приветствие уже создано. Используй: edit greeting"
+        );
+        return;
+      }
+
+      waitingGreeting.set(chatId, {
+        userId,
+        mode: "create"
+      });
+
+      await bot.sendMessage(chatId, "✏️ Напиши текст приветствия");
       return;
     }
 
-    // показать приветствие
+    // edit greeting
+    if (lower === "edit greeting") {
+      const allowed = await canManage(chatId, userId);
+
+      if (!allowed) {
+        await bot.sendMessage(chatId, "❌ Только админы могут управлять приветствием.");
+        return;
+      }
+
+      const existing = await getGreeting(chatId);
+
+      if (!existing) {
+        await bot.sendMessage(
+          chatId,
+          "❌ Приветствие ещё не создано. Используй: create greeting"
+        );
+        return;
+      }
+
+      waitingGreeting.set(chatId, {
+        userId,
+        mode: "edit"
+      });
+
+      await bot.sendMessage(chatId, "✏️ Напиши новый текст приветствия");
+      return;
+    }
+
+    // show greeting
     if (lower === "show greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -182,7 +223,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // удалить приветствие
+    // delete greeting
     if (lower === "delete greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -200,11 +241,12 @@ bot.on("message", async (msg) => {
 
       await deleteGreeting(chatId);
       waitingGreeting.delete(chatId);
+
       await bot.sendMessage(chatId, "✅ Приветствие удалено.");
       return;
     }
 
-    // отмена, когда нечего отменять
+    // cancel greeting
     if (lower === "cancel greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -213,7 +255,20 @@ bot.on("message", async (msg) => {
         return;
       }
 
-      await bot.sendMessage(chatId, "❌ Сейчас нет активного ввода приветствия.");
+      if (!waitingGreeting.has(chatId)) {
+        await bot.sendMessage(chatId, "❌ Сейчас нет активного ввода приветствия.");
+        return;
+      }
+
+      const session = waitingGreeting.get(chatId);
+
+      if (session.userId !== userId && userId !== OWNER_ID) {
+        await bot.sendMessage(chatId, "❌ Ты не можешь отменить чужой ввод.");
+        return;
+      }
+
+      waitingGreeting.delete(chatId);
+      await bot.sendMessage(chatId, "❌ Ввод приветствия отменён.");
       return;
     }
   } catch (error) {
