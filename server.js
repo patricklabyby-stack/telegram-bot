@@ -1,7 +1,9 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
+const { Pool } = require('pg');
 
 const token = process.env.BOT_TOKEN;
+const DATABASE_URL = process.env.DATABASE_URL;
 const OWNER_ID = 7837011810;
 
 if (!token) {
@@ -9,13 +11,67 @@ if (!token) {
   process.exit(1);
 }
 
+if (!DATABASE_URL) {
+  console.error('DATABASE_URL not found');
+  process.exit(1);
+}
+
 const bot = new TelegramBot(token, { polling: true });
 const app = express();
 
-const greetings = {};
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
 const waitingGreeting = {};
 
-// кто может управлять ботом
+// создать таблицу
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS greetings (
+      chat_id TEXT PRIMARY KEY,
+      text TEXT NOT NULL
+    )
+  `);
+  console.log('DB ready');
+}
+
+// получить приветствие
+async function getGreeting(chatId) {
+  const result = await pool.query(
+    'SELECT text FROM greetings WHERE chat_id = $1',
+    [String(chatId)]
+  );
+
+  if (result.rows.length === 0) return null;
+  return result.rows[0].text;
+}
+
+// сохранить приветствие
+async function saveGreeting(chatId, text) {
+  await pool.query(
+    `
+    INSERT INTO greetings (chat_id, text)
+    VALUES ($1, $2)
+    ON CONFLICT (chat_id)
+    DO UPDATE SET text = EXCLUDED.text
+    `,
+    [String(chatId), text]
+  );
+}
+
+// удалить приветствие
+async function removeGreeting(chatId) {
+  await pool.query(
+    'DELETE FROM greetings WHERE chat_id = $1',
+    [String(chatId)]
+  );
+}
+
+// проверка прав
 async function canManage(chatId, userId) {
   if (userId === OWNER_ID) return true;
 
@@ -38,14 +94,11 @@ bot.onText(/\/start/, async (msg) => {
 create greeting
 edit greeting
 show greeting
-delete greeting
-
-Пример приветствия:
-Привет {name}! Добро пожаловать в группу.`
+delete greeting`
   );
 });
 
-// все сообщения
+// сообщения
 bot.on('message', async (msg) => {
   try {
     const chatId = msg.chat.id;
@@ -53,15 +106,13 @@ bot.on('message', async (msg) => {
     const text = msg.text?.trim();
 
     if (!text) return;
-
-    // пропускаем системные сообщения
     if (msg.new_chat_members || msg.left_chat_member) return;
 
     const lower = text.toLowerCase();
 
-    // если бот ждёт новый текст приветствия
+    // если ждём текст приветствия
     if (waitingGreeting[chatId] && waitingGreeting[chatId] === userId) {
-      greetings[chatId] = msg.text;
+      await saveGreeting(chatId, msg.text);
       delete waitingGreeting[chatId];
 
       await bot.sendMessage(chatId, '✅ Приветствие сохранено.');
@@ -91,7 +142,8 @@ bot.on('message', async (msg) => {
         return;
       }
 
-      if (!greetings[chatId]) {
+      const greeting = await getGreeting(chatId);
+      if (!greeting) {
         await bot.sendMessage(chatId, '❌ Приветствие ещё не создано.');
         return;
       }
@@ -110,12 +162,13 @@ bot.on('message', async (msg) => {
         return;
       }
 
-      if (!greetings[chatId]) {
+      const greeting = await getGreeting(chatId);
+      if (!greeting) {
         await bot.sendMessage(chatId, '❌ Приветствие ещё не создано.');
         return;
       }
 
-      await bot.sendMessage(chatId, `📌 Текущее приветствие:\n\n${greetings[chatId]}`);
+      await bot.sendMessage(chatId, `📌 Текущее приветствие:\n\n${greeting}`);
       return;
     }
 
@@ -128,12 +181,13 @@ bot.on('message', async (msg) => {
         return;
       }
 
-      if (!greetings[chatId]) {
+      const greeting = await getGreeting(chatId);
+      if (!greeting) {
         await bot.sendMessage(chatId, '❌ Приветствие уже удалено или не создано.');
         return;
       }
 
-      delete greetings[chatId];
+      await removeGreeting(chatId);
       delete waitingGreeting[chatId];
 
       await bot.sendMessage(chatId, '✅ Приветствие удалено.');
@@ -144,11 +198,11 @@ bot.on('message', async (msg) => {
   }
 });
 
-// приветствие новых участников
+// новые участники
 bot.on('new_chat_members', async (msg) => {
   try {
     const chatId = msg.chat.id;
-    const greeting = greetings[chatId];
+    const greeting = await getGreeting(chatId);
 
     if (!greeting) return;
 
@@ -165,13 +219,20 @@ bot.on('new_chat_members', async (msg) => {
   }
 });
 
-// сервер для Render
+// сервер
 app.get('/', (req, res) => {
   res.send('Bot is running');
 });
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log('Server started');
-});
+initDB()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log('Server started');
+    });
+  })
+  .catch((error) => {
+    console.error('DB init error:', error.message);
+    process.exit(1);
+  });
