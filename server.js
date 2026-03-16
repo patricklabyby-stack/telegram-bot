@@ -27,9 +27,6 @@ const pool = new Pool({
 // chatId -> { userId, mode: "create" | "edit" }
 const waitingGreeting = new Map();
 
-// защита от двойного приветствия
-const recentWelcomes = new Map();
-
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS greetings (
@@ -83,33 +80,20 @@ async function canManage(chatId, userId) {
   }
 }
 
-function getUserTag(user) {
-  if (!user) return "пользователь";
-
-  if (user.username) {
-    return "@" + user.username;
-  }
-
-  return user.first_name || "пользователь";
-}
-
 bot.onText(/\/start/, async (msg) => {
   try {
     await bot.sendMessage(
       msg.chat.id,
       `👋 Привет! Я Artemwe Moderator.
 
-Команды приветствия:
+Команды:
 create greeting
 edit greeting
 show greeting
 delete greeting
 cancel greeting
 
-RP команда:
-/jail
-
-Как работает приветствие:
+Как работает:
 1. create greeting
 2. бот просит текст
 3. ты отправляешь текст
@@ -125,39 +109,6 @@ RP команда:
   }
 });
 
-// RP команда: jail
-bot.onText(/\/jail(?:\s+(.+))?/, async (msg) => {
-  try {
-    const actor = getUserTag(msg.from);
-
-    let target = null;
-
-    if (msg.reply_to_message?.from) {
-      target = getUserTag(msg.reply_to_message.from);
-    } else {
-      const args = msg.text.trim().split(" ");
-      if (args[1]) {
-        target = args.slice(1).join(" ");
-      }
-    }
-
-    if (!target) {
-      await bot.sendMessage(
-        msg.chat.id,
-        "Кого посадить? Ответь на сообщение человека или напиши: /jail @username"
-      );
-      return;
-    }
-
-    await bot.sendMessage(
-      msg.chat.id,
-      `⛓️‍💥 | ${actor} | посадил | ${target}`
-    );
-  } catch (error) {
-    console.error("/jail error:", error.message);
-  }
-});
-
 bot.on("message", async (msg) => {
   try {
     const chatId = msg.chat.id;
@@ -166,11 +117,10 @@ bot.on("message", async (msg) => {
 
     if (!originalText) return;
     if (msg.new_chat_members || msg.left_chat_member) return;
-    if (originalText.startsWith("/jail")) return;
 
     const text = originalText.toLowerCase();
 
-    // если бот ждёт текст приветствия
+    // 1. если бот ждёт текст приветствия
     if (waitingGreeting.has(chatId)) {
       const session = waitingGreeting.get(chatId);
 
@@ -207,7 +157,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // create greeting
+    // 2. create greeting
     if (text === "create greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -235,7 +185,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // edit greeting
+    // 3. edit greeting
     if (text === "edit greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -263,7 +213,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // show greeting
+    // 4. show greeting
     if (text === "show greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -283,7 +233,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // delete greeting
+    // 5. delete greeting
     if (text === "delete greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -306,7 +256,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // cancel greeting
+    // 6. cancel greeting
     if (text === "cancel greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -346,23 +296,10 @@ bot.on("new_chat_members", async (msg) => {
     for (const user of msg.new_chat_members) {
       if (user.is_bot) continue;
 
-      const key = `${chatId}:${user.id}`;
-      const now = Date.now();
-
-      if (recentWelcomes.has(key) && now - recentWelcomes.get(key) < 10000) {
-        continue;
-      }
-
-      recentWelcomes.set(key, now);
-
       const name = user.first_name || user.username || "друг";
       const finalText = greeting.replace(/\{name\}/g, name);
 
       await bot.sendMessage(chatId, finalText);
-
-      setTimeout(() => {
-        recentWelcomes.delete(key);
-      }, 10000);
     }
   } catch (error) {
     console.error("new_chat_members error:", error.message);
