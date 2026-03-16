@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 
 const token = process.env.BOT_TOKEN;
+const OWNER_ID = 7837011810;
 
 if (!token) {
   console.error('BOT_TOKEN not found');
@@ -13,9 +14,8 @@ const app = express();
 
 const greetings = {};
 const waitingGreeting = {};
-const OWNER_ID = 7837011810;
 
-// проверка: ты или админ
+// кто может управлять ботом
 async function canManage(chatId, userId) {
   if (userId === OWNER_ID) return true;
 
@@ -29,10 +29,19 @@ async function canManage(chatId, userId) {
 }
 
 // старт
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(
+bot.onText(/\/start/, async (msg) => {
+  await bot.sendMessage(
     msg.chat.id,
-    '👋 Привет! Я работаю.\n\nКоманды:\ncreate greeting\nshow greeting\ndelete greeting'
+    `👋 Привет! Я работаю.
+
+Команды:
+create greeting
+edit greeting
+show greeting
+delete greeting
+
+Пример приветствия:
+Привет {name}! Добро пожаловать в группу.`
   );
 });
 
@@ -48,26 +57,56 @@ bot.on('message', async (msg) => {
     // пропускаем системные сообщения
     if (msg.new_chat_members || msg.left_chat_member) return;
 
+    const lower = text.toLowerCase();
+
+    // если бот ждёт новый текст приветствия
+    if (waitingGreeting[chatId] && waitingGreeting[chatId] === userId) {
+      greetings[chatId] = msg.text;
+      delete waitingGreeting[chatId];
+
+      await bot.sendMessage(chatId, '✅ Приветствие сохранено.');
+      return;
+    }
+
     // create greeting
-    if (text.toLowerCase() === 'create greeting') {
+    if (lower === 'create greeting') {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, '❌ Только админ может управлять приветствием.');
+        await bot.sendMessage(chatId, '❌ Только админы могут управлять приветствием.');
         return;
       }
 
       waitingGreeting[chatId] = userId;
-      await bot.sendMessage(chatId, 'Напиши текст приветствия');
+      await bot.sendMessage(chatId, 'Какое приветствие вы хотите создать?');
+      return;
+    }
+
+    // edit greeting
+    if (lower === 'edit greeting') {
+      const allowed = await canManage(chatId, userId);
+
+      if (!allowed) {
+        await bot.sendMessage(chatId, '❌ Только админы могут управлять приветствием.');
+        return;
+      }
+
+      if (!greetings[chatId]) {
+        await bot.sendMessage(chatId, '❌ Приветствие ещё не создано.');
+        return;
+      }
+
+      waitingGreeting[chatId] = userId;
+      await bot.sendMessage(chatId, 'Напиши новый текст приветствия.');
       return;
     }
 
     // show greeting
-    if (text.toLowerCase() === 'show greeting') {
+    if (lower === 'show greeting') {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, '❌ Только админ может управлять приветствием.');
+        await bot.sendMessage(chatId, '❌ Только админы могут управлять приветствием.');
         return;
       }
 
@@ -81,11 +120,11 @@ bot.on('message', async (msg) => {
     }
 
     // delete greeting
-    if (text.toLowerCase() === 'delete greeting') {
+    if (lower === 'delete greeting') {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, '❌ Только админ может управлять приветствием.');
+        await bot.sendMessage(chatId, '❌ Только админы могут управлять приветствием.');
         return;
       }
 
@@ -100,21 +139,12 @@ bot.on('message', async (msg) => {
       await bot.sendMessage(chatId, '✅ Приветствие удалено.');
       return;
     }
-
-    // если бот ждёт текст приветствия
-    if (waitingGreeting[chatId] && waitingGreeting[chatId] === userId) {
-      greetings[chatId] = msg.text;
-      delete waitingGreeting[chatId];
-
-      await bot.sendMessage(chatId, '✅ Приветствие сохранено.');
-      return;
-    }
   } catch (error) {
     console.error('Message error:', error.message);
   }
 });
 
-// когда заходят новые участники
+// приветствие новых участников
 bot.on('new_chat_members', async (msg) => {
   try {
     const chatId = msg.chat.id;
@@ -124,7 +154,11 @@ bot.on('new_chat_members', async (msg) => {
 
     for (const user of msg.new_chat_members) {
       if (user.is_bot) continue;
-      await bot.sendMessage(chatId, greeting);
+
+      const name = user.first_name || user.username || 'друг';
+      const finalText = greeting.replace(/\{name\}/g, name);
+
+      await bot.sendMessage(chatId, finalText);
     }
   } catch (error) {
     console.error('new_chat_members error:', error.message);
