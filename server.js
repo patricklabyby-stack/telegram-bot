@@ -83,21 +83,14 @@ async function canManage(chatId, userId) {
   }
 }
 
-function getTargetName(msg) {
-  if (msg.reply_to_message?.from) {
-    return (
-      msg.reply_to_message.from.first_name ||
-      msg.reply_to_message.from.username ||
-      "пользователя"
-    );
+function getUserTag(user) {
+  if (!user) return "пользователь";
+
+  if (user.username) {
+    return "@" + user.username;
   }
 
-  const parts = msg.text.trim().split(" ");
-  if (parts.length > 1) {
-    return parts.slice(1).join(" ");
-  }
-
-  return null;
+  return user.first_name || "пользователь";
 }
 
 bot.onText(/\/start/, async (msg) => {
@@ -132,15 +125,21 @@ RP команда:
   }
 });
 
-// RP: jail
+// RP команда: jail
 bot.onText(/\/jail(?:\s+(.+))?/, async (msg) => {
   try {
-    const actor =
-      msg.from.first_name ||
-      msg.from.username ||
-      "Кто-то";
+    const actor = getUserTag(msg.from);
 
-    const target = getTargetName(msg);
+    let target = null;
+
+    if (msg.reply_to_message?.from) {
+      target = getUserTag(msg.reply_to_message.from);
+    } else {
+      const args = msg.text.trim().split(" ");
+      if (args[1]) {
+        target = args.slice(1).join(" ");
+      }
+    }
 
     if (!target) {
       await bot.sendMessage(
