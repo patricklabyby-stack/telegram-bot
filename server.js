@@ -5,6 +5,7 @@ const { Pool } = require("pg");
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const OWNER_ID = 7837011810;
+const PORT = process.env.PORT || 3000;
 
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN not found");
@@ -24,8 +25,32 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// chatId -> { userId, mode: "create" | "edit" }
+/*
+  waitingGreeting:
+  chatId -> {
+    userId: number,
+    mode: "create" | "edit"
+  }
+*/
 const waitingGreeting = new Map();
+
+/*
+  recentWelcomes:
+  защита от двойной отправки приветствия
+  key = `${chatId}:${userId}`
+*/
+const recentWelcomes = new Map();
+
+/*
+  usersCache:
+  username(lowercase without @) -> account display name
+  Нужен для /jail @username
+*/
+const usersCache = new Map();
+
+/* =========================
+   DB
+========================= */
 
 async function initDB() {
   await pool.query(`
@@ -68,6 +93,73 @@ async function removeGreeting(chatId) {
   );
 }
 
+/* =========================
+   HELPERS
+========================= */
+
+async function safeSendMessage(chatId, text, extra = {}) {
+  try {
+    return await bot.sendMessage(chatId, text, extra);
+  } catch (error) {
+    console.error("sendMessage error:", error.message);
+    return null;
+  }
+}
+
+function normalizeUsername(username) {
+  if (!username) return null;
+  return String(username).replace(/^@/, "").trim().toLowerCase() || null;
+}
+
+function getAccountName(user) {
+  if (!user) return "Игрок";
+
+  const firstName = user.first_name || "";
+  const lastName = user.last_name || "";
+  const fullName = `${firstName} ${lastName}`.trim();
+
+  return fullName || "Игрок";
+}
+
+function getBestVisibleName(user) {
+  if (!user) return "Игрок";
+  if (user.username) return `@${user.username}`;
+  return getAccountName(user);
+}
+
+function cacheUser(user) {
+  if (!user) return;
+
+  const normalized = normalizeUsername(user.username);
+  if (!normalized) return;
+
+  usersCache.set(normalized, getAccountName(user));
+}
+
+function resolveTargetFromCommandArg(rawArg) {
+  if (!rawArg) return null;
+
+  const trimmed = rawArg.trim();
+  if (!trimmed) return null;
+
+  // если это username
+  if (trimmed.startsWith("@")) {
+    const normalized = normalizeUsername(trimmed);
+    if (!normalized) return trimmed;
+
+    // если уже видели этого пользователя в чате — подставим имя аккаунта
+    if (usersCache.has(normalized)) {
+      return usersCache.get(normalized);
+    }
+
+    // иначе оставим @username
+    return `@${normalized}`;
+  }
+
+  // просто текст
+  return trimmed;
+}
+
 async function canManage(chatId, userId) {
   if (userId === OWNER_ID) return true;
 
@@ -80,20 +172,50 @@ async function canManage(chatId, userId) {
   }
 }
 
-bot.onText(/\/start/, async (msg) => {
-  try {
-    await bot.sendMessage(
-      msg.chat.id,
-      `👋 Привет! Я Artemwe Moderator.
+function isSystemEventMessage(msg) {
+  return Boolean(
+    msg.new_chat_members ||
+    msg.left_chat_member ||
+    msg.group_chat_created ||
+    msg.supergroup_chat_created ||
+    msg.channel_chat_created ||
+    msg.delete_chat_photo ||
+    msg.migrate_from_chat_id ||
+    msg.migrate_to_chat_id ||
+    msg.pinned_message
+  );
+}
 
-Команды:
+function cleanupExpiredWelcome(key, delayMs = 10000) {
+  setTimeout(() => {
+    recentWelcomes.delete(key);
+  }, delayMs);
+}
+
+/* =========================
+   START
+========================= */
+
+bot.onText(/\/start/, async (msg) => {
+  await safeSendMessage(
+    msg.chat.id,
+    `👋 Привет! Я Artemwe Moderator.
+
+Команды приветствия:
 create greeting
 edit greeting
 show greeting
 delete greeting
 cancel greeting
 
-Как работает:
+RP команда:
+/jail
+Пример:
+/jail @username
+или ответом на сообщение:
+/jail
+
+Как работает приветствие:
 1. create greeting
 2. бот просит текст
 3. ты отправляешь текст
@@ -103,32 +225,82 @@ cancel greeting
 
 Пример:
 Привет {name}! Добро пожаловать в группу.`
+  );
+});
+
+/* =========================
+   RP: JAIL
+========================= */
+
+bot.onText(/\/jail(?:\s+(.+))?/, async (msg, match) => {
+  try {
+    cacheUser(msg.from);
+    if (msg.reply_to_message?.from) cacheUser(msg.reply_to_message.from);
+
+    const actorName = getAccountName(msg.from);
+    let target = null;
+
+    // 1. Если команда ответом на сообщение — берём имя аккаунта цели
+    if (msg.reply_to_message?.from) {
+      target = getAccountName(msg.reply_to_message.from);
+    } else {
+      // 2. Если /jail @username или /jail текст
+      const rawArg = match?.[1] || "";
+      target = resolveTargetFromCommandArg(rawArg);
+    }
+
+    if (!target) {
+      await safeSendMessage(
+        msg.chat.id,
+        "Кого посадить? Ответь на сообщение игрока или напиши: /jail @username"
+      );
+      return;
+    }
+
+    await safeSendMessage(
+      msg.chat.id,
+      `⛓️‍💥 | ${actorName} | посадил | ${target}`
     );
   } catch (error) {
-    console.error("/start error:", error.message);
+    console.error("/jail error:", error.message);
   }
 });
 
+/* =========================
+   MAIN MESSAGE HANDLER
+========================= */
+
 bot.on("message", async (msg) => {
   try {
+    // кэшируем пользователей, которых видим
+    if (msg.from) cacheUser(msg.from);
+    if (msg.reply_to_message?.from) cacheUser(msg.reply_to_message.from);
+
     const chatId = msg.chat.id;
     const userId = msg.from?.id;
     const originalText = msg.text?.trim();
 
     if (!originalText) return;
-    if (msg.new_chat_members || msg.left_chat_member) return;
+    if (isSystemEventMessage(msg)) return;
+
+    // чтобы /jail не обрабатывался здесь второй раз
+    if (originalText.startsWith("/jail")) return;
+    if (originalText === "/start") return;
 
     const text = originalText.toLowerCase();
 
-    // 1. если бот ждёт текст приветствия
+    /* =========================
+       1. если бот ждёт текст приветствия
+    ========================= */
     if (waitingGreeting.has(chatId)) {
       const session = waitingGreeting.get(chatId);
 
+      // только тот, кто начал ввод
       if (session.userId !== userId) return;
 
       if (text === "cancel greeting") {
         waitingGreeting.delete(chatId);
-        await bot.sendMessage(chatId, "❌ Ввод приветствия отменён.");
+        await safeSendMessage(chatId, "❌ Ввод приветствия отменён.");
         return;
       }
 
@@ -138,7 +310,7 @@ bot.on("message", async (msg) => {
         text === "show greeting" ||
         text === "delete greeting"
       ) {
-        await bot.sendMessage(
+        await safeSendMessage(
           chatId,
           "❌ Сейчас бот ждёт текст приветствия. Напиши текст или используй: cancel greeting"
         );
@@ -149,27 +321,33 @@ bot.on("message", async (msg) => {
       waitingGreeting.delete(chatId);
 
       if (session.mode === "edit") {
-        await bot.sendMessage(chatId, "✅ Приветствие изменено.");
+        await safeSendMessage(chatId, "✅ Приветствие изменено.");
       } else {
-        await bot.sendMessage(chatId, "✅ Приветствие создано.");
+        await safeSendMessage(chatId, "✅ Приветствие создано.");
       }
 
       return;
     }
 
-    // 2. create greeting
+    /* =========================
+       2. команды приветствия
+    ========================= */
+
     if (text === "create greeting") {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, "❌ Только админы могут управлять приветствием.");
+        await safeSendMessage(
+          chatId,
+          "❌ Только админы и владелец могут управлять приветствием."
+        );
         return;
       }
 
       const currentGreeting = await getGreeting(chatId);
 
       if (currentGreeting) {
-        await bot.sendMessage(
+        await safeSendMessage(
           chatId,
           "❌ Приветствие уже создано. Используй: edit greeting"
         );
@@ -181,23 +359,25 @@ bot.on("message", async (msg) => {
         mode: "create"
       });
 
-      await bot.sendMessage(chatId, "✏️ Напиши текст приветствия");
+      await safeSendMessage(chatId, "✏️ Напиши текст приветствия");
       return;
     }
 
-    // 3. edit greeting
     if (text === "edit greeting") {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, "❌ Только админы могут управлять приветствием.");
+        await safeSendMessage(
+          chatId,
+          "❌ Только админы и владелец могут управлять приветствием."
+        );
         return;
       }
 
       const currentGreeting = await getGreeting(chatId);
 
       if (!currentGreeting) {
-        await bot.sendMessage(
+        await safeSendMessage(
           chatId,
           "❌ Приветствие ещё не создано. Используй: create greeting"
         );
@@ -209,82 +389,101 @@ bot.on("message", async (msg) => {
         mode: "edit"
       });
 
-      await bot.sendMessage(chatId, "✏️ Напиши новый текст приветствия");
+      await safeSendMessage(chatId, "✏️ Напиши новый текст приветствия");
       return;
     }
 
-    // 4. show greeting
     if (text === "show greeting") {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, "❌ Только админы могут управлять приветствием.");
+        await safeSendMessage(
+          chatId,
+          "❌ Только админы и владелец могут управлять приветствием."
+        );
         return;
       }
 
       const currentGreeting = await getGreeting(chatId);
 
       if (!currentGreeting) {
-        await bot.sendMessage(chatId, "❌ Приветствие ещё не создано.");
+        await safeSendMessage(chatId, "❌ Приветствие ещё не создано.");
         return;
       }
 
-      await bot.sendMessage(chatId, `📌 Текущее приветствие:\n\n${currentGreeting}`);
+      await safeSendMessage(
+        chatId,
+        `📌 Текущее приветствие:\n\n${currentGreeting}`
+      );
       return;
     }
 
-    // 5. delete greeting
     if (text === "delete greeting") {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, "❌ Только админы могут управлять приветствием.");
+        await safeSendMessage(
+          chatId,
+          "❌ Только админы и владелец могут управлять приветствием."
+        );
         return;
       }
 
       const currentGreeting = await getGreeting(chatId);
 
       if (!currentGreeting) {
-        await bot.sendMessage(chatId, "❌ Приветствие уже удалено или не создано.");
+        await safeSendMessage(
+          chatId,
+          "❌ Приветствие уже удалено или не создано."
+        );
         return;
       }
 
       await removeGreeting(chatId);
       waitingGreeting.delete(chatId);
 
-      await bot.sendMessage(chatId, "✅ Приветствие удалено.");
+      await safeSendMessage(chatId, "✅ Приветствие удалено.");
       return;
     }
 
-    // 6. cancel greeting
     if (text === "cancel greeting") {
       const allowed = await canManage(chatId, userId);
 
       if (!allowed) {
-        await bot.sendMessage(chatId, "❌ Только админы могут управлять приветствием.");
+        await safeSendMessage(
+          chatId,
+          "❌ Только админы и владелец могут управлять приветствием."
+        );
         return;
       }
 
       if (!waitingGreeting.has(chatId)) {
-        await bot.sendMessage(chatId, "❌ Сейчас нет активного ввода приветствия.");
+        await safeSendMessage(
+          chatId,
+          "❌ Сейчас нет активного ввода приветствия."
+        );
         return;
       }
 
       const session = waitingGreeting.get(chatId);
 
       if (session.userId !== userId && userId !== OWNER_ID) {
-        await bot.sendMessage(chatId, "❌ Ты не можешь отменить чужой ввод.");
+        await safeSendMessage(chatId, "❌ Ты не можешь отменить чужой ввод.");
         return;
       }
 
       waitingGreeting.delete(chatId);
-      await bot.sendMessage(chatId, "❌ Ввод приветствия отменён.");
+      await safeSendMessage(chatId, "❌ Ввод приветствия отменён.");
       return;
     }
   } catch (error) {
-    console.error("Message error:", error.message);
+    console.error("Message handler error:", error.message);
   }
 });
+
+/* =========================
+   WELCOME NEW MEMBERS
+========================= */
 
 bot.on("new_chat_members", async (msg) => {
   try {
@@ -296,21 +495,38 @@ bot.on("new_chat_members", async (msg) => {
     for (const user of msg.new_chat_members) {
       if (user.is_bot) continue;
 
+      const key = `${chatId}:${user.id}`;
+      const now = Date.now();
+
+      // защита от двойного приветствия
+      if (recentWelcomes.has(key) && now - recentWelcomes.get(key) < 10000) {
+        continue;
+      }
+
+      recentWelcomes.set(key, now);
+      cleanupExpiredWelcome(key, 10000);
+
       const name = user.first_name || user.username || "друг";
       const finalText = greeting.replace(/\{name\}/g, name);
 
-      await bot.sendMessage(chatId, finalText);
+      await safeSendMessage(chatId, finalText);
     }
   } catch (error) {
     console.error("new_chat_members error:", error.message);
   }
 });
 
+/* =========================
+   EXPRESS
+========================= */
+
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-const PORT = process.env.PORT || 3000;
+/* =========================
+   START APP
+========================= */
 
 initDB()
   .then(() => {
