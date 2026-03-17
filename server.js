@@ -62,6 +62,7 @@ async function initDb() {
       freezes INTEGER DEFAULT 0,
       balance INTEGER DEFAULT 0,
       last_daily_at TIMESTAMPTZ,
+      last_hunt_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
   `);
@@ -90,6 +91,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS freezes INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_hunt_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
@@ -199,6 +201,34 @@ function getRandomChatMember(chatId) {
 
 function getRandomCoins() {
   return Math.floor(Math.random() * 101);
+}
+
+function getRandomHuntCoins() {
+  return Math.floor(Math.random() * 11);
+}
+
+function getHuntResult() {
+  const normalAnimals = [
+    { animal: "🐰 Поймал зайца!" },
+    { animal: "🦊 Поймал лису!" },
+    { animal: "🐗 Поймал кабана!" },
+    { animal: "🦌 Поймал оленя!" }
+  ];
+
+  const isBear = Math.random() < 0.25;
+
+  if (isBear) {
+    return {
+      text: "🐻 Ты нашёл медведя... Он тебя съел!",
+      coins: -getRandomHuntCoins()
+    };
+  }
+
+  const chosen = normalAnimals[Math.floor(Math.random() * normalAnimals.length)];
+  return {
+    text: chosen.animal,
+    coins: getRandomHuntCoins()
+  };
 }
 
 function formatRemainingTime(ms) {
@@ -365,6 +395,57 @@ async function claimDailyCoins(userId) {
   };
 }
 
+async function runHunt(userId) {
+  const result = await pool.query(
+    `SELECT balance, last_hunt_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
+  const cooldownMs = 24 * 60 * 60 * 1000;
+
+  if (lastHuntAt) {
+    const nextTime = new Date(lastHuntAt.getTime() + cooldownMs);
+
+    if (now < nextTime) {
+      return {
+        ok: false,
+        remainingMs: nextTime.getTime() - now.getTime()
+      };
+    }
+  }
+
+  const hunt = getHuntResult();
+  let newBalance = Number(row.balance || 0) + hunt.coins;
+
+  if (newBalance < 0) {
+    newBalance = 0;
+  }
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_hunt_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return {
+    ok: true,
+    hunt,
+    balance: updateResult.rows[0].balance
+  };
+}
+
 async function getProfileText(user) {
   await initUser(user);
   const stats = await getUserStats(user.id);
@@ -477,6 +558,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 оценка
 прогноз
 деньги
+охота
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
@@ -547,6 +629,53 @@ bot.on("message", async (msg) => {
       await bot.sendMessage(
         msg.chat.id,
         `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!\n\nБаланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // ОХОТА
+    // =========================
+    if (lowerText === "охота") {
+      const result = await runHunt(msg.from.id);
+
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await bot.sendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await bot.sendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      let coinsLine = "😐 0 монет";
+
+      if (result.hunt.coins > 0) {
+        coinsLine = `💰 +${result.hunt.coins} монет`;
+      } else if (result.hunt.coins < 0) {
+        coinsLine = `💀 ${result.hunt.coins} монет`;
+      }
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `🏹 ${getUserLink(msg.from)} отправился на охоту...
+
+${escapeHtml(result.hunt.text)}
+${coinsLine}
+
+Баланс: ${result.balance} монет`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
