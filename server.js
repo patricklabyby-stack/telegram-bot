@@ -15,10 +15,12 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// хранилище статистики
+// =========================
+// БАЗА СТАТЫ В ПАМЯТИ
+// =========================
 const userStats = {};
 
-// создание профиля если его нет
+// создать стату если ее нет
 function initUser(user) {
   if (!userStats[user.id]) {
     userStats[user.id] = {
@@ -31,14 +33,33 @@ function initUser(user) {
   }
 }
 
-// имя ссылкой
-function getUserLink(user) {
-  const name =
-    `${user.first_name || ""} ${user.last_name || ""}`.trim() || "Пользователь";
-  return `<a href="tg://user?id=${user.id}">${name}</a>`;
+// безопасное имя
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-// рп команды
+// имя пользователя ссылкой
+function getUserLink(user) {
+  const fullName = `${user.first_name || ""} ${user.last_name || ""}`.trim();
+  const name = fullName || user.username || "Пользователь";
+  return `<a href="tg://user?id=${user.id}">${escapeHtml(name)}</a>`;
+}
+
+// считаем все взаимодействия
+function getTotalStats(stats) {
+  return (
+    stats.kills +
+    stats.hugs +
+    stats.kisses +
+    stats.hits +
+    stats.bites
+  );
+}
+
+// РП команды
 const rpCommands = {
   "убить": { text: "убил", stat: "kills" },
   "обнять": { text: "обнял", stat: "hugs" },
@@ -47,79 +68,9 @@ const rpCommands = {
   "укусить": { text: "укусил", stat: "bites" }
 };
 
-bot.on("message", async (msg) => {
-  if (!msg.text) return;
-
-  const text = msg.text.trim().toLowerCase();
-
-  // /profile
-  if (text === "/profile") {
-    const targetUser = msg.reply_to_message ? msg.reply_to_message.from : msg.from;
-
-    initUser(targetUser);
-
-    const stats = userStats[targetUser.id];
-    const total =
-      stats.kills +
-      stats.hugs +
-      stats.kisses +
-      stats.hits +
-      stats.bites;
-
-    return bot.sendMessage(
-      msg.chat.id,
-      `👤 Профиль пользователя
-
-Имя: ${getUserLink(targetUser)}
-ID: ${targetUser.id}
-
-📊 Статистика:
-💀 Убили: ${stats.kills}
-❤️ Обняли: ${stats.hugs}
-💋 Поцеловали: ${stats.kisses}
-👊 Ударили: ${stats.hits}
-😈 Укусили: ${stats.bites}
-
-🔥 Всего взаимодействий: ${total}`,
-      { parse_mode: "HTML" }
-    );
-  }
-
-  // РП команды
-  if (!rpCommands[text]) return;
-
-  if (!msg.reply_to_message) {
-    return bot.sendMessage(
-      msg.chat.id,
-      "Ответь на сообщение человека этой командой."
-    );
-  }
-
-  const sender = msg.from;
-  const target = msg.reply_to_message.from;
-
-  initUser(sender);
-  initUser(target);
-
-  if (sender.id === target.id) {
-    return bot.sendMessage(
-      msg.chat.id,
-      `😅 ${getUserLink(sender)} ${rpCommands[text].text} самого себя`,
-      { parse_mode: "HTML" }
-    );
-  }
-
-  // прибавляем статистику ТОМУ, кого ударили/обняли/убили
-  userStats[target.id][rpCommands[text].stat]++;
-
-  return bot.sendMessage(
-    msg.chat.id,
-    `✨ ${getUserLink(sender)} ${rpCommands[text].text} ${getUserLink(target)}`,
-    { parse_mode: "HTML" }
-  );
-});
-
+// =========================
 // /start
+// =========================
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
@@ -132,7 +83,87 @@ bot.onText(/\/start/, (msg) => {
 ударить
 укусить
 
-/profile — показать профиль
-(или ответь на сообщение и напиши /profile)`
+Как использовать:
+1. Ответь на сообщение человека
+2. Напиши команду, например: убить
+
+/profile — твой профиль
+/profile ответом — профиль другого человека`
+  );
+});
+
+// =========================
+// /profile
+// =========================
+bot.onText(/\/profile/, (msg) => {
+  const targetUser = msg.reply_to_message ? msg.reply_to_message.from : msg.from;
+
+  initUser(targetUser);
+  const stats = userStats[targetUser.id];
+  const total = getTotalStats(stats);
+
+  bot.sendMessage(
+    msg.chat.id,
+    `👤 Профиль пользователя
+
+Имя: ${getUserLink(targetUser)}
+ID: ${targetUser.id}
+
+📊 Статистика:
+💀 Убили: ${stats.kills}
+❤️ Обняли: ${stats.hugs}
+💋 Поцеловали: ${stats.kisses}
+👊 Ударили: ${stats.hits}
+😈 Укусили: ${stats.bites}
+
+🔥 Всего взаимодействий: ${total}`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// =========================
+// ОБРАБОТКА РП КОМАНД
+// =========================
+bot.on("message", (msg) => {
+  if (!msg.text) return;
+
+  const text = msg.text.trim().toLowerCase();
+
+  // чтобы /start и /profile не обрабатывались тут
+  if (text.startsWith("/")) return;
+
+  const command = rpCommands[text];
+  if (!command) return;
+
+  // команда только ответом на сообщение
+  if (!msg.reply_to_message) {
+    return bot.sendMessage(
+      msg.chat.id,
+      "Ответь на сообщение игрока этой командой."
+    );
+  }
+
+  const sender = msg.from;
+  const target = msg.reply_to_message.from;
+
+  initUser(sender);
+  initUser(target);
+
+  // сам себя
+  if (sender.id === target.id) {
+    return bot.sendMessage(
+      msg.chat.id,
+      `😅 ${getUserLink(sender)} ${command.text} самого себя`,
+      { parse_mode: "HTML" }
+    );
+  }
+
+  // увеличиваем стату ТОМУ, кого выбрали целью
+  userStats[target.id][command.stat] += 1;
+
+  return bot.sendMessage(
+    msg.chat.id,
+    `✨ ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`,
+    { parse_mode: "HTML" }
   );
 });
