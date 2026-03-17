@@ -87,6 +87,17 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS star_purchases (
+      telegram_payment_charge_id TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      payload TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hugs INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kisses INTEGER DEFAULT 0`);
@@ -328,6 +339,19 @@ function formatRemainingTime(ms) {
   return `${hours} ч ${minutes} мин`;
 }
 
+function getShopKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "💰 50 монет — 10 ⭐",
+          callback_data: "buy_50_coins"
+        }
+      ]
+    ]
+  };
+}
+
 // =========================
 // БАЗОВЫЕ ФУНКЦИИ БД
 // =========================
@@ -435,6 +459,101 @@ async function incrementStat(targetUserId, statField) {
   );
 
   console.log("✅ stat updated:", statField, "for", targetUserId, result.rows[0]);
+}
+
+async function addCoinsToUser(userId, amount) {
+  const result = await pool.query(
+    `
+    UPDATE users
+    SET balance = COALESCE(balance, 0) + $2
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, amount]
+  );
+
+  return result.rows[0]?.balance || 0;
+}
+
+async function processStarPurchase(userId, successfulPayment) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const existing = await client.query(
+      `
+      SELECT telegram_payment_charge_id
+      FROM star_purchases
+      WHERE telegram_payment_charge_id = $1
+      `,
+      [successfulPayment.telegram_payment_charge_id]
+    );
+
+    if (existing.rows.length > 0) {
+      const balanceRow = await client.query(
+        `SELECT balance FROM users WHERE user_id = $1`,
+        [userId]
+      );
+
+      await client.query("COMMIT");
+
+      return {
+        alreadyProcessed: true,
+        balance: balanceRow.rows[0]?.balance || 0,
+        coinsAdded: 0
+      };
+    }
+
+    let coinsToAdd = 0;
+
+    if (successfulPayment.invoice_payload === "coins_50") {
+      coinsToAdd = 50;
+    }
+
+    await client.query(
+      `
+      INSERT INTO star_purchases (
+        telegram_payment_charge_id,
+        user_id,
+        payload,
+        amount,
+        currency
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      `,
+      [
+        successfulPayment.telegram_payment_charge_id,
+        userId,
+        successfulPayment.invoice_payload,
+        successfulPayment.total_amount,
+        successfulPayment.currency
+      ]
+    );
+
+    const balanceResult = await client.query(
+      `
+      UPDATE users
+      SET balance = COALESCE(balance, 0) + $2
+      WHERE user_id = $1
+      RETURNING balance
+      `,
+      [userId, coinsToAdd]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      alreadyProcessed: false,
+      balance: balanceResult.rows[0]?.balance || 0,
+      coinsAdded: coinsToAdd
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // =========================
@@ -704,6 +823,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 охота
 снайпер
 пара
+магазин
 /balance
 
 /profile — показать свой профиль
@@ -785,6 +905,78 @@ bot.on("message", async (msg) => {
 });
 
 // =========================
+// УСПЕШНАЯ ОПЛАТА
+// =========================
+bot.on("message", async (msg) => {
+  try {
+    if (!msg.successful_payment || !msg.from) return;
+
+    await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
+
+    const payment = msg.successful_payment;
+    const purchase = await processStarPurchase(msg.from.id, payment);
+
+    if (purchase.alreadyProcessed) {
+      await bot.sendMessage(
+        msg.chat.id,
+        `ℹ️ Оплата уже обработана.\n\nБаланс: ${purchase.balance} монет`
+      );
+      return;
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `✅ Оплата прошла успешно!
+
+💰 Вам начислено ${purchase.coinsAdded} монет
+Баланс: ${purchase.balance} монет`
+    );
+  } catch (error) {
+    console.error("Ошибка successful_payment:", error);
+  }
+});
+
+// =========================
+// CALLBACK КНОПКИ МАГАЗИНА
+// =========================
+bot.on("callback_query", async (query) => {
+  try {
+    if (!query.data || !query.message || !query.from) return;
+
+    if (query.data === "buy_50_coins") {
+      await initUser(query.from);
+      await saveSeenUser(query.message.chat.id, query.from);
+
+      await bot.answerCallbackQuery(query.id);
+
+      await bot.sendInvoice(
+        query.message.chat.id,
+        "50 монет",
+        "Покупка 50 монет за 10 Telegram Stars",
+        "coins_50",
+        "",
+        "XTR",
+        [{ label: "50 монет", amount: 10 }]
+      );
+    }
+  } catch (error) {
+    console.error("Ошибка callback_query:", error);
+  }
+});
+
+// =========================
+// PRE CHECKOUT
+// =========================
+bot.on("pre_checkout_query", async (query) => {
+  try {
+    await bot.answerPreCheckoutQuery(query.id, true);
+  } catch (error) {
+    console.error("Ошибка pre_checkout_query:", error);
+  }
+});
+
+// =========================
 // ОБРАБОТКА СООБЩЕНИЙ
 // =========================
 bot.on("message", async (msg) => {
@@ -799,6 +991,23 @@ bot.on("message", async (msg) => {
     const lowerText = text.toLowerCase();
 
     if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // МАГАЗИН
+    // =========================
+    if (lowerText === "магазин") {
+      await bot.sendMessage(
+        msg.chat.id,
+        `🛒 Магазин
+
+Товар:
+💰 50 монет — 10 ⭐`,
+        {
+          reply_markup: getShopKeyboard()
+        }
+      );
+      return;
+    }
 
     // =========================
     // РЕСПЕКТ
