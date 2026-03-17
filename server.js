@@ -61,6 +61,7 @@ async function initDb() {
       wakes INTEGER DEFAULT 0,
       freezes INTEGER DEFAULT 0,
       balance INTEGER DEFAULT 0,
+      respect INTEGER DEFAULT 0,
       last_daily_at TIMESTAMPTZ,
       last_hunt_at TIMESTAMPTZ,
       last_sniper_at TIMESTAMPTZ,
@@ -102,6 +103,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS wakes INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS freezes INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS respect INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_hunt_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_sniper_at TIMESTAMPTZ`);
@@ -595,6 +597,7 @@ async function getProfileText(user) {
 ID: ${user.id}
 
 💰 Монеты: ${stats.balance || 0}
+🤝 Респект: ${stats.respect || 0}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
@@ -693,6 +696,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 разбудить
 заморозить
 подарок
+респект
 кто ...
 оценка
 прогноз
@@ -795,6 +799,54 @@ bot.on("message", async (msg) => {
     const lowerText = text.toLowerCase();
 
     if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // РЕСПЕКТ
+    // =========================
+    if (lowerText === "респект") {
+      const sender = msg.from;
+      await initUser(sender);
+
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Ответь на сообщение человека и напиши: респект"
+        );
+        return;
+      }
+
+      await initUser(target);
+      await saveSeenUser(msg.chat.id, target);
+
+      if (sender.id === target.id) {
+        await bot.sendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
+        return;
+      }
+
+      const result = await pool.query(
+        `
+        UPDATE users
+        SET respect = COALESCE(respect, 0) + 1
+        WHERE user_id = $1
+        RETURNING respect
+        `,
+        [target.id]
+      );
+
+      const respectCount = result.rows[0]?.respect || 0;
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `🤝 ${getUserLink(sender)} выразил респект ${getUserLink(target)}\n\nРеспект: ${respectCount}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
 
     // =========================
     // ПАРА
@@ -1046,6 +1098,7 @@ ${coinsLine}
       }
 
       await initUser(target);
+      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await bot.sendMessage(
