@@ -953,11 +953,11 @@ bot.on("callback_query", async (query) => {
       await bot.sendInvoice(
         query.message.chat.id,
         "50 монет",
-        "Покупка 50 монет за 10 Telegram Stars",
+        "Покупка 50 монет за 1 Telegram Stars",
         "coins_50",
         "",
         "XTR",
-        [{ label: "50 монет", amount: 1 }]
+        [{ label: "50 монет", amount: 10 }]
       );
     }
   } catch (error) {
