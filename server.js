@@ -23,6 +23,7 @@ const pool = new Pool({
 });
 
 const chatMembers = {};
+const pendingCommandCreation = {};
 
 // =========================
 // SERVER
@@ -94,6 +95,16 @@ async function initDb() {
       payload TEXT NOT NULL,
       amount INTEGER NOT NULL,
       currency TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS custom_commands (
+      id SERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      trigger TEXT NOT NULL UNIQUE,
+      action_text TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
@@ -352,6 +363,10 @@ function getShopKeyboard() {
   };
 }
 
+function getPendingKey(chatId, userId) {
+  return `${chatId}:${userId}`;
+}
+
 // =========================
 // БАЗОВЫЕ ФУНКЦИИ БД
 // =========================
@@ -554,6 +569,83 @@ async function processStarPurchase(userId, successfulPayment) {
   } finally {
     client.release();
   }
+}
+
+// =========================
+// КАСТОМНЫЕ КОМАНДЫ
+// =========================
+async function getUserCustomCommandCount(userId) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`,
+    [userId]
+  );
+  return result.rows[0]?.count || 0;
+}
+
+async function getUserCustomCommands(userId) {
+  const result = await pool.query(
+    `
+    SELECT trigger, action_text
+    FROM custom_commands
+    WHERE user_id = $1
+    ORDER BY created_at ASC
+    `,
+    [userId]
+  );
+  return result.rows;
+}
+
+async function getCustomCommandByTrigger(trigger) {
+  const result = await pool.query(
+    `
+    SELECT id, user_id, trigger, action_text
+    FROM custom_commands
+    WHERE LOWER(trigger) = LOWER($1)
+    LIMIT 1
+    `,
+    [trigger]
+  );
+  return result.rows[0] || null;
+}
+
+async function createCustomCommand(userId, trigger, actionText) {
+  await pool.query(
+    `
+    INSERT INTO custom_commands (user_id, trigger, action_text)
+    VALUES ($1, $2, $3)
+    `,
+    [userId, trigger, actionText]
+  );
+}
+
+async function deleteCustomCommand(userId, trigger) {
+  const result = await pool.query(
+    `
+    DELETE FROM custom_commands
+    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
+    RETURNING trigger
+    `,
+    [userId, trigger]
+  );
+  return result.rows[0] || null;
+}
+
+function parseCreateCommandInput(text) {
+  const cleaned = text.trim().replace(/\s+/g, " ");
+  const parts = cleaned.split(" ");
+
+  if (parts.length < 2) return null;
+
+  const trigger = parts[0].trim().toLowerCase();
+  const actionText = parts.slice(1).join(" ").trim();
+
+  if (!trigger || !actionText) return null;
+
+  return { trigger, actionText };
+}
+
+function isValidTrigger(trigger) {
+  return /^[a-zA-Zа-яА-ЯёЁіІїЇєЄ0-9_-]{2,20}$/.test(trigger);
 }
 
 // =========================
@@ -824,6 +916,9 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 снайпер
 пара
 магазин
+/createcommand
+/mycommands
+/deletecommand
 /balance
 
 /profile — показать свой профиль
@@ -876,6 +971,130 @@ bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
   } catch (error) {
     console.error("Ошибка /balance:", error);
     await bot.sendMessage(msg.chat.id, "Ошибка при получении баланса.");
+  }
+});
+
+// =========================
+// /createcommand
+// =========================
+bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
+
+    const count = await getUserCustomCommandCount(msg.from.id);
+
+    if (count >= 5) {
+      await bot.sendMessage(
+        msg.chat.id,
+        "❌ У тебя уже максимум команд: 5\nУдалить можно через /deletecommand"
+      );
+      return;
+    }
+
+    const stats = await getUserStats(msg.from.id);
+
+    if ((stats.balance || 0) < 20) {
+      await bot.sendMessage(
+        msg.chat.id,
+        "❌ Чтобы создать команду, нужно 20 монет."
+      );
+      return;
+    }
+
+    const key = getPendingKey(msg.chat.id, msg.from.id);
+    pendingCommandCreation[key] = true;
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `🛠 Создание команды
+
+Цена: 20 монет
+Максимум: 5 команд
+
+Напиши в формате:
+команда действие
+
+Пример:
+облил облил водой
+
+Тогда:
+команда = облил
+бот будет писать = "Артем облил водой Сергей"`
+    );
+  } catch (error) {
+    console.error("Ошибка /createcommand:", error);
+    await bot.sendMessage(msg.chat.id, "Ошибка создания команды.");
+  }
+});
+
+// =========================
+// /mycommands
+// =========================
+bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
+
+    const commands = await getUserCustomCommands(msg.from.id);
+
+    if (!commands.length) {
+      await bot.sendMessage(msg.chat.id, "📜 У тебя пока нет своих команд.");
+      return;
+    }
+
+    const lines = commands.map((cmd, index) =>
+      `${index + 1}. ${escapeHtml(cmd.trigger)} → ${escapeHtml(cmd.action_text)}`
+    );
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `📜 Твои команды:\n\n${lines.join("\n")}`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("Ошибка /mycommands:", error);
+    await bot.sendMessage(msg.chat.id, "Ошибка при получении команд.");
+  }
+});
+
+// =========================
+// /deletecommand
+// =========================
+bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
+  try {
+    await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
+
+    const trigger = (match?.[2] || "").trim().toLowerCase();
+
+    if (!trigger) {
+      await bot.sendMessage(
+        msg.chat.id,
+        "❌ Напиши так:\n/deletecommand облил"
+      );
+      return;
+    }
+
+    const deleted = await deleteCustomCommand(msg.from.id, trigger);
+
+    if (!deleted) {
+      await bot.sendMessage(
+        msg.chat.id,
+        `❌ У тебя нет команды "${escapeHtml(trigger)}".`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `🗑 Команда "${escapeHtml(deleted.trigger)}" удалена.`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("Ошибка /deletecommand:", error);
+    await bot.sendMessage(msg.chat.id, "Ошибка удаления команды.");
   }
 });
 
@@ -991,6 +1210,102 @@ bot.on("message", async (msg) => {
     const lowerText = text.toLowerCase();
 
     if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // СОЗДАНИЕ СВОЕЙ КОМАНДЫ
+    // =========================
+    const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
+    if (pendingCommandCreation[pendingKey]) {
+      delete pendingCommandCreation[pendingKey];
+
+      const parsed = parseCreateCommandInput(text);
+
+      if (!parsed) {
+        await bot.sendMessage(
+          msg.chat.id,
+          `❌ Напиши в формате:
+команда действие
+
+Пример:
+облил облил водой`
+        );
+        return;
+      }
+
+      if (!isValidTrigger(parsed.trigger)) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ Команда должна быть одним словом от 2 до 20 символов.\nМожно буквы, цифры, _ и -"
+        );
+        return;
+      }
+
+      if (parsed.actionText.length < 2 || parsed.actionText.length > 60) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ Текст действия должен быть от 2 до 60 символов."
+        );
+        return;
+      }
+
+      if (rpCommands[parsed.trigger]) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ Такая команда уже занята стандартной командой."
+        );
+        return;
+      }
+
+      const existing = await getCustomCommandByTrigger(parsed.trigger);
+      if (existing) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ Такая команда уже существует. Напиши другую."
+        );
+        return;
+      }
+
+      const count = await getUserCustomCommandCount(msg.from.id);
+      if (count >= 5) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ У тебя уже максимум команд: 5\nУдалить можно через /deletecommand"
+        );
+        return;
+      }
+
+      const stats = await getUserStats(msg.from.id);
+      if ((stats.balance || 0) < 20) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ Чтобы создать команду, нужно 20 монет."
+        );
+        return;
+      }
+
+      await pool.query(
+        `
+        UPDATE users
+        SET balance = balance - 20
+        WHERE user_id = $1
+        `,
+        [msg.from.id]
+      );
+
+      await createCustomCommand(msg.from.id, parsed.trigger, parsed.actionText);
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `✅ Команда "${escapeHtml(parsed.trigger)}" создана!
+
+Теперь при использовании будет:
+💬 ${escapeHtml(getUserName(msg.from))} ${escapeHtml(parsed.actionText)} Сергей
+
+Списано: 20 монет`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
 
     // =========================
     // МАГАЗИН
@@ -1326,6 +1641,48 @@ ${coinsLine}
       await bot.sendMessage(
         msg.chat.id,
         `🎁 ${getUserLink(sender)} подарил(а) ${getUserLink(target)} ${escapeHtml(gift)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // СВОИ КОМАНДЫ
+    // =========================
+    const customCommand = await getCustomCommandByTrigger(lowerText);
+    if (customCommand) {
+      const sender = msg.from;
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Ответь на сообщение человека этой командой."
+        );
+        return;
+      }
+
+      await initUser(target);
+      await saveSeenUser(msg.chat.id, target);
+
+      if (sender.id === target.id) {
+        await bot.sendMessage(
+          msg.chat.id,
+          `😅 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} самого себя`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `💬 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} ${getUserLink(target)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
