@@ -23,6 +23,7 @@ const pool = new Pool({
 });
 
 const chatMembers = {};
+const muteTimers = {};
 
 // =========================
 // SERVER
@@ -72,6 +73,15 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS profile_messages (
       message_id BIGINT PRIMARY KEY,
       target_user_id BIGINT NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS active_mutes (
+      chat_id BIGINT NOT NULL,
+      user_id BIGINT NOT NULL,
+      until_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (chat_id, user_id)
     )
   `);
 
@@ -261,6 +271,38 @@ function formatRemainingTime(ms) {
   return `${hours} ч ${minutes} мин`;
 }
 
+function parseMuteDuration(text) {
+  const match = text.match(/^отключить\s+(\d+)\s*(мин|минута|минут|час|часа|часов|день|дня|дней)$/i);
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  let ms = 0;
+
+  if (["мин", "минута", "минут"].includes(unit)) {
+    ms = value * 60 * 1000;
+  } else if (["час", "часа", "часов"].includes(unit)) {
+    ms = value * 60 * 60 * 1000;
+  } else if (["день", "дня", "дней"].includes(unit)) {
+    ms = value * 24 * 60 * 60 * 1000;
+  }
+
+  if (ms <= 0) return null;
+
+  return { value, unit, ms };
+}
+
+function formatMuteText(value, unit) {
+  return `${value} ${unit}`;
+}
+
+function getMuteKey(chatId, userId) {
+  return `${chatId}:${userId}`;
+}
+
+// =========================
+// БАЗОВЫЕ ФУНКЦИИ БД
+// =========================
 async function initUser(user) {
   if (!user || !user.id) return;
 
@@ -367,6 +409,9 @@ async function incrementStat(targetUserId, statField) {
   console.log("✅ stat updated:", statField, "for", targetUserId, result.rows[0]);
 }
 
+// =========================
+// МОНЕТЫ / ОХОТА / СНАЙПЕР
+// =========================
 async function claimDailyCoins(userId) {
   const result = await pool.query(
     `SELECT balance, last_daily_at FROM users WHERE user_id = $1`,
@@ -511,6 +556,113 @@ async function runSniper(userId) {
   };
 }
 
+// =========================
+// МУТЫ
+// =========================
+async function saveMute(chatId, userId, untilDate) {
+  await pool.query(
+    `
+    INSERT INTO active_mutes (chat_id, user_id, until_at)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (chat_id, user_id)
+    DO UPDATE SET until_at = EXCLUDED.until_at
+    `,
+    [chatId, userId, untilDate.toISOString()]
+  );
+}
+
+async function deleteMute(chatId, userId) {
+  await pool.query(
+    `DELETE FROM active_mutes WHERE chat_id = $1 AND user_id = $2`,
+    [chatId, userId]
+  );
+}
+
+async function scheduleUnmute(chatId, user) {
+  const key = getMuteKey(chatId, user.id);
+
+  if (muteTimers[key]) {
+    clearTimeout(muteTimers[key]);
+    delete muteTimers[key];
+  }
+
+  const result = await pool.query(
+    `SELECT until_at FROM active_mutes WHERE chat_id = $1 AND user_id = $2`,
+    [chatId, user.id]
+  );
+
+  if (!result.rows[0]) return;
+
+  const untilAt = new Date(result.rows[0].until_at);
+  const delay = untilAt.getTime() - Date.now();
+
+  const runUnmute = async () => {
+    try {
+      await bot.restrictChatMember(chatId, user.id, {
+        permissions: {
+          can_send_messages: true,
+          can_send_audios: true,
+          can_send_documents: true,
+          can_send_photos: true,
+          can_send_videos: true,
+          can_send_video_notes: true,
+          can_send_voice_notes: true,
+          can_send_polls: true,
+          can_send_other_messages: true,
+          can_add_web_page_previews: true,
+          can_change_info: false,
+          can_invite_users: true,
+          can_pin_messages: false
+        }
+      });
+
+      await deleteMute(chatId, user.id);
+
+      await bot.sendMessage(
+        chatId,
+        `🔊 ${getUserLink(user)}, время отключения вышло. Теперь снова можно писать.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+    } catch (error) {
+      console.error("Ошибка авто-включения:", error);
+    } finally {
+      if (muteTimers[key]) {
+        clearTimeout(muteTimers[key]);
+        delete muteTimers[key];
+      }
+    }
+  };
+
+  if (delay <= 0) {
+    await runUnmute();
+    return;
+  }
+
+  muteTimers[key] = setTimeout(runUnmute, delay);
+}
+
+async function restoreMuteTimers() {
+  try {
+    const result = await pool.query(`SELECT chat_id, user_id FROM active_mutes`);
+
+    for (const row of result.rows) {
+      const user = await getStoredUser(row.user_id);
+      if (!user) continue;
+      await scheduleUnmute(Number(row.chat_id), user);
+    }
+
+    console.log("✅ Mute timers restored");
+  } catch (error) {
+    console.error("Ошибка восстановления мутов:", error);
+  }
+}
+
+// =========================
+// PROFILE
+// =========================
 async function getProfileText(user) {
   await initUser(user);
   const stats = await getUserStats(user.id);
@@ -595,7 +747,7 @@ const rpCommands = {
 };
 
 // =========================
-// /start
+// START
 // =========================
 bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   await bot.sendMessage(
@@ -625,14 +777,16 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 деньги
 охота
 снайпер
+отключить 2 мин
+включить
 
 /profile — показать свой профиль
-/profile ответом — показать профиль игрока`
+/profile ответом — показать профиль человека`
   );
 });
 
 // =========================
-// /profile
+// PROFILE
 // =========================
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
@@ -668,6 +822,151 @@ bot.on("message", async (msg) => {
     const lowerText = text.toLowerCase();
 
     if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // ОТКЛЮЧИТЬ
+    // =========================
+    if (lowerText.startsWith("отключить ")) {
+      if (!msg.reply_to_message || !msg.reply_to_message.from) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Ответь на сообщение человека и напиши, например: отключить 2 мин"
+        );
+        return;
+      }
+
+      const parsed = parseMuteDuration(lowerText);
+
+      if (!parsed) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Неправильный формат. Пример: отключить 2 мин / отключить 1 час / отключить 3 дня"
+        );
+        return;
+      }
+
+      const target = msg.reply_to_message.from;
+
+      if (target.is_bot) {
+        await bot.sendMessage(msg.chat.id, "Бота отключить нельзя.");
+        return;
+      }
+
+      if (target.id === msg.from.id) {
+        await bot.sendMessage(msg.chat.id, "Себя отключить нельзя.");
+        return;
+      }
+
+      const untilDate = new Date(Date.now() + parsed.ms);
+      const untilUnix = Math.floor(untilDate.getTime() / 1000);
+
+      try {
+        await bot.restrictChatMember(msg.chat.id, target.id, {
+          permissions: {
+            can_send_messages: false,
+            can_send_audios: false,
+            can_send_documents: false,
+            can_send_photos: false,
+            can_send_videos: false,
+            can_send_video_notes: false,
+            can_send_voice_notes: false,
+            can_send_polls: false,
+            can_send_other_messages: false,
+            can_add_web_page_previews: false,
+            can_change_info: false,
+            can_invite_users: false,
+            can_pin_messages: false
+          },
+          until_date: untilUnix
+        });
+
+        await initUser(target);
+        await saveMute(msg.chat.id, target.id, untilDate);
+        await scheduleUnmute(msg.chat.id, target);
+
+        await bot.sendMessage(
+          msg.chat.id,
+          `🔇 ${getUserLink(target)} отключён на ${escapeHtml(formatMuteText(parsed.value, parsed.unit))}. Теперь временно нельзя писать.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        console.error("Ошибка отключения:", error);
+        await bot.sendMessage(
+          msg.chat.id,
+          "Не удалось отключить пользователя. Проверь, что бот админ и у него есть право ограничивать участников."
+        );
+      }
+
+      return;
+    }
+
+    // =========================
+    // ВКЛЮЧИТЬ
+    // =========================
+    if (lowerText === "включить") {
+      if (!msg.reply_to_message || !msg.reply_to_message.from) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Ответь на сообщение человека и напиши: включить"
+        );
+        return;
+      }
+
+      const target = msg.reply_to_message.from;
+
+      if (target.is_bot) {
+        await bot.sendMessage(msg.chat.id, "Бота включать не нужно.");
+        return;
+      }
+
+      try {
+        await bot.restrictChatMember(msg.chat.id, target.id, {
+          permissions: {
+            can_send_messages: true,
+            can_send_audios: true,
+            can_send_documents: true,
+            can_send_photos: true,
+            can_send_videos: true,
+            can_send_video_notes: true,
+            can_send_voice_notes: true,
+            can_send_polls: true,
+            can_send_other_messages: true,
+            can_add_web_page_previews: true,
+            can_change_info: false,
+            can_invite_users: true,
+            can_pin_messages: false
+          }
+        });
+
+        await deleteMute(msg.chat.id, target.id);
+
+        const key = getMuteKey(msg.chat.id, target.id);
+        if (muteTimers[key]) {
+          clearTimeout(muteTimers[key]);
+          delete muteTimers[key];
+        }
+
+        await bot.sendMessage(
+          msg.chat.id,
+          `🔊 ${getUserLink(target)}, время отключения вышло. Теперь снова можно писать.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        console.error("Ошибка включения:", error);
+        await bot.sendMessage(
+          msg.chat.id,
+          "Не удалось включить пользователя. Проверь, что бот админ и у него есть право ограничивать участников."
+        );
+      }
+
+      return;
+    }
 
     // =========================
     // ДЕНЬГИ
@@ -885,7 +1184,7 @@ ${coinsLine}
       if (!target) {
         await bot.sendMessage(
           msg.chat.id,
-          "Ответь на сообщение игрока и напиши: подарок"
+          "Ответь на сообщение человека и напиши: подарок"
         );
         return;
       }
@@ -926,7 +1225,7 @@ ${coinsLine}
     const target = await resolveTargetUserFromReply(msg);
 
     if (!target) {
-      await bot.sendMessage(msg.chat.id, "Ответь на сообщение игрока этой командой.");
+      await bot.sendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
       return;
     }
 
@@ -972,6 +1271,8 @@ bot.on("polling_error", (error) => {
     console.log("✅ DB connected:", test.rows[0]);
 
     await initDb();
+    await restoreMuteTimers();
+
     console.log("✅ Bot started");
   } catch (error) {
     console.error("❌ Ошибка запуска:", error);
