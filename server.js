@@ -344,7 +344,7 @@ function getShopKeyboard() {
     inline_keyboard: [
       [
         {
-          text: "💰 50 монет — 1 ⭐",
+          text: "💰 50 монет — 10 ⭐",
           callback_data: "buy_50_coins"
         }
       ]
@@ -957,7 +957,7 @@ bot.on("callback_query", async (query) => {
         "coins_50",
         "",
         "XTR",
-        [{ label: "50 монет", amount: 10 }]
+        [{ label: "50 монет", amount: 1 }]
       );
     }
   } catch (error) {
@@ -1001,7 +1001,7 @@ bot.on("message", async (msg) => {
         `🛒 Магазин
 
 Товар:
-💰 50 монет — 1 ⭐`,
+💰 50 монет — 10 ⭐`,
         {
           reply_markup: getShopKeyboard()
         }
