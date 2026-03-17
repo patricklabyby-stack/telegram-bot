@@ -75,6 +75,17 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_seen_users (
+      chat_id BIGINT NOT NULL,
+      user_id BIGINT NOT NULL,
+      first_name TEXT DEFAULT '',
+      last_name TEXT DEFAULT '',
+      username TEXT DEFAULT '',
+      PRIMARY KEY (chat_id, user_id)
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hugs INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kisses INTEGER DEFAULT 0`);
@@ -192,6 +203,60 @@ function addChatMember(chatId, user) {
   };
 }
 
+async function saveSeenUser(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  await pool.query(
+    `
+    INSERT INTO chat_seen_users (chat_id, user_id, first_name, last_name, username)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (chat_id, user_id)
+    DO UPDATE SET
+      first_name = CASE
+        WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name
+        ELSE chat_seen_users.first_name
+      END,
+      last_name = CASE
+        WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name
+        ELSE chat_seen_users.last_name
+      END,
+      username = CASE
+        WHEN EXCLUDED.username <> '' THEN EXCLUDED.username
+        ELSE chat_seen_users.username
+      END
+    `,
+    [
+      chatId,
+      user.id,
+      (user.first_name || "").trim(),
+      (user.last_name || "").trim(),
+      (user.username || "").trim()
+    ]
+  );
+}
+
+async function getRandomPairMembersFromDb(chatId) {
+  const result = await pool.query(
+    `
+    SELECT user_id, first_name, last_name, username
+    FROM chat_seen_users
+    WHERE chat_id = $1
+    ORDER BY RANDOM()
+    LIMIT 2
+    `,
+    [chatId]
+  );
+
+  if (result.rows.length < 2) return null;
+
+  return result.rows.map((row) => ({
+    id: Number(row.user_id),
+    first_name: row.first_name || "",
+    last_name: row.last_name || "",
+    username: row.username || ""
+  }));
+}
+
 function getRandomChatMember(chatId) {
   const key = String(chatId);
   const members = Object.values(chatMembers[key] || {});
@@ -199,22 +264,6 @@ function getRandomChatMember(chatId) {
   if (!members.length) return null;
 
   return members[Math.floor(Math.random() * members.length)];
-}
-
-function getRandomPairMembers(chatId) {
-  const key = String(chatId);
-  const members = Object.values(chatMembers[key] || {});
-
-  if (members.length < 2) return null;
-
-  const firstIndex = Math.floor(Math.random() * members.length);
-  let secondIndex = Math.floor(Math.random() * members.length);
-
-  while (secondIndex === firstIndex) {
-    secondIndex = Math.floor(Math.random() * members.length);
-  }
-
-  return [members[firstIndex], members[secondIndex]];
 }
 
 function getRandomCoins() {
@@ -672,6 +721,31 @@ bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
 });
 
 // =========================
+// УЧАСТНИКИ, КОТОРЫХ БОТ УВИДЕЛ
+// =========================
+bot.on("message", async (msg) => {
+  try {
+    if (msg.from && !msg.from.is_bot) {
+      addChatMember(msg.chat.id, msg.from);
+      await initUser(msg.from);
+      await saveSeenUser(msg.chat.id, msg.from);
+    }
+
+    if (Array.isArray(msg.new_chat_members)) {
+      for (const member of msg.new_chat_members) {
+        if (!member.is_bot) {
+          addChatMember(msg.chat.id, member);
+          await initUser(member);
+          await saveSeenUser(msg.chat.id, member);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Ошибка сохранения участников чата:", error);
+  }
+});
+
+// =========================
 // ОБРАБОТКА СООБЩЕНИЙ
 // =========================
 bot.on("message", async (msg) => {
@@ -680,6 +754,7 @@ bot.on("message", async (msg) => {
 
     addChatMember(msg.chat.id, msg.from);
     await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
 
     const text = msg.text.trim();
     const lowerText = text.toLowerCase();
@@ -690,12 +765,12 @@ bot.on("message", async (msg) => {
     // ПАРА
     // =========================
     if (lowerText === "пара") {
-      const pair = getRandomPairMembers(msg.chat.id);
+      const pair = await getRandomPairMembersFromDb(msg.chat.id);
 
       if (!pair) {
         await bot.sendMessage(
           msg.chat.id,
-          "Нужно хотя бы 2 человека в чате, чтобы выбрать пару 💞"
+          "Нужно хотя бы 2 человека, которых бот уже видел в этом чате 💞"
         );
         return;
       }
@@ -930,7 +1005,7 @@ ${coinsLine}
       if (!target) {
         await bot.sendMessage(
           msg.chat.id,
-          "Ответь на сообщение игрока и напиши: подарок"
+          "Ответь на сообщение человека и напиши: подарок"
         );
         return;
       }
@@ -976,6 +1051,7 @@ ${coinsLine}
     }
 
     await initUser(target);
+    await saveSeenUser(msg.chat.id, target);
 
     if (sender.id === target.id) {
       await bot.sendMessage(
