@@ -344,7 +344,7 @@ function getShopKeyboard() {
     inline_keyboard: [
       [
         {
-          text: "💰 50 монет — 10 ⭐",
+          text: "💰 50 монет — 5 ⭐",
           callback_data: "buy_50_coins"
         }
       ]
@@ -953,11 +953,11 @@ bot.on("callback_query", async (query) => {
       await bot.sendInvoice(
         query.message.chat.id,
         "50 монет",
-        "Покупка 50 монет за 1 Telegram Stars",
+        "Покупка 50 монет за 5 Telegram Stars",
         "coins_50",
         "",
         "XTR",
-        [{ label: "50 монет", amount: 10 }]
+        [{ label: "50 монет", amount: 5 }]
       );
     }
   } catch (error) {
@@ -1001,7 +1001,7 @@ bot.on("message", async (msg) => {
         `🛒 Магазин
 
 Товар:
-💰 50 монет — 10 ⭐`,
+💰 50 монет — 5 ⭐`,
         {
           reply_markup: getShopKeyboard()
         }
