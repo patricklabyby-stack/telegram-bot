@@ -22,6 +22,9 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// участники чатов в памяти
+const chatMembers = {};
+
 // =========================
 // SERVER
 // =========================
@@ -138,6 +141,32 @@ function getRandomGift() {
   ];
 
   return gifts[Math.floor(Math.random() * gifts.length)];
+}
+
+function addChatMember(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = String(chatId);
+
+  if (!chatMembers[key]) {
+    chatMembers[key] = {};
+  }
+
+  chatMembers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || ""
+  };
+}
+
+function getRandomChatMember(chatId) {
+  const key = String(chatId);
+  const members = Object.values(chatMembers[key] || {});
+
+  if (!members.length) return null;
+
+  return members[Math.floor(Math.random() * members.length)];
 }
 
 async function initUser(user) {
@@ -352,6 +381,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 разбудить
 заморозить
 подарок
+кто ...
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
@@ -388,13 +418,47 @@ bot.on("message", async (msg) => {
   try {
     if (!msg.text || !msg.from || msg.from.is_bot) return;
 
-    const text = msg.text.trim().toLowerCase();
-    if (text.startsWith("/")) return;
+    addChatMember(msg.chat.id, msg.from);
+    await initUser(msg.from);
+
+    const text = msg.text.trim();
+    const lowerText = text.toLowerCase();
+
+    if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // КТО ...
+    // =========================
+    if (lowerText.startsWith("кто ")) {
+      const subject = text.slice(4).trim();
+
+      if (!subject) {
+        await bot.sendMessage(msg.chat.id, "Напиши, например: кто лучший");
+        return;
+      }
+
+      const randomUser = getRandomChatMember(msg.chat.id);
+
+      if (!randomUser) {
+        await bot.sendMessage(msg.chat.id, "Пока некого выбрать 🤔");
+        return;
+      }
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `🤔 ${escapeHtml(subject)}? Думаю это ${getUserLink(randomUser)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
 
     // =========================
     // ПОДАРОК
     // =========================
-    if (text === "подарок") {
+    if (lowerText === "подарок") {
       const sender = msg.from;
       await initUser(sender);
 
@@ -435,7 +499,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    const command = rpCommands[text];
+    const command = rpCommands[lowerText];
     if (!command) return;
 
     const sender = msg.from;
