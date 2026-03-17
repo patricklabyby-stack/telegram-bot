@@ -22,7 +22,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// участники чатов в памяти
 const chatMembers = {};
 
 // =========================
@@ -114,10 +113,14 @@ function getUserName(user) {
   if (fullName && fullName !== ".") return fullName;
   if (username) return username;
   if (firstName) return firstName;
-  return `ID ${user.id}`;
+  return user.id ? `ID ${user.id}` : "Пользователь";
 }
 
 function getUserLink(user) {
+  if (!user || !user.id) {
+    return escapeHtml(getUserName(user));
+  }
+
   return `<a href="tg://user?id=${user.id}">${escapeHtml(getUserName(user))}</a>`;
 }
 
@@ -141,6 +144,27 @@ function getRandomGift() {
   ];
 
   return gifts[Math.floor(Math.random() * gifts.length)];
+}
+
+function getRandomRating() {
+  return Math.floor(Math.random() * 10) + 1;
+}
+
+function getRandomPrediction() {
+  const predictions = [
+    "Сегодня тебе повезёт 😎",
+    "Будь осторожен сегодня 😬",
+    "Тебя ждёт сюрприз 🎁",
+    "Сегодня твой день 🔥",
+    "Лучше отдохни 😴",
+    "Сегодня удача на твоей стороне 🍀",
+    "Возможны проблемы 💀",
+    "Жди хороших новостей 📩",
+    "Сегодня будет весело 😂",
+    "Не рискуй сегодня ⚠️"
+  ];
+
+  return predictions[Math.floor(Math.random() * predictions.length)];
 }
 
 function addChatMember(chatId, user) {
@@ -382,6 +406,8 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 заморозить
 подарок
 кто ...
+оценка
+прогноз
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
@@ -425,6 +451,55 @@ bot.on("message", async (msg) => {
     const lowerText = text.toLowerCase();
 
     if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // ПРОГНОЗ
+    // =========================
+    if (lowerText === "прогноз") {
+      const prediction = getRandomPrediction();
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `🔮 ${getUserLink(msg.from)}\n${escapeHtml(prediction)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // ОЦЕНКА
+    // =========================
+    if (lowerText.startsWith("оценка")) {
+      let target = null;
+
+      if (msg.reply_to_message && msg.reply_to_message.from) {
+        target = msg.reply_to_message.from;
+      } else {
+        const parts = text.split(" ");
+        if (parts.length > 1) {
+          target = {
+            first_name: parts.slice(1).join(" ")
+          };
+        } else {
+          target = msg.from;
+        }
+      }
+
+      const rating = getRandomRating();
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
 
     // =========================
     // КТО ...
