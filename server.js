@@ -235,6 +235,15 @@ async function saveSeenUser(chatId, user) {
   );
 }
 
+function getRandomChatMember(chatId) {
+  const key = String(chatId);
+  const members = Object.values(chatMembers[key] || {});
+
+  if (!members.length) return null;
+
+  return members[Math.floor(Math.random() * members.length)];
+}
+
 async function getRandomPairMembersFromDb(chatId) {
   const result = await pool.query(
     `
@@ -255,15 +264,6 @@ async function getRandomPairMembersFromDb(chatId) {
     last_name: row.last_name || "",
     username: row.username || ""
   }));
-}
-
-function getRandomChatMember(chatId) {
-  const key = String(chatId);
-  const members = Object.values(chatMembers[key] || {});
-
-  if (!members.length) return null;
-
-  return members[Math.floor(Math.random() * members.length)];
 }
 
 function getRandomCoins() {
@@ -326,6 +326,9 @@ function formatRemainingTime(ms) {
   return `${hours} ч ${minutes} мин`;
 }
 
+// =========================
+// БАЗОВЫЕ ФУНКЦИИ БД
+// =========================
 async function initUser(user) {
   if (!user || !user.id) return;
 
@@ -432,6 +435,9 @@ async function incrementStat(targetUserId, statField) {
   console.log("✅ stat updated:", statField, "for", targetUserId, result.rows[0]);
 }
 
+// =========================
+// МОНЕТЫ / ОХОТА / СНАЙПЕР
+// =========================
 async function claimDailyCoins(userId) {
   const result = await pool.query(
     `SELECT balance, last_daily_at FROM users WHERE user_id = $1`,
@@ -576,6 +582,9 @@ async function runSniper(userId) {
   };
 }
 
+// =========================
+// PROFILE
+// =========================
 async function getProfileText(user) {
   await initUser(user);
   const stats = await getUserStats(user.id);
@@ -691,9 +700,11 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 охота
 снайпер
 пара
+/balance
 
 /profile — показать свой профиль
-/profile ответом — показать профиль игрока`
+/profile ответом — показать профиль игрока
+/balance — показать баланс`
   );
 });
 
@@ -717,6 +728,30 @@ bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   } catch (error) {
     console.error("Ошибка /profile:", error);
     await bot.sendMessage(msg.chat.id, "Ошибка при открытии профиля.");
+  }
+});
+
+// =========================
+// /balance
+// =========================
+bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
+
+    const stats = await getUserStats(msg.from.id);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `💰 ${getUserLink(msg.from)}, ваш баланс: ${stats.balance || 0} монет`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка /balance:", error);
+    await bot.sendMessage(msg.chat.id, "Ошибка при получении баланса.");
   }
 });
 
@@ -1046,7 +1081,7 @@ ${coinsLine}
     const target = await resolveTargetUserFromReply(msg);
 
     if (!target) {
-      await bot.sendMessage(msg.chat.id, "Ответь на сообщение игрока этой командой.");
+      await bot.sendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
       return;
     }
 
