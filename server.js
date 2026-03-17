@@ -15,35 +15,36 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// делаем имя ссылкой
+// хранилище статистики
+const userStats = {};
+
+// создание профиля если его нет
+function initUser(user) {
+  if (!userStats[user.id]) {
+    userStats[user.id] = {
+      kills: 0,
+      hugs: 0,
+      kisses: 0,
+      hits: 0,
+      bites: 0
+    };
+  }
+}
+
+// имя ссылкой
 function getUserLink(user) {
-  const name = `${user.first_name || ""} ${user.last_name || ""}`.trim() || "Пользователь";
+  const name =
+    `${user.first_name || ""} ${user.last_name || ""}`.trim() || "Пользователь";
   return `<a href="tg://user?id=${user.id}">${name}</a>`;
 }
 
-// РП команды
+// рп команды
 const rpCommands = {
-  "убить": "убил",
-  "обнять": "обнял",
-  "поцеловать": "поцеловал",
-  "ударить": "ударил",
-  "укусить": "укусил",
-  "пнуть": "пнул",
-  "погладить": "погладил",
-  "задушить": "задушил",
-  "расстрелять": "расстрелял",
-  "заскамить": "заскамил",
-  "уничтожить": "уничтожил",
-  "лизнуть": "лизнул",
-  "украсть": "украл",
-  "похитить": "похитил",
-  "вырубить": "вырубил",
-  "раздавить": "раздавил",
-  "забанить": "забанил",
-  "кикнуть": "кикнул",
-  "захилить": "вылечил",
-  "спасти": "спас",
-  "защитить": "защитил"
+  "убить": { text: "убил", stat: "kills" },
+  "обнять": { text: "обнял", stat: "hugs" },
+  "поцеловать": { text: "поцеловал", stat: "kisses" },
+  "ударить": { text: "ударил", stat: "hits" },
+  "укусить": { text: "укусил", stat: "bites" }
 };
 
 bot.on("message", async (msg) => {
@@ -51,64 +52,87 @@ bot.on("message", async (msg) => {
 
   const text = msg.text.trim().toLowerCase();
 
-  if (!rpCommands[text]) return;
+  // /profile
+  if (text === "/profile") {
+    const targetUser = msg.reply_to_message ? msg.reply_to_message.from : msg.from;
 
-  // только ответом
-  if (!msg.reply_to_message) {
+    initUser(targetUser);
+
+    const stats = userStats[targetUser.id];
+    const total =
+      stats.kills +
+      stats.hugs +
+      stats.kisses +
+      stats.hits +
+      stats.bites;
+
     return bot.sendMessage(
       msg.chat.id,
-      "❗ Ответь на сообщение человека этой командой"
-    );
-  }
+      `👤 Профиль пользователя
 
-  const sender = getUserLink(msg.from);
-  const target = getUserLink(msg.reply_to_message.from);
+Имя: ${getUserLink(targetUser)}
+ID: ${targetUser.id}
 
-  // если сам себя
-  if (msg.from.id === msg.reply_to_message.from.id) {
-    return bot.sendMessage(
-      msg.chat.id,
-      `😅 ${sender} ${rpCommands[text]} сам(а) себя`,
+📊 Статистика:
+💀 Убили: ${stats.kills}
+❤️ Обняли: ${stats.hugs}
+💋 Поцеловали: ${stats.kisses}
+👊 Ударили: ${stats.hits}
+😈 Укусили: ${stats.bites}
+
+🔥 Всего взаимодействий: ${total}`,
       { parse_mode: "HTML" }
     );
   }
 
-  bot.sendMessage(
+  // РП команды
+  if (!rpCommands[text]) return;
+
+  if (!msg.reply_to_message) {
+    return bot.sendMessage(
+      msg.chat.id,
+      "Ответь на сообщение человека этой командой."
+    );
+  }
+
+  const sender = msg.from;
+  const target = msg.reply_to_message.from;
+
+  initUser(sender);
+  initUser(target);
+
+  if (sender.id === target.id) {
+    return bot.sendMessage(
+      msg.chat.id,
+      `😅 ${getUserLink(sender)} ${rpCommands[text].text} самого себя`,
+      { parse_mode: "HTML" }
+    );
+  }
+
+  // прибавляем статистику ТОМУ, кого ударили/обняли/убили
+  userStats[target.id][rpCommands[text].stat]++;
+
+  return bot.sendMessage(
     msg.chat.id,
-    `✨ ${sender} ${rpCommands[text]} ${target}`,
+    `✨ ${getUserLink(sender)} ${rpCommands[text].text} ${getUserLink(target)}`,
     { parse_mode: "HTML" }
   );
 });
 
-// старт
+// /start
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-`🔥 RP BOT
+    `🔥 RP BOT
 
-Команды (пиши ответом на сообщение):
+Команды:
 убить
 обнять
 поцеловать
 ударить
 укусить
-пнуть
-погладить
-задушить
-расстрелять
-заскамить
-уничтожить
-лизнуть
-украсть
-похитить
-вырубить
-раздавить
-забанить
-кикнуть
-захилить
-спасти
-защитить
 
-💡 Просто ответь на сообщение и напиши слово`
+/profile — показать профиль
+(или ответь на сообщение и напиши /profile)`
   );
 });
