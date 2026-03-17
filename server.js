@@ -63,6 +63,7 @@ async function initDb() {
       balance INTEGER DEFAULT 0,
       last_daily_at TIMESTAMPTZ,
       last_hunt_at TIMESTAMPTZ,
+      last_sniper_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
   `);
@@ -92,6 +93,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_hunt_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_sniper_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
@@ -228,6 +230,22 @@ function getHuntResult() {
   return {
     text: chosen.animal,
     coins: getRandomHuntCoins()
+  };
+}
+
+function getSniperResult() {
+  const hit = Math.random() < 0.5;
+
+  if (hit) {
+    return {
+      text: "💥 Попадание!",
+      coins: Math.floor(Math.random() * 11)
+    };
+  }
+
+  return {
+    text: "❌ Промах!",
+    coins: 0
   };
 }
 
@@ -446,6 +464,53 @@ async function runHunt(userId) {
   };
 }
 
+async function runSniper(userId) {
+  const result = await pool.query(
+    `SELECT balance, last_sniper_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
+  const cooldownMs = 24 * 60 * 60 * 1000;
+
+  if (lastSniperAt) {
+    const nextTime = new Date(lastSniperAt.getTime() + cooldownMs);
+
+    if (now < nextTime) {
+      return {
+        ok: false,
+        remainingMs: nextTime.getTime() - now.getTime()
+      };
+    }
+  }
+
+  const sniper = getSniperResult();
+  const newBalance = Number(row.balance || 0) + sniper.coins;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_sniper_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return {
+    ok: true,
+    sniper,
+    balance: updateResult.rows[0].balance
+  };
+}
+
 async function getProfileText(user) {
   await initUser(user);
   const stats = await getUserStats(user.id);
@@ -559,6 +624,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 прогноз
 деньги
 охота
+снайпер
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
@@ -673,6 +739,51 @@ bot.on("message", async (msg) => {
         `🏹 ${getUserLink(msg.from)} отправился на охоту...
 
 ${escapeHtml(result.hunt.text)}
+${coinsLine}
+
+Баланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // СНАЙПЕР
+    // =========================
+    if (lowerText === "снайпер") {
+      const result = await runSniper(msg.from.id);
+
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await bot.sendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await bot.sendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      let coinsLine = "😐 0 монет";
+
+      if (result.sniper.coins > 0) {
+        coinsLine = `💰 +${result.sniper.coins} монет`;
+      }
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `🎯 ${getUserLink(msg.from)} прицелился...
+
+${escapeHtml(result.sniper.text)}
 ${coinsLine}
 
 Баланс: ${result.balance} монет`,
