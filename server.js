@@ -7,7 +7,6 @@ const bot = new TelegramBot(token, { polling: true });
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// чтобы Render / сервер не засыпал
 app.get("/", (req, res) => {
   res.send("Бот работает");
 });
@@ -16,19 +15,10 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Функция получения красивого имени
-function getFullName(user) {
-  if (!user) return "Неизвестный";
-
-  const firstName = user.first_name || "";
-  const lastName = user.last_name || "";
-  const fullName = `${firstName} ${lastName}`.trim();
-
-  if (fullName.length > 0) return fullName;
-
-  if (user.username) return user.username;
-
-  return "Пользователь";
+// делаем имя ссылкой
+function getUserLink(user) {
+  const name = `${user.first_name || ""} ${user.last_name || ""}`.trim() || "Пользователь";
+  return `<a href="tg://user?id=${user.id}">${name}</a>`;
 }
 
 // РП команды
@@ -43,50 +33,60 @@ const rpCommands = {
   "задушить": "задушил",
   "расстрелять": "расстрелял",
   "заскамить": "заскамил",
-  "уничтожить": "уничтожил"
+  "уничтожить": "уничтожил",
+  "лизнуть": "лизнул",
+  "украсть": "украл",
+  "похитить": "похитил",
+  "вырубить": "вырубил",
+  "раздавить": "раздавил",
+  "забанить": "забанил",
+  "кикнуть": "кикнул",
+  "захилить": "вылечил",
+  "спасти": "спас",
+  "защитить": "защитил"
 };
 
 bot.on("message", async (msg) => {
   if (!msg.text) return;
 
   const text = msg.text.trim().toLowerCase();
-  const senderName = getFullName(msg.from);
 
-  // проверяем, есть ли такая команда
   if (!rpCommands[text]) return;
 
-  // команда должна быть ответом на сообщение
+  // только ответом
   if (!msg.reply_to_message) {
     return bot.sendMessage(
       msg.chat.id,
-      "Ответь этой командой на сообщение человека.\n\nНапример: ответом на сообщение напиши: убить"
+      "❗ Ответь на сообщение человека этой командой"
     );
   }
 
-  const targetName = getFullName(msg.reply_to_message.from);
+  const sender = getUserLink(msg.from);
+  const target = getUserLink(msg.reply_to_message.from);
 
+  // если сам себя
   if (msg.from.id === msg.reply_to_message.from.id) {
     return bot.sendMessage(
       msg.chat.id,
-      `${senderName} ${rpCommands[text]} самого себя 😅`
+      `😅 ${sender} ${rpCommands[text]} сам(а) себя`,
+      { parse_mode: "HTML" }
     );
   }
 
   bot.sendMessage(
     msg.chat.id,
-    `${senderName} ${rpCommands[text]} ${targetName}`
+    `✨ ${sender} ${rpCommands[text]} ${target}`,
+    { parse_mode: "HTML" }
   );
 });
 
-// команда /start
+// старт
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-`Привет 👋
+`🔥 RP BOT
 
-Бот с РП командами работает.
-
-Команды:
+Команды (пиши ответом на сообщение):
 убить
 обнять
 поцеловать
@@ -98,12 +98,17 @@ bot.onText(/\/start/, (msg) => {
 расстрелять
 заскамить
 уничтожить
+лизнуть
+украсть
+похитить
+вырубить
+раздавить
+забанить
+кикнуть
+захилить
+спасти
+защитить
 
-Как использовать:
-1. Ответь на сообщение человека
-2. Напиши слово-команду
-
-Пример:
-убить`
+💡 Просто ответь на сообщение и напиши слово`
   );
 });
