@@ -60,6 +60,8 @@ async function initDb() {
       destroys INTEGER DEFAULT 0,
       wakes INTEGER DEFAULT 0,
       freezes INTEGER DEFAULT 0,
+      balance INTEGER DEFAULT 0,
+      last_daily_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
   `);
@@ -86,6 +88,8 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS destroys INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS wakes INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS freezes INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
@@ -191,6 +195,22 @@ function getRandomChatMember(chatId) {
   if (!members.length) return null;
 
   return members[Math.floor(Math.random() * members.length)];
+}
+
+function getRandomCoins() {
+  return Math.floor(Math.random() * 101);
+}
+
+function formatRemainingTime(ms) {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  if (hours <= 0) {
+    return `${minutes} мин`;
+  }
+
+  return `${hours} ч ${minutes} мин`;
 }
 
 async function initUser(user) {
@@ -299,6 +319,52 @@ async function incrementStat(targetUserId, statField) {
   console.log("✅ stat updated:", statField, "for", targetUserId, result.rows[0]);
 }
 
+async function claimDailyCoins(userId) {
+  const result = await pool.query(
+    `SELECT balance, last_daily_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
+  const cooldownMs = 24 * 60 * 60 * 1000;
+
+  if (lastDailyAt) {
+    const nextTime = new Date(lastDailyAt.getTime() + cooldownMs);
+
+    if (now < nextTime) {
+      return {
+        ok: false,
+        remainingMs: nextTime.getTime() - now.getTime()
+      };
+    }
+  }
+
+  const coins = getRandomCoins();
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = balance + $2,
+        last_daily_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, coins]
+  );
+
+  return {
+    ok: true,
+    coins,
+    balance: updateResult.rows[0].balance
+  };
+}
+
 async function getProfileText(user) {
   await initUser(user);
   const stats = await getUserStats(user.id);
@@ -307,6 +373,8 @@ async function getProfileText(user) {
 
 Имя: ${getUserLink(user)}
 ID: ${user.id}
+
+💰 Монеты: ${stats.balance || 0}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
@@ -408,6 +476,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 кто ...
 оценка
 прогноз
+деньги
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
@@ -451,6 +520,40 @@ bot.on("message", async (msg) => {
     const lowerText = text.toLowerCase();
 
     if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // ДЕНЬГИ
+    // =========================
+    if (lowerText === "деньги" || lowerText === "монеты") {
+      const result = await claimDailyCoins(msg.from.id);
+
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await bot.sendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await bot.sendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, получить монеты снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!\n\nБаланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
 
     // =========================
     // ПРОГНОЗ
