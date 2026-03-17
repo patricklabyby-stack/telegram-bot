@@ -19,14 +19,9 @@ const bot = new TelegramBot(token, { polling: true });
 
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  ssl: { rejectUnauthorized: false }
 });
 
-// =========================
-// SERVER
-// =========================
 app.get("/", (req, res) => {
   res.send("Бот работает");
 });
@@ -35,9 +30,6 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// =========================
-// БАЗА
-// =========================
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -55,22 +47,19 @@ async function initDb() {
       slaps INTEGER DEFAULT 0,
       punches INTEGER DEFAULT 0,
       total INTEGER DEFAULT 0
-    );
+    )
   `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS profile_messages (
       message_id BIGINT PRIMARY KEY,
       target_user_id BIGINT NOT NULL
-    );
+    )
   `);
 
-  console.log("Database ready");
+  console.log("✅ Database ready");
 }
 
-// =========================
-// УТИЛИТЫ
-// =========================
 function escapeHtml(text) {
   return String(text || "")
     .replace(/&/g, "&amp;")
@@ -81,8 +70,16 @@ function escapeHtml(text) {
 function getUserName(user) {
   if (!user) return "Пользователь";
 
-  const fullName = `${user.first_name || ""} ${user.last_name || ""}`.trim();
-  return fullName || user.username || "Пользователь";
+  const firstName = (user.first_name || "").trim();
+  const lastName = (user.last_name || "").trim();
+  const username = (user.username || "").trim();
+
+  const fullName = `${firstName} ${lastName}`.trim();
+
+  if (fullName && fullName !== ".") return fullName;
+  if (username) return username;
+  if (firstName) return firstName;
+  return `ID ${user.id}`;
 }
 
 function getUserLink(user) {
@@ -98,15 +95,24 @@ async function initUser(user) {
     VALUES ($1, $2, $3, $4)
     ON CONFLICT (user_id)
     DO UPDATE SET
-      first_name = EXCLUDED.first_name,
-      last_name = EXCLUDED.last_name,
-      username = EXCLUDED.username
+      first_name = CASE
+        WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name
+        ELSE users.first_name
+      END,
+      last_name = CASE
+        WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name
+        ELSE users.last_name
+      END,
+      username = CASE
+        WHEN EXCLUDED.username <> '' THEN EXCLUDED.username
+        ELSE users.username
+      END
     `,
     [
       user.id,
-      user.first_name || "",
-      user.last_name || "",
-      user.username || ""
+      (user.first_name || "").trim(),
+      (user.last_name || "").trim(),
+      (user.username || "").trim()
     ]
   );
 }
@@ -116,7 +122,6 @@ async function getUserStats(userId) {
     `SELECT * FROM users WHERE user_id = $1`,
     [userId]
   );
-
   return result.rows[0] || null;
 }
 
@@ -149,7 +154,6 @@ async function getProfileOwnerByMessageId(messageId) {
     `SELECT target_user_id FROM profile_messages WHERE message_id = $1`,
     [messageId]
   );
-
   return result.rows[0] ? Number(result.rows[0].target_user_id) : null;
 }
 
@@ -168,15 +172,18 @@ async function incrementStat(targetUserId, statField) {
 
   if (!allowedFields.includes(statField)) return;
 
-  await pool.query(
+  const result = await pool.query(
     `
     UPDATE users
     SET ${statField} = ${statField} + 1,
         total = total + 1
     WHERE user_id = $1
+    RETURNING *
     `,
     [targetUserId]
   );
+
+  console.log("✅ stat updated:", statField, "for", targetUserId, result.rows[0]);
 }
 
 async function getProfileText(user) {
@@ -233,9 +240,6 @@ async function resolveTargetUserFromReply(msg) {
   return null;
 }
 
-// =========================
-// РП КОМАНДЫ
-// =========================
 const rpCommands = {
   "убить": { text: "убил", stat: "kills", emoji: "💀" },
   "обнять": { text: "обнял", stat: "hugs", emoji: "❤️" },
@@ -248,10 +252,7 @@ const rpCommands = {
   "врезать": { text: "врезал", stat: "punches", emoji: "🥊" }
 };
 
-// =========================
-// /start
-// =========================
-bot.onText(/^\/start$/, async (msg) => {
+bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   await bot.sendMessage(
     msg.chat.id,
     `🔥 RP BOT
@@ -268,21 +269,11 @@ bot.onText(/^\/start$/, async (msg) => {
 врезать
 
 /profile — показать свой профиль
-/profile ответом — показать профиль игрока
-
-Как использовать:
-1. Ответь на сообщение игрока
-2. Напиши команду
-
-Пример:
-убить`
+/profile ответом — показать профиль игрока`
   );
 });
 
-// =========================
-// /profile
-// =========================
-bot.onText(/^\/profile$/, async (msg) => {
+bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     let targetUser = null;
 
@@ -302,17 +293,11 @@ bot.onText(/^\/profile$/, async (msg) => {
   }
 });
 
-// =========================
-// ОБРАБОТКА СООБЩЕНИЙ
-// =========================
 bot.on("message", async (msg) => {
   try {
-    if (!msg.text) return;
-    if (!msg.from) return;
-    if (msg.from.is_bot) return;
+    if (!msg.text || !msg.from || msg.from.is_bot) return;
 
     const text = msg.text.trim().toLowerCase();
-
     if (text.startsWith("/")) return;
 
     const command = rpCommands[text];
@@ -324,10 +309,7 @@ bot.on("message", async (msg) => {
     const target = await resolveTargetUserFromReply(msg);
 
     if (!target) {
-      await bot.sendMessage(
-        msg.chat.id,
-        "Ответь на сообщение игрока этой командой."
-      );
+      await bot.sendMessage(msg.chat.id, "Ответь на сообщение игрока этой командой.");
       return;
     }
 
@@ -364,14 +346,14 @@ bot.on("polling_error", (error) => {
   console.error("Polling error:", error?.message || error);
 });
 
-// =========================
-// ЗАПУСК
-// =========================
 (async () => {
   try {
+    const test = await pool.query("SELECT NOW()");
+    console.log("✅ DB connected:", test.rows[0]);
+
     await initDb();
-    console.log("Bot started");
+    console.log("✅ Bot started");
   } catch (error) {
-    console.error("Ошибка запуска:", error);
+    console.error("❌ Ошибка запуска:", error);
   }
 })();
