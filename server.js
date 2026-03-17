@@ -7,6 +7,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const OWNER_ID = 7837011810;
 const PORT = process.env.PORT || 3000;
 
+const MAX_GREETING_LENGTH = 1000;
+const WELCOME_DEDUPE_MS = 10000;
+
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN not found");
   process.exit(1);
@@ -25,28 +28,41 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-/*
-  waitingGreeting:
-  chatId -> {
-    userId: number,
-    mode: "create" | "edit"
-  }
-*/
 const waitingGreeting = new Map();
-
-/*
-  recentWelcomes:
-  защита от двойной отправки приветствия
-  key = `${chatId}:${userId}`
-*/
 const recentWelcomes = new Map();
-
-/*
-  usersCache:
-  username(lowercase without @) -> account display name
-  Нужен для /jail @username
-*/
 const usersCache = new Map();
+
+const HELP_TEXT = `👋 Привет! Я Artemwe Moderator.
+
+Команды:
+create greeting
+edit greeting
+show greeting
+delete greeting
+cancel greeting
+/help
+
+RP команда:
+/jail
+
+Как работает приветствие:
+1. create greeting
+2. бот просит текст
+3. ты отправляешь текст
+4. бот сохраняет его
+
+Можно использовать {name}
+
+Пример:
+Привет {name}! Добро пожаловать в группу.`;
+
+const GREETING_COMMANDS = new Set([
+  "create greeting",
+  "edit greeting",
+  "show greeting",
+  "delete greeting",
+  "cancel greeting"
+]);
 
 /* =========================
    DB
@@ -70,8 +86,7 @@ async function getGreeting(chatId) {
     [String(chatId)]
   );
 
-  if (result.rows.length === 0) return null;
-  return result.rows[0].text;
+  return result.rows.length ? result.rows[0].text : null;
 }
 
 async function saveGreeting(chatId, text) {
@@ -106,6 +121,14 @@ async function safeSendMessage(chatId, text, extra = {}) {
   }
 }
 
+function normalizeText(text) {
+  return String(text || "").trim();
+}
+
+function lowerText(text) {
+  return normalizeText(text).toLowerCase();
+}
+
 function normalizeUsername(username) {
   if (!username) return null;
   return String(username).replace(/^@/, "").trim().toLowerCase() || null;
@@ -119,12 +142,6 @@ function getAccountName(user) {
   const fullName = `${firstName} ${lastName}`.trim();
 
   return fullName || "Игрок";
-}
-
-function getBestVisibleName(user) {
-  if (!user) return "Игрок";
-  if (user.username) return `@${user.username}`;
-  return getAccountName(user);
 }
 
 function cacheUser(user) {
@@ -142,21 +159,17 @@ function resolveTargetFromCommandArg(rawArg) {
   const trimmed = rawArg.trim();
   if (!trimmed) return null;
 
-  // если это username
   if (trimmed.startsWith("@")) {
     const normalized = normalizeUsername(trimmed);
     if (!normalized) return trimmed;
 
-    // если уже видели этого пользователя в чате — подставим имя аккаунта
     if (usersCache.has(normalized)) {
       return usersCache.get(normalized);
     }
 
-    // иначе оставим @username
     return `@${normalized}`;
   }
 
-  // просто текст
   return trimmed;
 }
 
@@ -186,46 +199,26 @@ function isSystemEventMessage(msg) {
   );
 }
 
-function cleanupExpiredWelcome(key, delayMs = 10000) {
+function cleanupExpiredWelcome(key, delayMs = WELCOME_DEDUPE_MS) {
   setTimeout(() => {
     recentWelcomes.delete(key);
   }, delayMs);
 }
 
+function isGreetingCommand(text) {
+  return GREETING_COMMANDS.has(text);
+}
+
 /* =========================
-   START
+   START / HELP
 ========================= */
 
 bot.onText(/\/start/, async (msg) => {
-  await safeSendMessage(
-    msg.chat.id,
-    `👋 Привет! Я Artemwe Moderator.
+  await safeSendMessage(msg.chat.id, HELP_TEXT);
+});
 
-Команды приветствия:
-create greeting
-edit greeting
-show greeting
-delete greeting
-cancel greeting
-
-RP команда:
-/jail
-Пример:
-/jail @username
-или ответом на сообщение:
-/jail
-
-Как работает приветствие:
-1. create greeting
-2. бот просит текст
-3. ты отправляешь текст
-4. бот сохраняет его
-
-Можно использовать {name}
-
-Пример:
-Привет {name}! Добро пожаловать в группу.`
-  );
+bot.onText(/\/help/, async (msg) => {
+  await safeSendMessage(msg.chat.id, HELP_TEXT);
 });
 
 /* =========================
@@ -234,17 +227,17 @@ RP команда:
 
 bot.onText(/\/jail(?:\s+(.+))?/, async (msg, match) => {
   try {
+    if (msg.from?.is_bot) return;
+
     cacheUser(msg.from);
     if (msg.reply_to_message?.from) cacheUser(msg.reply_to_message.from);
 
     const actorName = getAccountName(msg.from);
     let target = null;
 
-    // 1. Если команда ответом на сообщение — берём имя аккаунта цели
     if (msg.reply_to_message?.from) {
       target = getAccountName(msg.reply_to_message.from);
     } else {
-      // 2. Если /jail @username или /jail текст
       const rawArg = match?.[1] || "";
       target = resolveTargetFromCommandArg(rawArg);
     }
@@ -272,30 +265,27 @@ bot.onText(/\/jail(?:\s+(.+))?/, async (msg, match) => {
 
 bot.on("message", async (msg) => {
   try {
-    // кэшируем пользователей, которых видим
+    if (msg.from?.is_bot) return;
+
     if (msg.from) cacheUser(msg.from);
     if (msg.reply_to_message?.from) cacheUser(msg.reply_to_message.from);
 
     const chatId = msg.chat.id;
     const userId = msg.from?.id;
-    const originalText = msg.text?.trim();
+    const originalText = normalizeText(msg.text);
 
     if (!originalText) return;
     if (isSystemEventMessage(msg)) return;
 
-    // чтобы /jail не обрабатывался здесь второй раз
     if (originalText.startsWith("/jail")) return;
-    if (originalText === "/start") return;
+    if (originalText === "/start" || originalText === "/help") return;
 
-    const text = originalText.toLowerCase();
+    const text = lowerText(originalText);
 
-    /* =========================
-       1. если бот ждёт текст приветствия
-    ========================= */
+    /* ===== если бот ждёт текст приветствия ===== */
     if (waitingGreeting.has(chatId)) {
       const session = waitingGreeting.get(chatId);
 
-      // только тот, кто начал ввод
       if (session.userId !== userId) return;
 
       if (text === "cancel greeting") {
@@ -304,12 +294,7 @@ bot.on("message", async (msg) => {
         return;
       }
 
-      if (
-        text === "create greeting" ||
-        text === "edit greeting" ||
-        text === "show greeting" ||
-        text === "delete greeting"
-      ) {
+      if (isGreetingCommand(text)) {
         await safeSendMessage(
           chatId,
           "❌ Сейчас бот ждёт текст приветствия. Напиши текст или используй: cancel greeting"
@@ -317,22 +302,27 @@ bot.on("message", async (msg) => {
         return;
       }
 
+      if (!originalText) {
+        await safeSendMessage(chatId, "❌ Текст пустой. Напиши текст приветствия.");
+        return;
+      }
+
+      if (originalText.length > MAX_GREETING_LENGTH) {
+        await safeSendMessage(
+          chatId,
+          `❌ Текст слишком длинный. Максимум ${MAX_GREETING_LENGTH} символов.`
+        );
+        return;
+      }
+
       await saveGreeting(chatId, originalText);
       waitingGreeting.delete(chatId);
 
-      if (session.mode === "edit") {
-        await safeSendMessage(chatId, "✅ Приветствие изменено.");
-      } else {
-        await safeSendMessage(chatId, "✅ Приветствие создано.");
-      }
-
+      await safeSendMessage(chatId, "✅ Приветствие сохранено.");
       return;
     }
 
-    /* =========================
-       2. команды приветствия
-    ========================= */
-
+    /* ===== create greeting ===== */
     if (text === "create greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -349,7 +339,7 @@ bot.on("message", async (msg) => {
       if (currentGreeting) {
         await safeSendMessage(
           chatId,
-          "❌ Приветствие уже создано. Используй: edit greeting"
+          "❌ У вас уже есть приветствие. Используй: edit greeting"
         );
         return;
       }
@@ -363,6 +353,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    /* ===== edit greeting ===== */
     if (text === "edit greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -393,6 +384,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    /* ===== show greeting ===== */
     if (text === "show greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -418,6 +410,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    /* ===== delete greeting ===== */
     if (text === "delete greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -446,6 +439,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    /* ===== cancel greeting ===== */
     if (text === "cancel greeting") {
       const allowed = await canManage(chatId, userId);
 
@@ -498,13 +492,12 @@ bot.on("new_chat_members", async (msg) => {
       const key = `${chatId}:${user.id}`;
       const now = Date.now();
 
-      // защита от двойного приветствия
-      if (recentWelcomes.has(key) && now - recentWelcomes.get(key) < 10000) {
+      if (recentWelcomes.has(key) && now - recentWelcomes.get(key) < WELCOME_DEDUPE_MS) {
         continue;
       }
 
       recentWelcomes.set(key, now);
-      cleanupExpiredWelcome(key, 10000);
+      cleanupExpiredWelcome(key, WELCOME_DEDUPE_MS);
 
       const name = user.first_name || user.username || "друг";
       const finalText = greeting.replace(/\{name\}/g, name);
@@ -524,6 +517,10 @@ app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
+app.get("/health", (req, res) => {
+  res.status(200).json({ ok: true });
+});
+
 /* =========================
    START APP
 ========================= */
@@ -541,4 +538,8 @@ initDB()
 
 bot.on("polling_error", (error) => {
   console.error("Polling error:", error.message);
+});
+
+bot.on("error", (error) => {
+  console.error("Bot error:", error.message);
 });
