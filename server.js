@@ -118,6 +118,28 @@ function getUserLink(user) {
   return `<a href="tg://user?id=${user.id}">${escapeHtml(getUserName(user))}</a>`;
 }
 
+function getRandomGift() {
+  const gifts = [
+    "шоколад 🍫",
+    "цветы 🌹",
+    "плюшевого мишку 🧸",
+    "пиццу 🍕",
+    "айфон 📱",
+    "конфеты 🍬",
+    "торт 🎂",
+    "звезду ⭐",
+    "машину 🏎️",
+    "деньги 💸",
+    "кольцо 💍",
+    "мороженое 🍦",
+    "сок 🧃",
+    "бургер 🍔",
+    "печенье 🍪"
+  ];
+
+  return gifts[Math.floor(Math.random() * gifts.length)];
+}
+
 async function initUser(user) {
   if (!user || !user.id) return;
 
@@ -329,6 +351,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 уничтожить
 разбудить
 заморозить
+подарок
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
@@ -367,6 +390,50 @@ bot.on("message", async (msg) => {
 
     const text = msg.text.trim().toLowerCase();
     if (text.startsWith("/")) return;
+
+    // =========================
+    // ПОДАРОК
+    // =========================
+    if (text === "подарок") {
+      const sender = msg.from;
+      await initUser(sender);
+
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Ответь на сообщение игрока и напиши: подарок"
+        );
+        return;
+      }
+
+      await initUser(target);
+
+      if (sender.id === target.id) {
+        await bot.sendMessage(
+          msg.chat.id,
+          `🎁 ${getUserLink(sender)} подарил(а) подарок самому себе`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const gift = getRandomGift();
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `🎁 ${getUserLink(sender)} подарил(а) ${getUserLink(target)} ${escapeHtml(gift)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
 
     const command = rpCommands[text];
     if (!command) return;
