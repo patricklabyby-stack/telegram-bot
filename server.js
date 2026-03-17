@@ -201,6 +201,22 @@ function getRandomChatMember(chatId) {
   return members[Math.floor(Math.random() * members.length)];
 }
 
+function getRandomPairMembers(chatId) {
+  const key = String(chatId);
+  const members = Object.values(chatMembers[key] || {});
+
+  if (members.length < 2) return null;
+
+  const firstIndex = Math.floor(Math.random() * members.length);
+  let secondIndex = Math.floor(Math.random() * members.length);
+
+  while (secondIndex === firstIndex) {
+    secondIndex = Math.floor(Math.random() * members.length);
+  }
+
+  return [members[firstIndex], members[secondIndex]];
+}
+
 function getRandomCoins() {
   return Math.floor(Math.random() * 101);
 }
@@ -625,6 +641,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 деньги
 охота
 снайпер
+пара
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
@@ -668,6 +685,34 @@ bot.on("message", async (msg) => {
     const lowerText = text.toLowerCase();
 
     if (lowerText.startsWith("/")) return;
+
+    // =========================
+    // ПАРА
+    // =========================
+    if (lowerText === "пара") {
+      const pair = getRandomPairMembers(msg.chat.id);
+
+      if (!pair) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Нужно хотя бы 2 человека в чате, чтобы выбрать пару 💞"
+        );
+        return;
+      }
+
+      const [firstUser, secondUser] = pair;
+      const percent = Math.floor(Math.random() * 101);
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `💞 Случайная пара:\n${getUserLink(firstUser)} + ${getUserLink(secondUser)}\n\n❤️ Совместимость: ${percent}%`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
 
     // =========================
     // ДЕНЬГИ
