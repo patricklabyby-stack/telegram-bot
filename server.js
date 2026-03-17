@@ -22,6 +22,9 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// =========================
+// SERVER
+// =========================
 app.get("/", (req, res) => {
   res.send("Бот работает");
 });
@@ -30,6 +33,9 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+// =========================
+// БАЗА
+// =========================
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -46,6 +52,12 @@ async function initDb() {
       kicks INTEGER DEFAULT 0,
       slaps INTEGER DEFAULT 0,
       punches INTEGER DEFAULT 0,
+      licks INTEGER DEFAULT 0,
+      steals INTEGER DEFAULT 0,
+      scams INTEGER DEFAULT 0,
+      destroys INTEGER DEFAULT 0,
+      wakes INTEGER DEFAULT 0,
+      freezes INTEGER DEFAULT 0,
       total INTEGER DEFAULT 0
     )
   `);
@@ -57,9 +69,29 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hugs INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kisses INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hits INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bites INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pats INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kicks INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slaps INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS punches INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS licks INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS steals INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS scams INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS destroys INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS wakes INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS freezes INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0`);
+
   console.log("✅ Database ready");
 }
 
+// =========================
+// УТИЛИТЫ
+// =========================
 function escapeHtml(text) {
   return String(text || "")
     .replace(/&/g, "&amp;")
@@ -167,7 +199,13 @@ async function incrementStat(targetUserId, statField) {
     "pats",
     "kicks",
     "slaps",
-    "punches"
+    "punches",
+    "licks",
+    "steals",
+    "scams",
+    "destroys",
+    "wakes",
+    "freezes"
   ];
 
   if (!allowedFields.includes(statField)) return;
@@ -205,6 +243,12 @@ ID: ${user.id}
 🦵 Пнули: ${stats.kicks}
 🖐 Шлёпнули: ${stats.slaps}
 🥊 Врезали: ${stats.punches}
+👅 Лизнули: ${stats.licks}
+🕵️ Обокрали: ${stats.steals}
+💸 Заскамили: ${stats.scams}
+☠️ Уничтожили: ${stats.destroys}
+⏰ Разбудили: ${stats.wakes}
+🧊 Заморозили: ${stats.freezes}
 
 🔥 Всего взаимодействий: ${stats.total}`;
 }
@@ -240,6 +284,9 @@ async function resolveTargetUserFromReply(msg) {
   return null;
 }
 
+// =========================
+// РП КОМАНДЫ
+// =========================
 const rpCommands = {
   "убить": { text: "убил", stat: "kills", emoji: "💀" },
   "обнять": { text: "обнял", stat: "hugs", emoji: "❤️" },
@@ -249,9 +296,18 @@ const rpCommands = {
   "погладить": { text: "погладил", stat: "pats", emoji: "🤲" },
   "пнуть": { text: "пнул", stat: "kicks", emoji: "🦵" },
   "шлепнуть": { text: "шлёпнул", stat: "slaps", emoji: "🖐" },
-  "врезать": { text: "врезал", stat: "punches", emoji: "🥊" }
+  "врезать": { text: "врезал", stat: "punches", emoji: "🥊" },
+  "лизнуть": { text: "лизнул", stat: "licks", emoji: "👅" },
+  "украсть": { text: "обокрал", stat: "steals", emoji: "🕵️" },
+  "заскамить": { text: "заскамил", stat: "scams", emoji: "💸" },
+  "уничтожить": { text: "уничтожил", stat: "destroys", emoji: "☠️" },
+  "разбудить": { text: "разбудил", stat: "wakes", emoji: "⏰" },
+  "заморозить": { text: "заморозил", stat: "freezes", emoji: "🧊" }
 };
 
+// =========================
+// /start
+// =========================
 bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   await bot.sendMessage(
     msg.chat.id,
@@ -267,12 +323,21 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 пнуть
 шлепнуть
 врезать
+лизнуть
+украсть
+заскамить
+уничтожить
+разбудить
+заморозить
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока`
   );
 });
 
+// =========================
+// /profile
+// =========================
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     let targetUser = null;
@@ -293,6 +358,9 @@ bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   }
 });
 
+// =========================
+// ОБРАБОТКА СООБЩЕНИЙ
+// =========================
 bot.on("message", async (msg) => {
   try {
     if (!msg.text || !msg.from || msg.from.is_bot) return;
@@ -346,6 +414,9 @@ bot.on("polling_error", (error) => {
   console.error("Polling error:", error?.message || error);
 });
 
+// =========================
+// ЗАПУСК
+// =========================
 (async () => {
   try {
     const test = await pool.query("SELECT NOW()");
