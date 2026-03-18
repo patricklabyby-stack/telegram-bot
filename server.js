@@ -21,6 +21,7 @@ const chatMembers = {};
 const pendingCommandCreation = {};
 const activeBombs = {};
 const recentActiveUsers = {};
+const pendingMarriages = {};
 
 // =========================
 // SERVER
@@ -443,6 +444,16 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS marriages (
+      id SERIAL PRIMARY KEY,
+      user1_id BIGINT NOT NULL,
+      user2_id BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hugs INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kisses INTEGER DEFAULT 0`);
@@ -706,6 +717,88 @@ async function getRandomPairMembersFromDb(chatId) {
 }
 
 // =========================
+// MARRIAGE
+// =========================
+function getMarriageKey(chatId, targetUserId) {
+  return `${chatId}:${targetUserId}`;
+}
+
+async function getActiveMarriageByUserId(userId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM marriages
+    WHERE is_active = TRUE
+      AND (user1_id = $1 OR user2_id = $1)
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function isUserMarried(userId) {
+  const marriage = await getActiveMarriageByUserId(userId);
+  return !!marriage;
+}
+
+async function createMarriage(user1Id, user2Id) {
+  const smaller = Math.min(user1Id, user2Id);
+  const bigger = Math.max(user1Id, user2Id);
+
+  const result = await pool.query(
+    `
+    INSERT INTO marriages (user1_id, user2_id, is_active)
+    VALUES ($1, $2, TRUE)
+    RETURNING *
+    `,
+    [smaller, bigger]
+  );
+
+  return result.rows[0];
+}
+
+async function divorceMarriageByUserId(userId) {
+  const result = await pool.query(
+    `
+    UPDATE marriages
+    SET is_active = FALSE
+    WHERE is_active = TRUE
+      AND (user1_id = $1 OR user2_id = $1)
+    RETURNING *
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getMarriagePartner(userId) {
+  const marriage = await getActiveMarriageByUserId(userId);
+  if (!marriage) return null;
+
+  const partnerId =
+    Number(marriage.user1_id) === Number(userId)
+      ? Number(marriage.user2_id)
+      : Number(marriage.user1_id);
+
+  return {
+    marriage,
+    partnerId
+  };
+}
+
+function formatMarriageDate(dateValue) {
+  const date = new Date(dateValue);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+
+  return `${day}.${month}.${year}`;
+}
+
+// =========================
 // CUSTOM COMMANDS
 // =========================
 async function getUserCustomCommandCount(userId) {
@@ -919,6 +1012,30 @@ async function runSniper(userId) {
   };
 }
 
+async function getCooldownText(userId) {
+  const stats = await getUserStats(userId);
+  if (!stats) return "Профиль не найден.";
+
+  const now = new Date();
+  const cooldownMs = 24 * 60 * 60 * 1000;
+
+  function getRemaining(lastAt) {
+    if (!lastAt) return "✅ Уже доступно";
+
+    const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+    const diff = nextTime.getTime() - now.getTime();
+
+    if (diff <= 0) return "✅ Уже доступно";
+    return `⏳ ${formatRemainingTime(diff)}`;
+  }
+
+  return `⏱ Кулдауны
+
+💰 Деньги: ${getRemaining(stats.last_daily_at)}
+🏹 Охота: ${getRemaining(stats.last_hunt_at)}
+🎯 Снайпер: ${getRemaining(stats.last_sniper_at)}`;
+}
+
 // =========================
 // PROFILE
 // =========================
@@ -1042,16 +1159,22 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 магазин
 бомба
 передать
+брак
+зарегистрироваться в брак
+развод
+семья
 он врет?
 врет?
 /createcommand
 /mycommands
 /deletecommand
 /balance
+/cooldowns
 
 /profile — показать свой профиль
 /profile ответом — показать профиль игрока
-/balance — показать баланс`
+/balance — показать баланс
+/cooldowns — показать кулдауны`
   );
 });
 
@@ -1093,6 +1216,19 @@ bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
   } catch (error) {
     console.error("Ошибка /balance:", error);
     await safeSendMessage(msg.chat.id, "Ошибка при получении баланса.");
+  }
+});
+
+bot.onText(/^\/cooldowns(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
+
+    const text = await getCooldownText(msg.from.id);
+    await safeSendMessage(msg.chat.id, text);
+  } catch (error) {
+    console.error("Ошибка /cooldowns:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка при получении кулдаунов.");
   }
 });
 
@@ -1310,6 +1446,9 @@ bot.on("message", async (msg) => {
 
     if (lowerText.startsWith("/")) return;
 
+    // =========================
+    // СОЗДАНИЕ КАСТОМНОЙ КОМАНДЫ
+    // =========================
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
@@ -1400,7 +1539,75 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // BOMB START
+    // =========================
+    // ОТВЕТ НА ПРЕДЛОЖЕНИЕ БРАКА
+    // =========================
+    const marriageAnswerKey = getMarriageKey(msg.chat.id, msg.from.id);
+    const pendingMarriage = pendingMarriages[marriageAnswerKey];
+
+    if (pendingMarriage && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
+      const isExpired = Date.now() - pendingMarriage.createdAt > 10 * 60 * 1000;
+
+      if (isExpired) {
+        delete pendingMarriages[marriageAnswerKey];
+        await safeSendMessage(
+          msg.chat.id,
+          "⌛ Предложение брака устарело."
+        );
+        return;
+      }
+
+      if (isExactCommand(lowerText, "нет")) {
+        await safeSendMessage(
+          msg.chat.id,
+          `💔 ${getUserLink(pendingMarriage.targetUser)} отказал(а) ${getUserLink(pendingMarriage.fromUser)} в браке.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        delete pendingMarriages[marriageAnswerKey];
+        return;
+      }
+
+      const senderMarried = await isUserMarried(pendingMarriage.fromUser.id);
+      const targetMarried = await isUserMarried(pendingMarriage.targetUser.id);
+
+      if (senderMarried || targetMarried) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Кто-то из вас уже состоит в браке."
+        );
+        delete pendingMarriages[marriageAnswerKey];
+        return;
+      }
+
+      const marriage = await createMarriage(
+        pendingMarriage.fromUser.id,
+        pendingMarriage.targetUser.id
+      );
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💍 Брак зарегистрирован!
+
+${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetUser)}
+
+📅 Дата: ${formatMarriageDate(marriage.created_at)}
+🏡 Теперь вы семья!`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+
+      delete pendingMarriages[marriageAnswerKey];
+      return;
+    }
+
+    // =========================
+    // СТАРТ БОМБЫ
+    // =========================
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
@@ -1445,7 +1652,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // BOMB PASS
+    // =========================
+    // ПЕРЕДАТЬ БОМБУ
+    // =========================
     if (isExactCommand(lowerText, "передать")) {
       const bombKey = getBombChatKey(msg.chat.id);
       const bomb = activeBombs[bombKey];
@@ -1461,7 +1670,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // SHOP
+    // =========================
+    // МАГАЗИН
+    // =========================
     if (isExactCommand(lowerText, "магазин")) {
       await safeSendMessage(
         msg.chat.id,
@@ -1474,7 +1685,164 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // LIE
+    // =========================
+    // БРАК: ПРЕДЛОЖЕНИЕ
+    // =========================
+    if (
+      isExactCommand(lowerText, "брак") ||
+      isExactCommand(lowerText, "зарегистрироваться в брак")
+    ) {
+      const sender = msg.from;
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(
+          msg.chat.id,
+          "Ответь на сообщение человека и напиши: брак"
+        );
+        return;
+      }
+
+      await initUser(target);
+      await saveSeenUser(msg.chat.id, target);
+
+      if (sender.id === target.id) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Нельзя зарегистрироваться в брак с самим собой."
+        );
+        return;
+      }
+
+      const senderMarriage = await isUserMarried(sender.id);
+      if (senderMarriage) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ты уже состоишь в браке."
+        );
+        return;
+      }
+
+      const targetMarriage = await isUserMarried(target.id);
+      if (targetMarriage) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Этот человек уже состоит в браке."
+        );
+        return;
+      }
+
+      const marriageKey = getMarriageKey(msg.chat.id, target.id);
+
+      pendingMarriages[marriageKey] = {
+        fromUser: {
+          id: sender.id,
+          first_name: sender.first_name || "",
+          last_name: sender.last_name || "",
+          username: sender.username || ""
+        },
+        targetUser: {
+          id: target.id,
+          first_name: target.first_name || "",
+          last_name: target.last_name || "",
+          username: target.username || ""
+        },
+        createdAt: Date.now()
+      };
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💍 ${getUserLink(sender)} сделал(а) предложение ${getUserLink(target)}!
+
+${getUserLink(target)}, если согласен(на), напиши:
+да
+
+Если не согласен(на), напиши:
+нет
+
+⌛ У вас есть 10 минут.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // РАЗВОД
+    // =========================
+    if (isExactCommand(lowerText, "развод")) {
+      const marriagePartner = await getMarriagePartner(msg.from.id);
+
+      if (!marriagePartner) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ты не состоишь в браке."
+        );
+        return;
+      }
+
+      const partnerUser = await getStoredUser(marriagePartner.partnerId);
+
+      await divorceMarriageByUserId(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💔 ${getUserLink(msg.from)} развёлся(ась) с ${getUserLink(partnerUser)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // СЕМЬЯ
+    // =========================
+    if (isExactCommand(lowerText, "семья")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const marriagePartner = await getMarriagePartner(targetUser.id);
+
+      if (!marriagePartner) {
+        await safeSendMessage(
+          msg.chat.id,
+          `${getUserLink(targetUser)} пока не состоит в браке.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const partnerUser = await getStoredUser(marriagePartner.partnerId);
+      const marriage = marriagePartner.marriage;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏡 Семья
+
+💑 ${getUserLink(targetUser)} + ${getUserLink(partnerUser)}
+📅 Вместе с: ${formatMarriageDate(marriage.created_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // ДЕТЕКТОР ЛЖИ
+    // =========================
     if (
       isExactCommand(lowerText, "он врет?") ||
       isExactCommand(lowerText, "врет?") ||
@@ -1504,7 +1872,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // RESPECT
+    // =========================
+    // РЕСПЕКТ
+    // =========================
     if (isExactCommand(lowerText, "респект")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
@@ -1543,7 +1913,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // PAIR
+    // =========================
+    // ПАРА
+    // =========================
     if (isExactCommand(lowerText, "пара")) {
       const pair = await getRandomPairMembersFromDb(msg.chat.id);
 
@@ -1569,7 +1941,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // MONEY
+    // =========================
+    // ДЕНЬГИ
+    // =========================
     if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
       const result = await claimDailyCoins(msg.from.id);
 
@@ -1601,7 +1975,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // HUNT
+    // =========================
+    // ОХОТА
+    // =========================
     if (isExactCommand(lowerText, "охота")) {
       const result = await runHunt(msg.from.id);
 
@@ -1642,7 +2018,9 @@ ${coinsLine}
       return;
     }
 
-    // SNIPER
+    // =========================
+    // СНАЙПЕР
+    // =========================
     if (isExactCommand(lowerText, "снайпер")) {
       const result = await runSniper(msg.from.id);
 
@@ -1682,7 +2060,9 @@ ${coinsLine}
       return;
     }
 
-    // PREDICTION
+    // =========================
+    // ПРОГНОЗ
+    // =========================
     if (isExactCommand(lowerText, "прогноз")) {
       const prediction = getRandomPrediction();
 
@@ -1697,7 +2077,9 @@ ${coinsLine}
       return;
     }
 
-    // RATING
+    // =========================
+    // ОЦЕНКА
+    // =========================
     if (lowerText.startsWith("оценка")) {
       let target = null;
 
@@ -1725,7 +2107,9 @@ ${coinsLine}
       return;
     }
 
-    // WHO
+    // =========================
+    // КТО
+    // =========================
     if (lowerText.startsWith("кто ")) {
       const subject = text.slice(4).trim();
 
@@ -1752,7 +2136,9 @@ ${coinsLine}
       return;
     }
 
-    // GIFT
+    // =========================
+    // ПОДАРОК
+    // =========================
     if (isExactCommand(lowerText, "подарок")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
@@ -1793,7 +2179,9 @@ ${coinsLine}
       return;
     }
 
-    // CUSTOM COMMANDS
+    // =========================
+    // КАСТОМНЫЕ КОМАНДЫ
+    // =========================
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
@@ -1833,7 +2221,9 @@ ${coinsLine}
       return;
     }
 
-    // STANDARD RP COMMANDS
+    // =========================
+    // СТАНДАРТНЫЕ РП КОМАНДЫ
+    // =========================
     const command = rpCommands[lowerText];
     if (!command) return;
 
