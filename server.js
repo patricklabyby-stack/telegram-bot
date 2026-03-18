@@ -1609,7 +1609,6 @@ bot.on("message", async (msg) => {
 
     if (lowerText.startsWith("/")) return;
 
-    // CUSTOM COMMAND CREATION
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
@@ -1700,7 +1699,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // MARRIAGE ANSWER
     const marriageAnswerKey = getMarriageKey(msg.chat.id, msg.from.id);
     const pendingMarriage = pendingMarriages[marriageAnswerKey];
 
@@ -1758,7 +1756,6 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       return;
     }
 
-    // ADOPTION ANSWER
     const adoptionAnswerKey = getAdoptionKey(msg.chat.id, msg.from.id);
     const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
 
@@ -1828,7 +1825,6 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // BOMB START
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
@@ -1873,7 +1869,6 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // BOMB PASS
     if (isExactCommand(lowerText, "передать")) {
       const bombKey = getBombChatKey(msg.chat.id);
       const bomb = activeBombs[bombKey];
@@ -1889,7 +1884,6 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // SHOP
     if (isExactCommand(lowerText, "магазин")) {
       await safeSendMessage(
         msg.chat.id,
@@ -1902,7 +1896,6 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // MARRIAGE REQUEST
     if (
       isExactCommand(lowerText, "брак") ||
       isExactCommand(lowerText, "зарегистрироваться в брак")
@@ -1972,7 +1965,6 @@ ${getUserLink(target)}, если согласен(на), напиши:
       return;
     }
 
-    // DIVORCE
     if (isExactCommand(lowerText, "развод")) {
       const marriagePartner = await getMarriagePartner(msg.from.id);
 
@@ -1996,7 +1988,6 @@ ${getUserLink(target)}, если согласен(на), напиши:
       return;
     }
 
-    // ADOPT CHILD
     if (isExactCommand(lowerText, "усыновить")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
@@ -2066,7 +2057,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // REMOVE CHILD
     if (isExactCommand(lowerText, "отказаться от ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
@@ -2100,7 +2090,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // CHILD ESCAPE
     if (isExactCommand(lowerText, "сбежать из семьи")) {
       const child = msg.from;
       const activeAdoption = await getActiveAdoptionByChildId(child.id);
@@ -2124,7 +2113,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // FAMILY
     if (isExactCommand(lowerText, "семья")) {
       let targetUser = msg.from;
 
@@ -2199,7 +2187,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // POCKET MONEY
     if (lowerText.startsWith("карманные деньги")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
@@ -2269,7 +2256,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // LIE DETECTOR
     if (
       isExactCommand(lowerText, "он врет?") ||
       isExactCommand(lowerText, "врет?") ||
@@ -2299,7 +2285,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // RESPECT
     if (isExactCommand(lowerText, "респект")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
@@ -2338,7 +2323,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // PAIR
     if (isExactCommand(lowerText, "пара")) {
       const pair = await getRandomPairMembersFromDb(msg.chat.id);
 
@@ -2364,7 +2348,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // DAILY MONEY
     if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
       const result = await claimDailyCoins(msg.from.id);
 
@@ -2396,7 +2379,6 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // HUNT
     if (isExactCommand(lowerText, "охота")) {
       const result = await runHunt(msg.from.id);
 
@@ -2437,7 +2419,6 @@ ${coinsLine}
       return;
     }
 
-    // SNIPER
     if (isExactCommand(lowerText, "снайпер")) {
       const result = await runSniper(msg.from.id);
 
@@ -2477,7 +2458,6 @@ ${coinsLine}
       return;
     }
 
-    // PREDICTION
     if (isExactCommand(lowerText, "прогноз")) {
       const prediction = getRandomPrediction();
 
@@ -2492,7 +2472,6 @@ ${coinsLine}
       return;
     }
 
-    // RATING
     if (lowerText.startsWith("оценка")) {
       let target = null;
 
@@ -2520,7 +2499,6 @@ ${coinsLine}
       return;
     }
 
-    // WHO
     if (lowerText.startsWith("кто ")) {
       const subject = text.slice(4).trim();
 
@@ -2547,7 +2525,6 @@ ${coinsLine}
       return;
     }
 
-    // GIFT
     if (isExactCommand(lowerText, "подарок")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
@@ -2588,7 +2565,6 @@ ${coinsLine}
       return;
     }
 
-    // CUSTOM COMMANDS
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
@@ -2628,7 +2604,6 @@ ${coinsLine}
       return;
     }
 
-    // STANDARD RP COMMANDS
     const command = rpCommands[lowerText];
     if (!command) return;
 
