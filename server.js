@@ -367,6 +367,21 @@ function getPendingKey(chatId, userId) {
   return `${chatId}:${userId}`;
 }
 
+function getLieResult() {
+  const percent = Math.floor(Math.random() * 101);
+
+  if (percent >= 85) {
+    return { percent, text: "💀 100% врёт" };
+  }
+  if (percent >= 65) {
+    return { percent, text: "🤥 Похоже, он врёт" };
+  }
+  if (percent >= 45) {
+    return { percent, text: "😐 Не могу понять" };
+  }
+  return { percent, text: "✅ Скорее говорит правду" };
+}
+
 // =========================
 // БАЗОВЫЕ ФУНКЦИИ БД
 // =========================
@@ -916,6 +931,8 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 снайпер
 пара
 магазин
+он врет?
+врет?
 /createcommand
 /mycommands
 /deletecommand
@@ -1018,9 +1035,16 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
 Пример:
 облил облил водой
 
-Тогда:
-команда = облил
-бот будет писать = "Артем облил водой Сергей"`
+Где:
+облил — это команда, которую ты будешь писать в чат
+облил водой — это текст, который бот будет писать
+
+Пример использования:
+если ответить на сообщение игрока и написать:
+облил
+
+бот напишет:
+💬 Артем облил водой игрока`
     );
   } catch (error) {
     console.error("Ошибка /createcommand:", error);
@@ -1044,7 +1068,7 @@ bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
     }
 
     const lines = commands.map((cmd, index) =>
-      `${index + 1}. ${escapeHtml(cmd.trigger)} → ${escapeHtml(cmd.action_text)}`
+      `${index + 1}. ${escapeHtml(cmd.trigger)} — бот пишет: ${escapeHtml(cmd.action_text)}`
     );
 
     await bot.sendMessage(
@@ -1298,8 +1322,16 @@ bot.on("message", async (msg) => {
         msg.chat.id,
         `✅ Команда "${escapeHtml(parsed.trigger)}" создана!
 
-Теперь при использовании будет:
-💬 ${escapeHtml(getUserName(msg.from))} ${escapeHtml(parsed.actionText)} Сергей
+Теперь:
+${escapeHtml(parsed.trigger)} — это команда, которую надо писать в чат
+${escapeHtml(parsed.actionText)} — это текст, который будет писать бот
+
+Пример:
+если ответить на сообщение игрока и написать:
+${escapeHtml(parsed.trigger)}
+
+бот напишет:
+💬 ${escapeHtml(getUserName(msg.from))} ${escapeHtml(parsed.actionText)} игрока
 
 Списано: 20 монет`,
         { parse_mode: "HTML" }
@@ -1319,6 +1351,33 @@ bot.on("message", async (msg) => {
 💰 50 монет — 5 ⭐`,
         {
           reply_markup: getShopKeyboard()
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // ДЕТЕКТОР ЛЖИ
+    // =========================
+    if (lowerText === "он врет?" || lowerText === "врет?" || lowerText === "он врёт?" || lowerText === "врёт?") {
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "Ответь на сообщение человека и напиши: он врет?"
+        );
+        return;
+      }
+
+      const result = getLieResult();
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `🕵️ ${getUserLink(target)} проверен...\n\nВероятность лжи: ${result.percent}%\n${escapeHtml(result.text)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
         }
       );
       return;
