@@ -487,6 +487,14 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS favorite_children (
+      parent_user_id BIGINT PRIMARY KEY,
+      child_user_id BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hugs INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kisses INTEGER DEFAULT 0`);
@@ -961,6 +969,60 @@ async function isMyChild(parentUserId, childUserId) {
   return !!result.rows[0];
 }
 
+async function setFavoriteChild(parentUserId, childUserId) {
+  const result = await pool.query(
+    `
+    INSERT INTO favorite_children (parent_user_id, child_user_id)
+    VALUES ($1, $2)
+    ON CONFLICT (parent_user_id)
+    DO UPDATE SET
+      child_user_id = EXCLUDED.child_user_id,
+      created_at = NOW()
+    RETURNING *
+    `,
+    [parentUserId, childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function removeFavoriteChild(parentUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM favorite_children
+    WHERE parent_user_id = $1
+    RETURNING *
+    `,
+    [parentUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getFavoriteChild(parentUserId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM favorite_children
+    WHERE parent_user_id = $1
+    LIMIT 1
+    `,
+    [parentUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function removeFavoriteIfMatches(parentUserId, childUserId) {
+  await pool.query(
+    `
+    DELETE FROM favorite_children
+    WHERE parent_user_id = $1 AND child_user_id = $2
+    `,
+    [parentUserId, childUserId]
+  );
+}
+
 // =========================
 // CUSTOM COMMANDS
 // =========================
@@ -1325,6 +1387,8 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 усыновить
 отказаться от ребенка
 сбежать из семьи
+любимый ребенок
+убрать любимого ребенка
 карманные деньги 50
 он врет?
 врет?
@@ -2079,6 +2143,8 @@ ${getUserLink(child)}, если согласен(на), напиши:
         return;
       }
 
+      await removeFavoriteIfMatches(parent.id, child.id);
+
       await safeSendMessage(
         msg.chat.id,
         `💔 ${getUserLink(parent)} отказался(ась) от ребёнка ${getUserLink(child)}.`,
@@ -2101,10 +2167,69 @@ ${getUserLink(child)}, если согласен(на), напиши:
 
       const parentUser = await getStoredUser(Number(activeAdoption.parent_user_id));
       await childEscapeFamily(child.id);
+      await removeFavoriteIfMatches(Number(activeAdoption.parent_user_id), child.id);
 
       await safeSendMessage(
         msg.chat.id,
         `🏃 ${getUserLink(child)} сбежал(а) из семьи ${getUserLink(parentUser)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "любимый ребенок")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение своего ребёнка и напиши: любимый ребенок"
+        );
+        return;
+      }
+
+      const isChild = await isMyChild(parent.id, child.id);
+
+      if (!isChild) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Любимым можно сделать только своего ребёнка."
+        );
+        return;
+      }
+
+      await setFavoriteChild(parent.id, child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⭐ ${getUserLink(parent)} выбрал(а) ${getUserLink(child)} любимым ребёнком!`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "убрать любимого ребенка")) {
+      const parent = msg.from;
+      const removedFavorite = await removeFavoriteChild(parent.id);
+
+      if (!removedFavorite) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ У тебя пока нет любимого ребёнка."
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⭐ ${getUserLink(parent)} убрал(а) любимого ребёнка.`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -2170,11 +2295,21 @@ ${getUserLink(child)}, если согласен(на), напиши:
       }
 
       if (children.length) {
+        const favoriteChild = await getFavoriteChild(targetUser.id);
+        const favoriteChildId = favoriteChild ? Number(favoriteChild.child_user_id) : null;
+
         const childLines = [];
         for (const childRow of children) {
           const childUser = await getStoredUser(Number(childRow.child_user_id));
-          childLines.push(`• ${getUserLink(childUser)}`);
+          const childId = Number(childRow.child_user_id);
+
+          if (favoriteChildId && favoriteChildId === childId) {
+            childLines.push(`⭐ ${getUserLink(childUser)} — любимый`);
+          } else {
+            childLines.push(`• ${getUserLink(childUser)}`);
+          }
         }
+
         familyText += `\n\n👶 Дети:\n${childLines.join("\n")}`;
       } else {
         familyText += `\n\n👶 Дети: нет`;
