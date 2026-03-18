@@ -229,6 +229,40 @@ function getShopKeyboard() {
   };
 }
 
+function getMarriageDecisionKeyboard(chatId, targetUserId) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "✅ Да",
+          callback_data: `marriage_yes:${chatId}:${targetUserId}`
+        },
+        {
+          text: "❌ Нет",
+          callback_data: `marriage_no:${chatId}:${targetUserId}`
+        }
+      ]
+    ]
+  };
+}
+
+function getAdoptionDecisionKeyboard(chatId, targetUserId) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "✅ Да",
+          callback_data: `adoption_yes:${chatId}:${targetUserId}`
+        },
+        {
+          text: "❌ Нет",
+          callback_data: `adoption_no:${chatId}:${targetUserId}`
+        }
+      ]
+    ]
+  };
+}
+
 function getPendingKey(chatId, userId) {
   return `${chatId}:${userId}`;
 }
@@ -1627,14 +1661,20 @@ bot.on("callback_query", async (query) => {
   try {
     if (!query.data || !query.message || !query.from) return;
 
-    if (query.data === "buy_50_coins") {
+    const chatId = query.message.chat.id;
+    const data = String(query.data);
+
+    // =========================
+    // BUY COINS
+    // =========================
+    if (data === "buy_50_coins") {
       await initUser(query.from);
-      await saveSeenUser(query.message.chat.id, query.from);
+      await saveSeenUser(chatId, query.from);
 
       await bot.answerCallbackQuery(query.id);
 
       await bot.sendInvoice(
-        query.message.chat.id,
+        chatId,
         "50 монет",
         "Покупка 50 монет за 5 Telegram Stars",
         "coins_50",
@@ -1642,9 +1682,254 @@ bot.on("callback_query", async (query) => {
         "XTR",
         [{ label: "50 монет", amount: 5 }]
       );
+      return;
     }
+
+    // =========================
+    // MARRIAGE BUTTONS
+    // =========================
+    if (data.startsWith("marriage_yes:") || data.startsWith("marriage_no:")) {
+      const parts = data.split(":");
+      const action = parts[0];
+      const callbackChatId = Number(parts[1]);
+      const targetUserId = Number(parts[2]);
+
+      if (Number(chatId) !== callbackChatId) {
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ Эта кнопка не для этого чата.",
+          show_alert: true
+        });
+        return;
+      }
+
+      if (Number(query.from.id) !== Number(targetUserId)) {
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ Ответить может только тот, кому сделали предложение.",
+          show_alert: true
+        });
+        return;
+      }
+
+      const marriageAnswerKey = getMarriageKey(chatId, targetUserId);
+      const pendingMarriage = pendingMarriages[marriageAnswerKey];
+
+      if (!pendingMarriage) {
+        await bot.answerCallbackQuery(query.id, {
+          text: "⌛ Предложение уже недоступно.",
+          show_alert: true
+        });
+        return;
+      }
+
+      const isExpired = Date.now() - pendingMarriage.createdAt > MARRIAGE_REQUEST_MS;
+      if (isExpired) {
+        delete pendingMarriages[marriageAnswerKey];
+        await bot.answerCallbackQuery(query.id, {
+          text: "⌛ Предложение брака устарело.",
+          show_alert: true
+        });
+        return;
+      }
+
+      if (action === "marriage_no") {
+        delete pendingMarriages[marriageAnswerKey];
+
+        await bot.answerCallbackQuery(query.id, {
+          text: "Вы отказали в браке."
+        });
+
+        await safeSendMessage(
+          chatId,
+          `💔 ${getUserLink(pendingMarriage.targetUser)} отказал(а) ${getUserLink(pendingMarriage.fromUser)} в браке.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const senderMarried = await isUserMarried(pendingMarriage.fromUser.id);
+      const targetMarried = await isUserMarried(pendingMarriage.targetUser.id);
+
+      if (senderMarried || targetMarried) {
+        delete pendingMarriages[marriageAnswerKey];
+
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ Кто-то из вас уже состоит в браке.",
+          show_alert: true
+        });
+
+        await safeSendMessage(chatId, "❌ Кто-то из вас уже состоит в браке.");
+        return;
+      }
+
+      const marriage = await createMarriage(
+        pendingMarriage.fromUser.id,
+        pendingMarriage.targetUser.id
+      );
+
+      delete pendingMarriages[marriageAnswerKey];
+
+      await bot.answerCallbackQuery(query.id, {
+        text: "Брак зарегистрирован!"
+      });
+
+      await safeSendMessage(
+        chatId,
+        `💍 Брак зарегистрирован!
+
+${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetUser)}
+
+📅 Дата: ${formatDate(marriage.created_at)}
+🏡 Теперь вы семья!`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // ADOPTION BUTTONS
+    // =========================
+    if (data.startsWith("adoption_yes:") || data.startsWith("adoption_no:")) {
+      const parts = data.split(":");
+      const action = parts[0];
+      const callbackChatId = Number(parts[1]);
+      const targetUserId = Number(parts[2]);
+
+      if (Number(chatId) !== callbackChatId) {
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ Эта кнопка не для этого чата.",
+          show_alert: true
+        });
+        return;
+      }
+
+      if (Number(query.from.id) !== Number(targetUserId)) {
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ Ответить может только тот, кого хотят усыновить.",
+          show_alert: true
+        });
+        return;
+      }
+
+      const adoptionAnswerKey = getAdoptionKey(chatId, targetUserId);
+      const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
+
+      if (!pendingAdoption) {
+        await bot.answerCallbackQuery(query.id, {
+          text: "⌛ Предложение уже недоступно.",
+          show_alert: true
+        });
+        return;
+      }
+
+      const isExpired = Date.now() - pendingAdoption.createdAt > ADOPTION_REQUEST_MS;
+      if (isExpired) {
+        delete pendingAdoptions[adoptionAnswerKey];
+        await bot.answerCallbackQuery(query.id, {
+          text: "⌛ Предложение усыновления устарело.",
+          show_alert: true
+        });
+        return;
+      }
+
+      if (action === "adoption_no") {
+        delete pendingAdoptions[adoptionAnswerKey];
+
+        await bot.answerCallbackQuery(query.id, {
+          text: "Вы отказались от усыновления."
+        });
+
+        await safeSendMessage(
+          chatId,
+          `❌ ${getUserLink(pendingAdoption.childUser)} отказал(а) ${getUserLink(pendingAdoption.parentUser)} в усыновлении.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const childAlreadyHasParent = await getActiveAdoptionByChildId(pendingAdoption.childUser.id);
+      if (childAlreadyHasParent) {
+        delete pendingAdoptions[adoptionAnswerKey];
+
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ У этого игрока уже есть семья.",
+          show_alert: true
+        });
+
+        await safeSendMessage(chatId, "❌ У этого игрока уже есть семья.");
+        return;
+      }
+
+      const childrenCount = await getFamilyChildrenCount(pendingAdoption.parentUser.id);
+      if (childrenCount >= MAX_CHILDREN_PER_FAMILY) {
+        delete pendingAdoptions[adoptionAnswerKey];
+
+        await bot.answerCallbackQuery(query.id, {
+          text: `❌ В семье уже максимум ${MAX_CHILDREN_PER_FAMILY} ребёнка(детей).`,
+          show_alert: true
+        });
+
+        await safeSendMessage(
+          chatId,
+          `❌ В семье уже максимум ${MAX_CHILDREN_PER_FAMILY} ребёнка(детей).`
+        );
+        return;
+      }
+
+      const adoption = await createAdoption(
+        pendingAdoption.parentUser.id,
+        pendingAdoption.childUser.id
+      );
+
+      if (!adoption) {
+        delete pendingAdoptions[adoptionAnswerKey];
+
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ У этого игрока уже есть семья.",
+          show_alert: true
+        });
+
+        await safeSendMessage(chatId, "❌ У этого игрока уже есть семья.");
+        return;
+      }
+
+      delete pendingAdoptions[adoptionAnswerKey];
+
+      await bot.answerCallbackQuery(query.id, {
+        text: "Усыновление прошло успешно!"
+      });
+
+      await safeSendMessage(
+        chatId,
+        `👶 Усыновление прошло успешно!
+
+${getUserLink(pendingAdoption.parentUser)} теперь родитель для ${getUserLink(pendingAdoption.childUser)}
+📅 Дата: ${formatDate(adoption.created_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    await bot.answerCallbackQuery(query.id);
   } catch (error) {
     console.error("Ошибка callback_query:", error);
+    try {
+      await bot.answerCallbackQuery(query.id, {
+        text: "❌ Ошибка обработки кнопки.",
+        show_alert: true
+      });
+    } catch (_) {}
   }
 });
 
@@ -2014,16 +2299,20 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
         msg.chat.id,
         `💍 ${getUserLink(sender)} сделал(а) предложение ${getUserLink(target)}!
 
-${getUserLink(target)}, если согласен(на), напиши:
+${getUserLink(target)}, выбери ниже:
+✅ Да
+❌ Нет
+
+⌛ У вас есть 10 минут.
+
+Можно также ответить текстом:
 да
-
-Если не согласен(на), напиши:
-нет
-
-⌛ У вас есть 10 минут.`,
+или
+нет`,
         {
           parse_mode: "HTML",
-          disable_web_page_preview: true
+          disable_web_page_preview: true,
+          reply_markup: getMarriageDecisionKeyboard(msg.chat.id, target.id)
         }
       );
       return;
@@ -2106,16 +2395,20 @@ ${getUserLink(target)}, если согласен(на), напиши:
         msg.chat.id,
         `👶 ${getUserLink(parent)} хочет усыновить ${getUserLink(child)}!
 
-${getUserLink(child)}, если согласен(на), напиши:
+${getUserLink(child)}, выбери ниже:
+✅ Да
+❌ Нет
+
+⌛ У вас есть 10 минут.
+
+Можно также ответить текстом:
 да
-
-Если не согласен(на), напиши:
-нет
-
-⌛ У вас есть 10 минут.`,
+или
+нет`,
         {
           parse_mode: "HTML",
-          disable_web_page_preview: true
+          disable_web_page_preview: true,
+          reply_markup: getAdoptionDecisionKeyboard(msg.chat.id, child.id)
         }
       );
       return;
