@@ -22,6 +22,16 @@ const pendingCommandCreation = {};
 const activeBombs = {};
 const recentActiveUsers = {};
 const pendingMarriages = {};
+const pendingAdoptions = {};
+
+const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const BOMB_TIMER_MS = 5000;
+const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
+const MARRIAGE_REQUEST_MS = 10 * 60 * 1000;
+const ADOPTION_REQUEST_MS = 10 * 60 * 1000;
+const MAX_CUSTOM_COMMANDS = 5;
+const CUSTOM_COMMAND_COST = 20;
+const MAX_CHILDREN_PER_FAMILY = 3;
 
 // =========================
 // SERVER
@@ -100,6 +110,14 @@ function formatRemainingTime(ms) {
   }
 
   return `${seconds} сек`;
+}
+
+function formatDate(dateValue) {
+  const date = new Date(dateValue);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${day}.${month}.${year}`;
 }
 
 function getRandomGift() {
@@ -182,6 +200,7 @@ function getSniperResult() {
       coins: Math.floor(Math.random() * 11)
     };
   }
+
   return {
     text: "❌ Промах!",
     coins: 0
@@ -212,6 +231,14 @@ function getShopKeyboard() {
 
 function getPendingKey(chatId, userId) {
   return `${chatId}:${userId}`;
+}
+
+function getMarriageKey(chatId, targetUserId) {
+  return `${chatId}:${targetUserId}`;
+}
+
+function getAdoptionKey(chatId, targetUserId) {
+  return `${chatId}:${targetUserId}`;
 }
 
 function addChatMember(chatId, user) {
@@ -266,12 +293,11 @@ function getRecentActiveCandidates(chatId, excludeUserIds = []) {
   const key = getBombChatKey(chatId);
   const users = Object.values(recentActiveUsers[key] || {});
   const now = Date.now();
-  const activeWindowMs = 30 * 60 * 1000;
 
   return users.filter((user) => {
     if (!user || !user.id) return false;
     if (excludeUserIds.includes(user.id)) return false;
-    return (now - (user.last_seen_at || 0)) <= activeWindowMs;
+    return (now - (user.last_seen_at || 0)) <= ACTIVE_WINDOW_MS;
   });
 }
 
@@ -318,7 +344,7 @@ async function startBombTimer(chatId) {
     } catch (error) {
       console.error("Ошибка взрыва бомбы:", error);
     }
-  }, 5000);
+  }, BOMB_TIMER_MS);
 }
 
 async function passBomb(chatId, fromUser) {
@@ -327,11 +353,10 @@ async function passBomb(chatId, fromUser) {
   if (!bomb) return false;
 
   const excludeIds = [fromUser.id];
-  if (bomb.previousHolderId) {
-    excludeIds.push(bomb.previousHolderId);
-  }
+  if (bomb.previousHolderId) excludeIds.push(bomb.previousHolderId);
 
   let candidates = getRecentActiveCandidates(chatId, excludeIds);
+
   if (!candidates.length) {
     candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
   }
@@ -454,6 +479,16 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS adoptions (
+      id SERIAL PRIMARY KEY,
+      parent_user_id BIGINT NOT NULL,
+      child_user_id BIGINT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hugs INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kisses INTEGER DEFAULT 0`);
@@ -488,18 +523,9 @@ async function initUser(user) {
     VALUES ($1, $2, $3, $4)
     ON CONFLICT (user_id)
     DO UPDATE SET
-      first_name = CASE
-        WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name
-        ELSE users.first_name
-      END,
-      last_name = CASE
-        WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name
-        ELSE users.last_name
-      END,
-      username = CASE
-        WHEN EXCLUDED.username <> '' THEN EXCLUDED.username
-        ELSE users.username
-      END
+      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE users.first_name END,
+      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE users.last_name END,
+      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE users.username END
     `,
     [
       user.id,
@@ -519,18 +545,9 @@ async function saveSeenUser(chatId, user) {
     VALUES ($1, $2, $3, $4, $5)
     ON CONFLICT (chat_id, user_id)
     DO UPDATE SET
-      first_name = CASE
-        WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name
-        ELSE chat_seen_users.first_name
-      END,
-      last_name = CASE
-        WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name
-        ELSE chat_seen_users.last_name
-      END,
-      username = CASE
-        WHEN EXCLUDED.username <> '' THEN EXCLUDED.username
-        ELSE chat_seen_users.username
-      END
+      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE chat_seen_users.first_name END,
+      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE chat_seen_users.last_name END,
+      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE chat_seen_users.username END
     `,
     [
       chatId,
@@ -584,21 +601,8 @@ async function getProfileOwnerByMessageId(messageId) {
 
 async function incrementStat(targetUserId, statField) {
   const allowedFields = [
-    "kills",
-    "hugs",
-    "kisses",
-    "hits",
-    "bites",
-    "pats",
-    "kicks",
-    "slaps",
-    "punches",
-    "licks",
-    "steals",
-    "scams",
-    "destroys",
-    "wakes",
-    "freezes"
+    "kills", "hugs", "kisses", "hits", "bites", "pats", "kicks", "slaps",
+    "punches", "licks", "steals", "scams", "destroys", "wakes", "freezes"
   ];
 
   if (!allowedFields.includes(statField)) return;
@@ -719,10 +723,6 @@ async function getRandomPairMembersFromDb(chatId) {
 // =========================
 // MARRIAGE
 // =========================
-function getMarriageKey(chatId, targetUserId) {
-  return `${chatId}:${targetUserId}`;
-}
-
 async function getActiveMarriageByUserId(userId) {
   const result = await pool.query(
     `
@@ -789,13 +789,102 @@ async function getMarriagePartner(userId) {
   };
 }
 
-function formatMarriageDate(dateValue) {
-  const date = new Date(dateValue);
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
+// =========================
+// ADOPTIONS / CHILDREN
+// =========================
+async function getActiveAdoptionByChildId(childUserId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM adoptions
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [childUserId]
+  );
 
-  return `${day}.${month}.${year}`;
+  return result.rows[0] || null;
+}
+
+async function getChildrenByParentIds(parentIds) {
+  if (!parentIds.length) return [];
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM adoptions
+    WHERE is_active = TRUE
+      AND parent_user_id = ANY($1::bigint[])
+    ORDER BY created_at ASC
+    `,
+    [parentIds]
+  );
+
+  return result.rows;
+}
+
+async function getFamilyParentIds(userId) {
+  const marriagePartner = await getMarriagePartner(userId);
+
+  if (!marriagePartner) {
+    return [Number(userId)];
+  }
+
+  return [Number(userId), Number(marriagePartner.partnerId)];
+}
+
+async function getFamilyChildrenCount(userId) {
+  const parentIds = await getFamilyParentIds(userId);
+  const children = await getChildrenByParentIds(parentIds);
+  return children.length;
+}
+
+async function createAdoption(parentUserId, childUserId) {
+  const existing = await getActiveAdoptionByChildId(childUserId);
+  if (existing) return null;
+
+  const result = await pool.query(
+    `
+    INSERT INTO adoptions (parent_user_id, child_user_id, is_active)
+    VALUES ($1, $2, TRUE)
+    RETURNING *
+    `,
+    [parentUserId, childUserId]
+  );
+
+  return result.rows[0];
+}
+
+async function removeChildFromParent(parentUserId, childUserId) {
+  const result = await pool.query(
+    `
+    UPDATE adoptions
+    SET is_active = FALSE
+    WHERE parent_user_id = $1
+      AND child_user_id = $2
+      AND is_active = TRUE
+    RETURNING *
+    `,
+    [parentUserId, childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function childEscapeFamily(childUserId) {
+  const result = await pool.query(
+    `
+    UPDATE adoptions
+    SET is_active = FALSE
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+    RETURNING *
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
 }
 
 // =========================
@@ -888,10 +977,9 @@ async function claimDailyCoins(userId) {
   const row = result.rows[0];
   const now = new Date();
   const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
-  const cooldownMs = 24 * 60 * 60 * 1000;
 
   if (lastDailyAt) {
-    const nextTime = new Date(lastDailyAt.getTime() + cooldownMs);
+    const nextTime = new Date(lastDailyAt.getTime() + DAILY_COOLDOWN_MS);
 
     if (now < nextTime) {
       return {
@@ -932,10 +1020,9 @@ async function runHunt(userId) {
   const row = result.rows[0];
   const now = new Date();
   const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
-  const cooldownMs = 24 * 60 * 60 * 1000;
 
   if (lastHuntAt) {
-    const nextTime = new Date(lastHuntAt.getTime() + cooldownMs);
+    const nextTime = new Date(lastHuntAt.getTime() + DAILY_COOLDOWN_MS);
 
     if (now < nextTime) {
       return {
@@ -978,10 +1065,9 @@ async function runSniper(userId) {
   const row = result.rows[0];
   const now = new Date();
   const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
-  const cooldownMs = 24 * 60 * 60 * 1000;
 
   if (lastSniperAt) {
-    const nextTime = new Date(lastSniperAt.getTime() + cooldownMs);
+    const nextTime = new Date(lastSniperAt.getTime() + DAILY_COOLDOWN_MS);
 
     if (now < nextTime) {
       return {
@@ -1017,12 +1103,11 @@ async function getCooldownText(userId) {
   if (!stats) return "Профиль не найден.";
 
   const now = new Date();
-  const cooldownMs = 24 * 60 * 60 * 1000;
 
   function getRemaining(lastAt) {
     if (!lastAt) return "✅ Уже доступно";
 
-    const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+    const nextTime = new Date(new Date(lastAt).getTime() + DAILY_COOLDOWN_MS);
     const diff = nextTime.getTime() - now.getTime();
 
     if (diff <= 0) return "✅ Уже доступно";
@@ -1163,6 +1248,9 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 зарегистрироваться в брак
 развод
 семья
+усыновить
+отказаться от ребенка
+сбежать из семьи
 он врет?
 врет?
 /createcommand
@@ -1238,19 +1326,19 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
     await saveSeenUser(msg.chat.id, msg.from);
 
     const count = await getUserCustomCommandCount(msg.from.id);
-    if (count >= 5) {
+    if (count >= MAX_CUSTOM_COMMANDS) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ У тебя уже максимум команд: 5\nУдалить можно через /deletecommand"
+        `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`
       );
       return;
     }
 
     const stats = await getUserStats(msg.from.id);
-    if ((stats.balance || 0) < 20) {
+    if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Чтобы создать команду, нужно 20 монет."
+        `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`
       );
       return;
     }
@@ -1262,8 +1350,8 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
       msg.chat.id,
       `🛠 Создание команды
 
-Цена: 20 монет
-Максимум: 5 команд
+Цена: ${CUSTOM_COMMAND_COST} монет
+Максимум: ${MAX_CUSTOM_COMMANDS} команд
 
 Напиши в формате:
 команда действие
@@ -1447,7 +1535,7 @@ bot.on("message", async (msg) => {
     if (lowerText.startsWith("/")) return;
 
     // =========================
-    // СОЗДАНИЕ КАСТОМНОЙ КОМАНДЫ
+    // CUSTOM COMMAND CREATION
     // =========================
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
     if (pendingCommandCreation[pendingKey]) {
@@ -1501,26 +1589,26 @@ bot.on("message", async (msg) => {
       }
 
       const count = await getUserCustomCommandCount(msg.from.id);
-      if (count >= 5) {
+      if (count >= MAX_CUSTOM_COMMANDS) {
         await safeSendMessage(
           msg.chat.id,
-          "❌ У тебя уже максимум команд: 5\nУдалить можно через /deletecommand"
+          `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`
         );
         return;
       }
 
       const stats = await getUserStats(msg.from.id);
-      if ((stats.balance || 0) < 20) {
+      if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
         await safeSendMessage(
           msg.chat.id,
-          "❌ Чтобы создать команду, нужно 20 монет."
+          `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`
         );
         return;
       }
 
       await pool.query(
-        `UPDATE users SET balance = balance - 20 WHERE user_id = $1`,
-        [msg.from.id]
+        `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+        [msg.from.id, CUSTOM_COMMAND_COST]
       );
 
       await createCustomCommand(msg.from.id, parsed.trigger, parsed.actionText);
@@ -1533,27 +1621,24 @@ bot.on("message", async (msg) => {
 ${escapeHtml(parsed.trigger)} — команда
 ${escapeHtml(parsed.actionText)} — текст бота
 
-Списано: 20 монет`,
+Списано: ${CUSTOM_COMMAND_COST} монет`,
         { parse_mode: "HTML" }
       );
       return;
     }
 
     // =========================
-    // ОТВЕТ НА ПРЕДЛОЖЕНИЕ БРАКА
+    // MARRIAGE ANSWER
     // =========================
     const marriageAnswerKey = getMarriageKey(msg.chat.id, msg.from.id);
     const pendingMarriage = pendingMarriages[marriageAnswerKey];
 
     if (pendingMarriage && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
-      const isExpired = Date.now() - pendingMarriage.createdAt > 10 * 60 * 1000;
+      const isExpired = Date.now() - pendingMarriage.createdAt > MARRIAGE_REQUEST_MS;
 
       if (isExpired) {
         delete pendingMarriages[marriageAnswerKey];
-        await safeSendMessage(
-          msg.chat.id,
-          "⌛ Предложение брака устарело."
-        );
+        await safeSendMessage(msg.chat.id, "⌛ Предложение брака устарело.");
         return;
       }
 
@@ -1574,10 +1659,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const targetMarried = await isUserMarried(pendingMarriage.targetUser.id);
 
       if (senderMarried || targetMarried) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Кто-то из вас уже состоит в браке."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Кто-то из вас уже состоит в браке.");
         delete pendingMarriages[marriageAnswerKey];
         return;
       }
@@ -1593,7 +1675,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
 ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetUser)}
 
-📅 Дата: ${formatMarriageDate(marriage.created_at)}
+📅 Дата: ${formatDate(marriage.created_at)}
 🏡 Теперь вы семья!`,
         {
           parse_mode: "HTML",
@@ -1606,7 +1688,79 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
     }
 
     // =========================
-    // СТАРТ БОМБЫ
+    // ADOPTION ANSWER
+    // =========================
+    const adoptionAnswerKey = getAdoptionKey(msg.chat.id, msg.from.id);
+    const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
+
+    if (pendingAdoption && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
+      const isExpired = Date.now() - pendingAdoption.createdAt > ADOPTION_REQUEST_MS;
+
+      if (isExpired) {
+        delete pendingAdoptions[adoptionAnswerKey];
+        await safeSendMessage(msg.chat.id, "⌛ Предложение усыновления устарело.");
+        return;
+      }
+
+      if (isExactCommand(lowerText, "нет")) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ ${getUserLink(pendingAdoption.childUser)} отказал(а) ${getUserLink(pendingAdoption.parentUser)} в усыновлении.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        delete pendingAdoptions[adoptionAnswerKey];
+        return;
+      }
+
+      const childAlreadyHasParent = await getActiveAdoptionByChildId(pendingAdoption.childUser.id);
+      if (childAlreadyHasParent) {
+        await safeSendMessage(msg.chat.id, "❌ У этого игрока уже есть семья.");
+        delete pendingAdoptions[adoptionAnswerKey];
+        return;
+      }
+
+      const childrenCount = await getFamilyChildrenCount(pendingAdoption.parentUser.id);
+      if (childrenCount >= MAX_CHILDREN_PER_FAMILY) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ В семье уже максимум ${MAX_CHILDREN_PER_FAMILY} ребёнка(детей).`
+        );
+        delete pendingAdoptions[adoptionAnswerKey];
+        return;
+      }
+
+      const adoption = await createAdoption(
+        pendingAdoption.parentUser.id,
+        pendingAdoption.childUser.id
+      );
+
+      if (!adoption) {
+        await safeSendMessage(msg.chat.id, "❌ У этого игрока уже есть семья.");
+        delete pendingAdoptions[adoptionAnswerKey];
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `👶 Усыновление прошло успешно!
+
+${getUserLink(pendingAdoption.parentUser)} теперь родитель для ${getUserLink(pendingAdoption.childUser)}
+📅 Дата: ${formatDate(adoption.created_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+
+      delete pendingAdoptions[adoptionAnswerKey];
+      return;
+    }
+
+    // =========================
+    // BOMB START
     // =========================
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
@@ -1653,7 +1807,7 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
     }
 
     // =========================
-    // ПЕРЕДАТЬ БОМБУ
+    // BOMB PASS
     // =========================
     if (isExactCommand(lowerText, "передать")) {
       const bombKey = getBombChatKey(msg.chat.id);
@@ -1671,7 +1825,7 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
     }
 
     // =========================
-    // МАГАЗИН
+    // SHOP
     // =========================
     if (isExactCommand(lowerText, "магазин")) {
       await safeSendMessage(
@@ -1686,7 +1840,7 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
     }
 
     // =========================
-    // БРАК: ПРЕДЛОЖЕНИЕ
+    // MARRIAGE REQUEST
     // =========================
     if (
       isExactCommand(lowerText, "брак") ||
@@ -1696,10 +1850,7 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "Ответь на сообщение человека и напиши: брак"
-        );
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: брак");
         return;
       }
 
@@ -1707,28 +1858,19 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Нельзя зарегистрироваться в брак с самим собой."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Нельзя зарегистрироваться в брак с самим собой.");
         return;
       }
 
       const senderMarriage = await isUserMarried(sender.id);
       if (senderMarriage) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ты уже состоишь в браке."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ты уже состоишь в браке.");
         return;
       }
 
       const targetMarriage = await isUserMarried(target.id);
       if (targetMarriage) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Этот человек уже состоит в браке."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Этот человек уже состоит в браке.");
         return;
       }
 
@@ -1770,16 +1912,13 @@ ${getUserLink(target)}, если согласен(на), напиши:
     }
 
     // =========================
-    // РАЗВОД
+    // DIVORCE
     // =========================
     if (isExactCommand(lowerText, "развод")) {
       const marriagePartner = await getMarriagePartner(msg.from.id);
 
       if (!marriagePartner) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ты не состоишь в браке."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в браке.");
         return;
       }
 
@@ -1799,39 +1938,69 @@ ${getUserLink(target)}, если согласен(на), напиши:
     }
 
     // =========================
-    // СЕМЬЯ
+    // ADOPT CHILD
     // =========================
-    if (isExactCommand(lowerText, "семья")) {
-      let targetUser = msg.from;
+    if (isExactCommand(lowerText, "усыновить")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
 
-      if (msg.reply_to_message) {
-        const resolved = await resolveTargetUserFromReply(msg);
-        if (resolved) targetUser = resolved;
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: усыновить");
+        return;
       }
 
-      const marriagePartner = await getMarriagePartner(targetUser.id);
+      await initUser(child);
+      await saveSeenUser(msg.chat.id, child);
 
-      if (!marriagePartner) {
+      if (parent.id === child.id) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить самого себя.");
+        return;
+      }
+
+      const existingParent = await getActiveAdoptionByChildId(child.id);
+      if (existingParent) {
+        await safeSendMessage(msg.chat.id, "❌ У этого игрока уже есть семья.");
+        return;
+      }
+
+      const childrenCount = await getFamilyChildrenCount(parent.id);
+      if (childrenCount >= MAX_CHILDREN_PER_FAMILY) {
         await safeSendMessage(
           msg.chat.id,
-          `${getUserLink(targetUser)} пока не состоит в браке.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
+          `❌ В семье уже максимум ${MAX_CHILDREN_PER_FAMILY} ребёнка(детей).`
         );
         return;
       }
 
-      const partnerUser = await getStoredUser(marriagePartner.partnerId);
-      const marriage = marriagePartner.marriage;
+      const adoptionKey = getAdoptionKey(msg.chat.id, child.id);
+
+      pendingAdoptions[adoptionKey] = {
+        parentUser: {
+          id: parent.id,
+          first_name: parent.first_name || "",
+          last_name: parent.last_name || "",
+          username: parent.username || ""
+        },
+        childUser: {
+          id: child.id,
+          first_name: child.first_name || "",
+          last_name: child.last_name || "",
+          username: child.username || ""
+        },
+        createdAt: Date.now()
+      };
 
       await safeSendMessage(
         msg.chat.id,
-        `🏡 Семья
+        `👶 ${getUserLink(parent)} хочет усыновить ${getUserLink(child)}!
 
-💑 ${getUserLink(targetUser)} + ${getUserLink(partnerUser)}
-📅 Вместе с: ${formatMarriageDate(marriage.created_at)}`,
+${getUserLink(child)}, если согласен(на), напиши:
+да
+
+Если не согласен(на), напиши:
+нет
+
+⌛ У вас есть 10 минут.`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -1841,7 +2010,146 @@ ${getUserLink(target)}, если согласен(на), напиши:
     }
 
     // =========================
-    // ДЕТЕКТОР ЛЖИ
+    // REMOVE CHILD
+    // =========================
+    if (isExactCommand(lowerText, "отказаться от ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "Ответь на сообщение ребёнка и напиши: отказаться от ребенка"
+        );
+        return;
+      }
+
+      const removed = await removeChildFromParent(parent.id, child.id);
+
+      if (!removed) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Этот игрок не является твоим ребёнком."
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💔 ${getUserLink(parent)} отказался(ась) от ребёнка ${getUserLink(child)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // CHILD ESCAPE
+    // =========================
+    if (isExactCommand(lowerText, "сбежать из семьи")) {
+      const child = msg.from;
+      const activeAdoption = await getActiveAdoptionByChildId(child.id);
+
+      if (!activeAdoption) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье как ребёнок.");
+        return;
+      }
+
+      const parentUser = await getStoredUser(Number(activeAdoption.parent_user_id));
+      await childEscapeFamily(child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏃 ${getUserLink(child)} сбежал(а) из семьи ${getUserLink(parentUser)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // FAMILY
+    // =========================
+    if (isExactCommand(lowerText, "семья")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const partnerInfo = await getMarriagePartner(targetUser.id);
+      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
+
+      if (childInfo) {
+        const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
+        const parentPartnerInfo = await getMarriagePartner(parentUser.id);
+        const secondParent = parentPartnerInfo
+          ? await getStoredUser(Number(parentPartnerInfo.partnerId))
+          : null;
+
+        let textFamily = `🏡 Семья\n\n👶 Ребёнок: ${getUserLink(targetUser)}\n👨 Родитель: ${getUserLink(parentUser)}`;
+
+        if (secondParent) {
+          textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
+        }
+
+        textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
+
+        await safeSendMessage(msg.chat.id, textFamily, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      const parentIds = await getFamilyParentIds(targetUser.id);
+      const children = await getChildrenByParentIds(parentIds);
+
+      if (!partnerInfo && !children.length) {
+        await safeSendMessage(
+          msg.chat.id,
+          `${getUserLink(targetUser)} пока не состоит в семье.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      let familyText = `🏡 Семья\n\n👤 Игрок: ${getUserLink(targetUser)}`;
+
+      if (partnerInfo) {
+        const partnerUser = await getStoredUser(partnerInfo.partnerId);
+        familyText += `\n💍 Супруг(а): ${getUserLink(partnerUser)}`;
+        familyText += `\n📅 Брак с: ${formatDate(partnerInfo.marriage.created_at)}`;
+      }
+
+      if (children.length) {
+        const childLines = [];
+        for (const childRow of children) {
+          const childUser = await getStoredUser(Number(childRow.child_user_id));
+          childLines.push(`• ${getUserLink(childUser)}`);
+        }
+        familyText += `\n\n👶 Дети:\n${childLines.join("\n")}`;
+      } else {
+        familyText += `\n\n👶 Дети: нет`;
+      }
+
+      await safeSendMessage(msg.chat.id, familyText, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    // =========================
+    // LIE DETECTOR
     // =========================
     if (
       isExactCommand(lowerText, "он врет?") ||
@@ -1873,7 +2181,7 @@ ${getUserLink(target)}, если согласен(на), напиши:
     }
 
     // =========================
-    // РЕСПЕКТ
+    // RESPECT
     // =========================
     if (isExactCommand(lowerText, "респект")) {
       const sender = msg.from;
@@ -1914,7 +2222,7 @@ ${getUserLink(target)}, если согласен(на), напиши:
     }
 
     // =========================
-    // ПАРА
+    // PAIR
     // =========================
     if (isExactCommand(lowerText, "пара")) {
       const pair = await getRandomPairMembersFromDb(msg.chat.id);
@@ -1942,7 +2250,7 @@ ${getUserLink(target)}, если согласен(на), напиши:
     }
 
     // =========================
-    // ДЕНЬГИ
+    // DAILY MONEY
     // =========================
     if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
       const result = await claimDailyCoins(msg.from.id);
@@ -1976,7 +2284,7 @@ ${getUserLink(target)}, если согласен(на), напиши:
     }
 
     // =========================
-    // ОХОТА
+    // HUNT
     // =========================
     if (isExactCommand(lowerText, "охота")) {
       const result = await runHunt(msg.from.id);
@@ -2019,7 +2327,7 @@ ${coinsLine}
     }
 
     // =========================
-    // СНАЙПЕР
+    // SNIPER
     // =========================
     if (isExactCommand(lowerText, "снайпер")) {
       const result = await runSniper(msg.from.id);
@@ -2061,7 +2369,7 @@ ${coinsLine}
     }
 
     // =========================
-    // ПРОГНОЗ
+    // PREDICTION
     // =========================
     if (isExactCommand(lowerText, "прогноз")) {
       const prediction = getRandomPrediction();
@@ -2078,7 +2386,7 @@ ${coinsLine}
     }
 
     // =========================
-    // ОЦЕНКА
+    // RATING
     // =========================
     if (lowerText.startsWith("оценка")) {
       let target = null;
@@ -2108,7 +2416,7 @@ ${coinsLine}
     }
 
     // =========================
-    // КТО
+    // WHO
     // =========================
     if (lowerText.startsWith("кто ")) {
       const subject = text.slice(4).trim();
@@ -2137,7 +2445,7 @@ ${coinsLine}
     }
 
     // =========================
-    // ПОДАРОК
+    // GIFT
     // =========================
     if (isExactCommand(lowerText, "подарок")) {
       const sender = msg.from;
@@ -2180,7 +2488,7 @@ ${coinsLine}
     }
 
     // =========================
-    // КАСТОМНЫЕ КОМАНДЫ
+    // CUSTOM COMMANDS
     // =========================
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
@@ -2222,7 +2530,7 @@ ${coinsLine}
     }
 
     // =========================
-    // СТАНДАРТНЫЕ РП КОМАНДЫ
+    // STANDARD RP COMMANDS
     // =========================
     const command = rpCommands[lowerText];
     if (!command) return;
