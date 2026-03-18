@@ -334,9 +334,7 @@ async function startBombTimer(chatId) {
   const bomb = activeBombs[key];
   if (!bomb) return;
 
-  if (bomb.timer) {
-    clearTimeout(bomb.timer);
-  }
+  if (bomb.timer) clearTimeout(bomb.timer);
 
   bomb.timer = setTimeout(async () => {
     try {
@@ -618,6 +616,66 @@ async function incrementStat(targetUserId, statField) {
   );
 }
 
+async function transferCoins(fromUserId, toUserId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const fromResult = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [fromUserId]
+    );
+
+    const toResult = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [toUserId]
+    );
+
+    if (!fromResult.rows[0] || !toResult.rows[0]) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    const fromBalance = Number(fromResult.rows[0].balance || 0);
+
+    if (fromBalance < amount) {
+      throw new Error("NOT_ENOUGH_MONEY");
+    }
+
+    const updatedFrom = await client.query(
+      `
+      UPDATE users
+      SET balance = balance - $2
+      WHERE user_id = $1
+      RETURNING balance
+      `,
+      [fromUserId, amount]
+    );
+
+    const updatedTo = await client.query(
+      `
+      UPDATE users
+      SET balance = balance + $2
+      WHERE user_id = $1
+      RETURNING balance
+      `,
+      [toUserId, amount]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      fromBalance: Number(updatedFrom.rows[0].balance || 0),
+      toBalance: Number(updatedTo.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function processStarPurchase(userId, successfulPayment) {
   const client = await pool.connect();
 
@@ -885,6 +943,22 @@ async function childEscapeFamily(childUserId) {
   );
 
   return result.rows[0] || null;
+}
+
+async function isMyChild(parentUserId, childUserId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM adoptions
+    WHERE parent_user_id = $1
+      AND child_user_id = $2
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [parentUserId, childUserId]
+  );
+
+  return !!result.rows[0];
 }
 
 // =========================
@@ -1251,6 +1325,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 усыновить
 отказаться от ребенка
 сбежать из семьи
+карманные деньги 50
 он врет?
 врет?
 /createcommand
@@ -1534,9 +1609,7 @@ bot.on("message", async (msg) => {
 
     if (lowerText.startsWith("/")) return;
 
-    // =========================
     // CUSTOM COMMAND CREATION
-    // =========================
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
@@ -1627,9 +1700,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // =========================
     // MARRIAGE ANSWER
-    // =========================
     const marriageAnswerKey = getMarriageKey(msg.chat.id, msg.from.id);
     const pendingMarriage = pendingMarriages[marriageAnswerKey];
 
@@ -1687,9 +1758,7 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       return;
     }
 
-    // =========================
     // ADOPTION ANSWER
-    // =========================
     const adoptionAnswerKey = getAdoptionKey(msg.chat.id, msg.from.id);
     const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
 
@@ -1759,9 +1828,7 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // =========================
     // BOMB START
-    // =========================
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
@@ -1806,9 +1873,7 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // =========================
     // BOMB PASS
-    // =========================
     if (isExactCommand(lowerText, "передать")) {
       const bombKey = getBombChatKey(msg.chat.id);
       const bomb = activeBombs[bombKey];
@@ -1824,9 +1889,7 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // =========================
     // SHOP
-    // =========================
     if (isExactCommand(lowerText, "магазин")) {
       await safeSendMessage(
         msg.chat.id,
@@ -1839,9 +1902,7 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    // =========================
     // MARRIAGE REQUEST
-    // =========================
     if (
       isExactCommand(lowerText, "брак") ||
       isExactCommand(lowerText, "зарегистрироваться в брак")
@@ -1911,9 +1972,7 @@ ${getUserLink(target)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // DIVORCE
-    // =========================
     if (isExactCommand(lowerText, "развод")) {
       const marriagePartner = await getMarriagePartner(msg.from.id);
 
@@ -1937,9 +1996,7 @@ ${getUserLink(target)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // ADOPT CHILD
-    // =========================
     if (isExactCommand(lowerText, "усыновить")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
@@ -2009,9 +2066,7 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // REMOVE CHILD
-    // =========================
     if (isExactCommand(lowerText, "отказаться от ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
@@ -2045,9 +2100,7 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // CHILD ESCAPE
-    // =========================
     if (isExactCommand(lowerText, "сбежать из семьи")) {
       const child = msg.from;
       const activeAdoption = await getActiveAdoptionByChildId(child.id);
@@ -2071,9 +2124,7 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // FAMILY
-    // =========================
     if (isExactCommand(lowerText, "семья")) {
       let targetUser = msg.from;
 
@@ -2148,9 +2199,77 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
+    // POCKET MONEY
+    if (lowerText.startsWith("карманные деньги")) {
+      const sender = msg.from;
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение своего ребёнка и напиши: карманные деньги 50"
+        );
+        return;
+      }
+
+      const match = lowerText.match(/^карманные деньги\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму больше 0.\nПример: карманные деньги 50"
+        );
+        return;
+      }
+
+      const adoption = await getActiveAdoptionByChildId(target.id);
+
+      if (!adoption) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Этот игрок не является твоим ребёнком."
+        );
+        return;
+      }
+
+      const isChild = await isMyChild(sender.id, target.id);
+      if (!isChild) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ты можешь давать карманные деньги только своему ребёнку."
+        );
+        return;
+      }
+
+      try {
+        const transferResult = await transferCoins(sender.id, target.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `💸 ${getUserLink(sender)} дал(а) ${getUserLink(target)} ${amount} монет
+
+Баланс ${escapeHtml(getUserName(sender))}: ${transferResult.fromBalance}
+Баланс ${escapeHtml(getUserName(target))}: ${transferResult.toBalance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка карманных денег:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка перевода монет.");
+      }
+
+      return;
+    }
+
     // LIE DETECTOR
-    // =========================
     if (
       isExactCommand(lowerText, "он врет?") ||
       isExactCommand(lowerText, "врет?") ||
@@ -2180,9 +2299,7 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // RESPECT
-    // =========================
     if (isExactCommand(lowerText, "респект")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
@@ -2221,9 +2338,7 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // PAIR
-    // =========================
     if (isExactCommand(lowerText, "пара")) {
       const pair = await getRandomPairMembersFromDb(msg.chat.id);
 
@@ -2249,9 +2364,7 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // DAILY MONEY
-    // =========================
     if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
       const result = await claimDailyCoins(msg.from.id);
 
@@ -2283,9 +2396,7 @@ ${getUserLink(child)}, если согласен(на), напиши:
       return;
     }
 
-    // =========================
     // HUNT
-    // =========================
     if (isExactCommand(lowerText, "охота")) {
       const result = await runHunt(msg.from.id);
 
@@ -2326,9 +2437,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
     // SNIPER
-    // =========================
     if (isExactCommand(lowerText, "снайпер")) {
       const result = await runSniper(msg.from.id);
 
@@ -2368,9 +2477,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
     // PREDICTION
-    // =========================
     if (isExactCommand(lowerText, "прогноз")) {
       const prediction = getRandomPrediction();
 
@@ -2385,9 +2492,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
     // RATING
-    // =========================
     if (lowerText.startsWith("оценка")) {
       let target = null;
 
@@ -2415,9 +2520,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
     // WHO
-    // =========================
     if (lowerText.startsWith("кто ")) {
       const subject = text.slice(4).trim();
 
@@ -2444,9 +2547,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
     // GIFT
-    // =========================
     if (isExactCommand(lowerText, "подарок")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
@@ -2487,9 +2588,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
     // CUSTOM COMMANDS
-    // =========================
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
@@ -2529,9 +2628,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
     // STANDARD RP COMMANDS
-    // =========================
     const command = rpCommands[lowerText];
     if (!command) return;
 
