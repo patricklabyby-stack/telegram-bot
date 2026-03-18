@@ -24,6 +24,8 @@ const pool = new Pool({
 
 const chatMembers = {};
 const pendingCommandCreation = {};
+const activeBombs = {};
+const recentActiveUsers = {};
 
 // =========================
 // SERVER
@@ -150,7 +152,6 @@ function getUserName(user) {
   const firstName = (user.first_name || "").trim();
   const lastName = (user.last_name || "").trim();
   const username = (user.username || "").trim();
-
   const fullName = `${firstName} ${lastName}`.trim();
 
   if (fullName && fullName !== ".") return fullName;
@@ -262,9 +263,7 @@ async function saveSeenUser(chatId, user) {
 function getRandomChatMember(chatId) {
   const key = String(chatId);
   const members = Object.values(chatMembers[key] || {});
-
   if (!members.length) return null;
-
   return members[Math.floor(Math.random() * members.length)];
 }
 
@@ -370,16 +369,139 @@ function getPendingKey(chatId, userId) {
 function getLieResult() {
   const percent = Math.floor(Math.random() * 101);
 
-  if (percent >= 85) {
-    return { percent, text: "💀 100% врёт" };
-  }
-  if (percent >= 65) {
-    return { percent, text: "🤥 Похоже, он врёт" };
-  }
-  if (percent >= 45) {
-    return { percent, text: "😐 Не могу понять" };
-  }
+  if (percent >= 85) return { percent, text: "💀 100% врёт" };
+  if (percent >= 65) return { percent, text: "🤥 Похоже, он врёт" };
+  if (percent >= 45) return { percent, text: "😐 Не могу понять" };
   return { percent, text: "✅ Скорее говорит правду" };
+}
+
+// =========================
+// БОМБА
+// =========================
+function getBombChatKey(chatId) {
+  return String(chatId);
+}
+
+function addRecentActiveUser(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = getBombChatKey(chatId);
+
+  if (!recentActiveUsers[key]) {
+    recentActiveUsers[key] = {};
+  }
+
+  recentActiveUsers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || "",
+    last_seen_at: Date.now()
+  };
+}
+
+function getRecentActiveCandidates(chatId, excludeUserIds = []) {
+  const key = getBombChatKey(chatId);
+  const users = Object.values(recentActiveUsers[key] || {});
+  const now = Date.now();
+  const activeWindowMs = 30 * 60 * 1000;
+
+  return users.filter((user) => {
+    if (!user || !user.id) return false;
+    if (excludeUserIds.includes(user.id)) return false;
+    return (now - (user.last_seen_at || 0)) <= activeWindowMs;
+  });
+}
+
+function getRandomFromArray(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function clearBomb(chatId) {
+  const key = getBombChatKey(chatId);
+
+  if (activeBombs[key]?.timer) {
+    clearTimeout(activeBombs[key].timer);
+  }
+
+  delete activeBombs[key];
+}
+
+async function explodeBomb(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
+
+  const holder = bomb.holder;
+  clearBomb(chatId);
+
+  await bot.sendMessage(
+    chatId,
+    `💥 Бомба взорвалась!\n${getUserLink(holder)} не успел передать бомбу.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+}
+
+async function startBombTimer(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
+
+  if (bomb.timer) {
+    clearTimeout(bomb.timer);
+  }
+
+  bomb.timer = setTimeout(async () => {
+    try {
+      await explodeBomb(chatId);
+    } catch (error) {
+      console.error("Ошибка взрыва бомбы:", error);
+    }
+  }, 5000);
+}
+
+async function passBomb(chatId, fromUser) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return false;
+
+  const candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
+  if (!candidates.length) {
+    clearBomb(chatId);
+
+    await bot.sendMessage(
+      chatId,
+      `💣 ${getUserLink(fromUser)} попытался передать бомбу, но никого не оказалось рядом.\n\nБомба исчезла.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return true;
+  }
+
+  const nextHolder = getRandomFromArray(candidates);
+
+  activeBombs[key] = {
+    holder: nextHolder,
+    timer: null
+  };
+
+  await bot.sendMessage(
+    chatId,
+    `💣 ${getUserLink(fromUser)} передал бомбу!\n\n🔥 Теперь бомба у: ${getUserLink(nextHolder)}\n⏳ У него 5 секунд, чтобы написать: передать`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  await startBombTimer(chatId);
+  return true;
 }
 
 // =========================
@@ -931,6 +1053,8 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 снайпер
 пара
 магазин
+бомба
+передать
 он врет?
 врет?
 /createcommand
@@ -1093,10 +1217,7 @@ bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) 
     const trigger = (match?.[2] || "").trim().toLowerCase();
 
     if (!trigger) {
-      await bot.sendMessage(
-        msg.chat.id,
-        "❌ Напиши так:\n/deletecommand облил"
-      );
+      await bot.sendMessage(msg.chat.id, "❌ Напиши так:\n/deletecommand облил");
       return;
     }
 
@@ -1129,6 +1250,7 @@ bot.on("message", async (msg) => {
   try {
     if (msg.from && !msg.from.is_bot) {
       addChatMember(msg.chat.id, msg.from);
+      addRecentActiveUser(msg.chat.id, msg.from);
       await initUser(msg.from);
       await saveSeenUser(msg.chat.id, msg.from);
     }
@@ -1137,6 +1259,7 @@ bot.on("message", async (msg) => {
       for (const member of msg.new_chat_members) {
         if (!member.is_bot) {
           addChatMember(msg.chat.id, member);
+          addRecentActiveUser(msg.chat.id, member);
           await initUser(member);
           await saveSeenUser(msg.chat.id, member);
         }
@@ -1227,6 +1350,7 @@ bot.on("message", async (msg) => {
     if (!msg.text || !msg.from || msg.from.is_bot) return;
 
     addChatMember(msg.chat.id, msg.from);
+    addRecentActiveUser(msg.chat.id, msg.from);
     await initUser(msg.from);
     await saveSeenUser(msg.chat.id, msg.from);
 
@@ -1340,6 +1464,70 @@ ${escapeHtml(parsed.trigger)}
     }
 
     // =========================
+    // БОМБА
+    // =========================
+    if (lowerText === "бомба") {
+      const bombKey = getBombChatKey(msg.chat.id);
+
+      if (activeBombs[bombKey]) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "💣 Бомба уже запущена. Дождись, пока она взорвётся."
+        );
+        return;
+      }
+
+      const candidates = getRecentActiveCandidates(msg.chat.id);
+      if (candidates.length < 2) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ Нужно хотя бы 2 активных человека в чате."
+        );
+        return;
+      }
+
+      const holder = getRandomFromArray(candidates);
+
+      activeBombs[bombKey] = {
+        holder,
+        timer: null
+      };
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `💣 Бомба активирована!
+
+🔥 Бомба у: ${getUserLink(holder)}
+⏳ У него 5 секунд, чтобы написать: передать`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+
+      await startBombTimer(msg.chat.id);
+      return;
+    }
+
+    if (lowerText === "передать") {
+      const bombKey = getBombChatKey(msg.chat.id);
+      const bomb = activeBombs[bombKey];
+
+      if (!bomb) return;
+
+      if (!bomb.holder || bomb.holder.id !== msg.from.id) {
+        await bot.sendMessage(
+          msg.chat.id,
+          "❌ Сейчас бомба не у тебя."
+        );
+        return;
+      }
+
+      await passBomb(msg.chat.id, msg.from);
+      return;
+    }
+
+    // =========================
     // МАГАЗИН
     // =========================
     if (lowerText === "магазин") {
@@ -1359,7 +1547,12 @@ ${escapeHtml(parsed.trigger)}
     // =========================
     // ДЕТЕКТОР ЛЖИ
     // =========================
-    if (lowerText === "он врет?" || lowerText === "врет?" || lowerText === "он врёт?" || lowerText === "врёт?") {
+    if (
+      lowerText === "он врет?" ||
+      lowerText === "врет?" ||
+      lowerText === "он врёт?" ||
+      lowerText === "врёт?"
+    ) {
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
@@ -1750,6 +1943,9 @@ ${coinsLine}
       return;
     }
 
+    // =========================
+    // СТАНДАРТНЫЕ РП КОМАНДЫ
+    // =========================
     const command = rpCommands[lowerText];
     if (!command) return;
 
