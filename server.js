@@ -7,13 +7,8 @@ const PORT = process.env.PORT || 3000;
 const token = process.env.BOT_TOKEN;
 const databaseUrl = process.env.DATABASE_URL;
 
-if (!token) {
-  throw new Error("BOT_TOKEN не найден");
-}
-
-if (!databaseUrl) {
-  throw new Error("DATABASE_URL не найден");
-}
+if (!token) throw new Error("BOT_TOKEN не найден");
+if (!databaseUrl) throw new Error("DATABASE_URL не найден");
 
 const bot = new TelegramBot(token, { polling: true });
 
@@ -39,7 +34,344 @@ app.listen(PORT, () => {
 });
 
 // =========================
-// БАЗА
+// UTILS
+// =========================
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function normalizeText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isExactCommand(text, command) {
+  return normalizeText(text) === normalizeText(command);
+}
+
+function getUserName(user) {
+  if (!user) return "Пользователь";
+
+  const firstName = (user.first_name || "").trim();
+  const lastName = (user.last_name || "").trim();
+  const username = (user.username || "").trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+
+  if (fullName && fullName !== ".") return fullName;
+  if (username) return username;
+  if (firstName) return firstName;
+  return user.id ? `ID ${user.id}` : "Пользователь";
+}
+
+function getUserLink(user) {
+  if (!user || !user.id) return escapeHtml(getUserName(user));
+  return `<a href="tg://user?id=${user.id}">${escapeHtml(getUserName(user))}</a>`;
+}
+
+async function safeSendMessage(chatId, text, options = {}) {
+  try {
+    return await bot.sendMessage(chatId, text, options);
+  } catch (error) {
+    console.error("Ошибка sendMessage:", error?.message || error);
+    return null;
+  }
+}
+
+function formatRemainingTime(ms) {
+  const totalSeconds = Math.max(1, Math.ceil((Number(ms) || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    if (minutes > 0) return `${hours} ч ${minutes} мин`;
+    return `${hours} ч`;
+  }
+
+  if (minutes > 0) {
+    if (seconds > 0) return `${minutes} мин ${seconds} сек`;
+    return `${minutes} мин`;
+  }
+
+  return `${seconds} сек`;
+}
+
+function getRandomGift() {
+  const gifts = [
+    "шоколад 🍫",
+    "цветы 🌹",
+    "плюшевого мишку 🧸",
+    "пиццу 🍕",
+    "айфон 📱",
+    "конфеты 🍬",
+    "торт 🎂",
+    "звезду ⭐",
+    "машину 🏎️",
+    "деньги 💸",
+    "кольцо 💍",
+    "мороженое 🍦",
+    "сок 🧃",
+    "бургер 🍔",
+    "печенье 🍪"
+  ];
+  return gifts[Math.floor(Math.random() * gifts.length)];
+}
+
+function getRandomRating() {
+  return Math.floor(Math.random() * 10) + 1;
+}
+
+function getRandomPrediction() {
+  const predictions = [
+    "Сегодня тебе повезёт 😎",
+    "Будь осторожен сегодня 😬",
+    "Тебя ждёт сюрприз 🎁",
+    "Сегодня твой день 🔥",
+    "Лучше отдохни 😴",
+    "Сегодня удача на твоей стороне 🍀",
+    "Возможны проблемы 💀",
+    "Жди хороших новостей 📩",
+    "Сегодня будет весело 😂",
+    "Не рискуй сегодня ⚠️"
+  ];
+  return predictions[Math.floor(Math.random() * predictions.length)];
+}
+
+function getRandomCoins() {
+  return Math.floor(Math.random() * 101);
+}
+
+function getRandomHuntCoins() {
+  return Math.floor(Math.random() * 11);
+}
+
+function getHuntResult() {
+  const normalAnimals = [
+    { animal: "🐰 Поймал зайца!" },
+    { animal: "🦊 Поймал лису!" },
+    { animal: "🐗 Поймал кабана!" },
+    { animal: "🦌 Поймал оленя!" }
+  ];
+
+  const isBear = Math.random() < 0.25;
+  if (isBear) {
+    return {
+      text: "🐻 Ты нашёл медведя... Он тебя съел!",
+      coins: -getRandomHuntCoins()
+    };
+  }
+
+  const chosen = normalAnimals[Math.floor(Math.random() * normalAnimals.length)];
+  return {
+    text: chosen.animal,
+    coins: getRandomHuntCoins()
+  };
+}
+
+function getSniperResult() {
+  const hit = Math.random() < 0.5;
+  if (hit) {
+    return {
+      text: "💥 Попадание!",
+      coins: Math.floor(Math.random() * 11)
+    };
+  }
+  return {
+    text: "❌ Промах!",
+    coins: 0
+  };
+}
+
+function getLieResult() {
+  const percent = Math.floor(Math.random() * 101);
+
+  if (percent >= 85) return { percent, text: "💀 100% врёт" };
+  if (percent >= 65) return { percent, text: "🤥 Похоже, он врёт" };
+  if (percent >= 45) return { percent, text: "😐 Не могу понять" };
+  return { percent, text: "✅ Скорее говорит правду" };
+}
+
+function getShopKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "💰 50 монет — 5 ⭐",
+          callback_data: "buy_50_coins"
+        }
+      ]
+    ]
+  };
+}
+
+function getPendingKey(chatId, userId) {
+  return `${chatId}:${userId}`;
+}
+
+function addChatMember(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = String(chatId);
+  if (!chatMembers[key]) chatMembers[key] = {};
+
+  chatMembers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || ""
+  };
+}
+
+function getRandomChatMember(chatId) {
+  const key = String(chatId);
+  const members = Object.values(chatMembers[key] || {});
+  if (!members.length) return null;
+  return members[Math.floor(Math.random() * members.length)];
+}
+
+function getRandomFromArray(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// =========================
+// BOMB
+// =========================
+function getBombChatKey(chatId) {
+  return String(chatId);
+}
+
+function addRecentActiveUser(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = getBombChatKey(chatId);
+  if (!recentActiveUsers[key]) recentActiveUsers[key] = {};
+
+  recentActiveUsers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || "",
+    last_seen_at: Date.now()
+  };
+}
+
+function getRecentActiveCandidates(chatId, excludeUserIds = []) {
+  const key = getBombChatKey(chatId);
+  const users = Object.values(recentActiveUsers[key] || {});
+  const now = Date.now();
+  const activeWindowMs = 30 * 60 * 1000;
+
+  return users.filter((user) => {
+    if (!user || !user.id) return false;
+    if (excludeUserIds.includes(user.id)) return false;
+    return (now - (user.last_seen_at || 0)) <= activeWindowMs;
+  });
+}
+
+function clearBomb(chatId) {
+  const key = getBombChatKey(chatId);
+
+  if (activeBombs[key]?.timer) {
+    clearTimeout(activeBombs[key].timer);
+  }
+
+  delete activeBombs[key];
+}
+
+async function explodeBomb(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
+
+  const holder = bomb.holder;
+  clearBomb(chatId);
+
+  await safeSendMessage(
+    chatId,
+    `💥 Бомба взорвалась!\n${getUserLink(holder)} не успел передать бомбу.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+}
+
+async function startBombTimer(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
+
+  if (bomb.timer) {
+    clearTimeout(bomb.timer);
+  }
+
+  bomb.timer = setTimeout(async () => {
+    try {
+      await explodeBomb(chatId);
+    } catch (error) {
+      console.error("Ошибка взрыва бомбы:", error);
+    }
+  }, 5000);
+}
+
+async function passBomb(chatId, fromUser) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return false;
+
+  const excludeIds = [fromUser.id];
+  if (bomb.previousHolderId) {
+    excludeIds.push(bomb.previousHolderId);
+  }
+
+  let candidates = getRecentActiveCandidates(chatId, excludeIds);
+  if (!candidates.length) {
+    candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
+  }
+
+  if (!candidates.length) {
+    clearBomb(chatId);
+
+    await safeSendMessage(
+      chatId,
+      `💣 ${getUserLink(fromUser)} попытался передать бомбу, но рядом никого не оказалось.\n\nБомба исчезла.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return true;
+  }
+
+  const nextHolder = getRandomFromArray(candidates);
+
+  activeBombs[key] = {
+    holder: nextHolder,
+    previousHolderId: fromUser.id,
+    timer: null
+  };
+
+  await safeSendMessage(
+    chatId,
+    `💣 ${getUserLink(fromUser)} передал бомбу!\n\n🔥 Теперь бомба у: ${getUserLink(nextHolder)}\n⏳ У него 5 секунд, чтобы написать: передать`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  await startBombTimer(chatId);
+  return true;
+}
+
+// =========================
+// DATABASE
 // =========================
 async function initDb() {
   await pool.query(`
@@ -136,96 +468,35 @@ async function initDb() {
   console.log("✅ Database ready");
 }
 
-// =========================
-// УТИЛИТЫ
-// =========================
-function escapeHtml(text) {
-  return String(text || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
+async function initUser(user) {
+  if (!user || !user.id) return;
 
-function getUserName(user) {
-  if (!user) return "Пользователь";
-
-  const firstName = (user.first_name || "").trim();
-  const lastName = (user.last_name || "").trim();
-  const username = (user.username || "").trim();
-  const fullName = `${firstName} ${lastName}`.trim();
-
-  if (fullName && fullName !== ".") return fullName;
-  if (username) return username;
-  if (firstName) return firstName;
-  return user.id ? `ID ${user.id}` : "Пользователь";
-}
-
-function getUserLink(user) {
-  if (!user || !user.id) {
-    return escapeHtml(getUserName(user));
-  }
-
-  return `<a href="tg://user?id=${user.id}">${escapeHtml(getUserName(user))}</a>`;
-}
-
-function getRandomGift() {
-  const gifts = [
-    "шоколад 🍫",
-    "цветы 🌹",
-    "плюшевого мишку 🧸",
-    "пиццу 🍕",
-    "айфон 📱",
-    "конфеты 🍬",
-    "торт 🎂",
-    "звезду ⭐",
-    "машину 🏎️",
-    "деньги 💸",
-    "кольцо 💍",
-    "мороженое 🍦",
-    "сок 🧃",
-    "бургер 🍔",
-    "печенье 🍪"
-  ];
-
-  return gifts[Math.floor(Math.random() * gifts.length)];
-}
-
-function getRandomRating() {
-  return Math.floor(Math.random() * 10) + 1;
-}
-
-function getRandomPrediction() {
-  const predictions = [
-    "Сегодня тебе повезёт 😎",
-    "Будь осторожен сегодня 😬",
-    "Тебя ждёт сюрприз 🎁",
-    "Сегодня твой день 🔥",
-    "Лучше отдохни 😴",
-    "Сегодня удача на твоей стороне 🍀",
-    "Возможны проблемы 💀",
-    "Жди хороших новостей 📩",
-    "Сегодня будет весело 😂",
-    "Не рискуй сегодня ⚠️"
-  ];
-
-  return predictions[Math.floor(Math.random() * predictions.length)];
-}
-
-function addChatMember(chatId, user) {
-  if (!chatId || !user || !user.id || user.is_bot) return;
-
-  const key = String(chatId);
-
-  if (!chatMembers[key]) {
-    chatMembers[key] = {};
-  }
-
-  chatMembers[key][String(user.id)] = {
-    id: user.id,
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    username: user.username || ""
-  };
+  await pool.query(
+    `
+    INSERT INTO users (user_id, first_name, last_name, username)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      first_name = CASE
+        WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name
+        ELSE users.first_name
+      END,
+      last_name = CASE
+        WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name
+        ELSE users.last_name
+      END,
+      username = CASE
+        WHEN EXCLUDED.username <> '' THEN EXCLUDED.username
+        ELSE users.username
+      END
+    `,
+    [
+      user.id,
+      (user.first_name || "").trim(),
+      (user.last_name || "").trim(),
+      (user.username || "").trim()
+    ]
+  );
 }
 
 async function saveSeenUser(chatId, user) {
@@ -252,284 +523,6 @@ async function saveSeenUser(chatId, user) {
     `,
     [
       chatId,
-      user.id,
-      (user.first_name || "").trim(),
-      (user.last_name || "").trim(),
-      (user.username || "").trim()
-    ]
-  );
-}
-
-function getRandomChatMember(chatId) {
-  const key = String(chatId);
-  const members = Object.values(chatMembers[key] || {});
-  if (!members.length) return null;
-  return members[Math.floor(Math.random() * members.length)];
-}
-
-async function getRandomPairMembersFromDb(chatId) {
-  const result = await pool.query(
-    `
-    SELECT user_id, first_name, last_name, username
-    FROM chat_seen_users
-    WHERE chat_id = $1
-    ORDER BY RANDOM()
-    LIMIT 2
-    `,
-    [chatId]
-  );
-
-  if (result.rows.length < 2) return null;
-
-  return result.rows.map((row) => ({
-    id: Number(row.user_id),
-    first_name: row.first_name || "",
-    last_name: row.last_name || "",
-    username: row.username || ""
-  }));
-}
-
-function getRandomCoins() {
-  return Math.floor(Math.random() * 101);
-}
-
-function getRandomHuntCoins() {
-  return Math.floor(Math.random() * 11);
-}
-
-function getHuntResult() {
-  const normalAnimals = [
-    { animal: "🐰 Поймал зайца!" },
-    { animal: "🦊 Поймал лису!" },
-    { animal: "🐗 Поймал кабана!" },
-    { animal: "🦌 Поймал оленя!" }
-  ];
-
-  const isBear = Math.random() < 0.25;
-
-  if (isBear) {
-    return {
-      text: "🐻 Ты нашёл медведя... Он тебя съел!",
-      coins: -getRandomHuntCoins()
-    };
-  }
-
-  const chosen = normalAnimals[Math.floor(Math.random() * normalAnimals.length)];
-  return {
-    text: chosen.animal,
-    coins: getRandomHuntCoins()
-  };
-}
-
-function getSniperResult() {
-  const hit = Math.random() < 0.5;
-
-  if (hit) {
-    return {
-      text: "💥 Попадание!",
-      coins: Math.floor(Math.random() * 11)
-    };
-  }
-
-  return {
-    text: "❌ Промах!",
-    coins: 0
-  };
-}
-
-function formatRemainingTime(ms) {
-  const totalSeconds = Math.ceil(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-
-  if (hours <= 0) {
-    return `${minutes} мин`;
-  }
-
-  return `${hours} ч ${minutes} мин`;
-}
-
-function getShopKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        {
-          text: "💰 50 монет — 5 ⭐",
-          callback_data: "buy_50_coins"
-        }
-      ]
-    ]
-  };
-}
-
-function getPendingKey(chatId, userId) {
-  return `${chatId}:${userId}`;
-}
-
-function getLieResult() {
-  const percent = Math.floor(Math.random() * 101);
-
-  if (percent >= 85) return { percent, text: "💀 100% врёт" };
-  if (percent >= 65) return { percent, text: "🤥 Похоже, он врёт" };
-  if (percent >= 45) return { percent, text: "😐 Не могу понять" };
-  return { percent, text: "✅ Скорее говорит правду" };
-}
-
-// =========================
-// БОМБА
-// =========================
-function getBombChatKey(chatId) {
-  return String(chatId);
-}
-
-function addRecentActiveUser(chatId, user) {
-  if (!chatId || !user || !user.id || user.is_bot) return;
-
-  const key = getBombChatKey(chatId);
-
-  if (!recentActiveUsers[key]) {
-    recentActiveUsers[key] = {};
-  }
-
-  recentActiveUsers[key][String(user.id)] = {
-    id: user.id,
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    username: user.username || "",
-    last_seen_at: Date.now()
-  };
-}
-
-function getRecentActiveCandidates(chatId, excludeUserIds = []) {
-  const key = getBombChatKey(chatId);
-  const users = Object.values(recentActiveUsers[key] || {});
-  const now = Date.now();
-  const activeWindowMs = 30 * 60 * 1000;
-
-  return users.filter((user) => {
-    if (!user || !user.id) return false;
-    if (excludeUserIds.includes(user.id)) return false;
-    return (now - (user.last_seen_at || 0)) <= activeWindowMs;
-  });
-}
-
-function getRandomFromArray(arr) {
-  if (!arr || !arr.length) return null;
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function clearBomb(chatId) {
-  const key = getBombChatKey(chatId);
-
-  if (activeBombs[key]?.timer) {
-    clearTimeout(activeBombs[key].timer);
-  }
-
-  delete activeBombs[key];
-}
-
-async function explodeBomb(chatId) {
-  const key = getBombChatKey(chatId);
-  const bomb = activeBombs[key];
-  if (!bomb) return;
-
-  const holder = bomb.holder;
-  clearBomb(chatId);
-
-  await bot.sendMessage(
-    chatId,
-    `💥 Бомба взорвалась!\n${getUserLink(holder)} не успел передать бомбу.`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-}
-
-async function startBombTimer(chatId) {
-  const key = getBombChatKey(chatId);
-  const bomb = activeBombs[key];
-  if (!bomb) return;
-
-  if (bomb.timer) {
-    clearTimeout(bomb.timer);
-  }
-
-  bomb.timer = setTimeout(async () => {
-    try {
-      await explodeBomb(chatId);
-    } catch (error) {
-      console.error("Ошибка взрыва бомбы:", error);
-    }
-  }, 5000);
-}
-
-async function passBomb(chatId, fromUser) {
-  const key = getBombChatKey(chatId);
-  const bomb = activeBombs[key];
-  if (!bomb) return false;
-
-  const candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
-  if (!candidates.length) {
-    clearBomb(chatId);
-
-    await bot.sendMessage(
-      chatId,
-      `💣 ${getUserLink(fromUser)} попытался передать бомбу, но никого не оказалось рядом.\n\nБомба исчезла.`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-    return true;
-  }
-
-  const nextHolder = getRandomFromArray(candidates);
-
-  activeBombs[key] = {
-    holder: nextHolder,
-    timer: null
-  };
-
-  await bot.sendMessage(
-    chatId,
-    `💣 ${getUserLink(fromUser)} передал бомбу!\n\n🔥 Теперь бомба у: ${getUserLink(nextHolder)}\n⏳ У него 5 секунд, чтобы написать: передать`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-
-  await startBombTimer(chatId);
-  return true;
-}
-
-// =========================
-// БАЗОВЫЕ ФУНКЦИИ БД
-// =========================
-async function initUser(user) {
-  if (!user || !user.id) return;
-
-  await pool.query(
-    `
-    INSERT INTO users (user_id, first_name, last_name, username)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-      first_name = CASE
-        WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name
-        ELSE users.first_name
-      END,
-      last_name = CASE
-        WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name
-        ELSE users.last_name
-      END,
-      username = CASE
-        WHEN EXCLUDED.username <> '' THEN EXCLUDED.username
-        ELSE users.username
-      END
-    `,
-    [
       user.id,
       (user.first_name || "").trim(),
       (user.last_name || "").trim(),
@@ -599,32 +592,15 @@ async function incrementStat(targetUserId, statField) {
 
   if (!allowedFields.includes(statField)) return;
 
-  const result = await pool.query(
+  await pool.query(
     `
     UPDATE users
     SET ${statField} = ${statField} + 1,
         total = total + 1
     WHERE user_id = $1
-    RETURNING *
     `,
     [targetUserId]
   );
-
-  console.log("✅ stat updated:", statField, "for", targetUserId, result.rows[0]);
-}
-
-async function addCoinsToUser(userId, amount) {
-  const result = await pool.query(
-    `
-    UPDATE users
-    SET balance = COALESCE(balance, 0) + $2
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, amount]
-  );
-
-  return result.rows[0]?.balance || 0;
 }
 
 async function processStarPurchase(userId, successfulPayment) {
@@ -658,7 +634,6 @@ async function processStarPurchase(userId, successfulPayment) {
     }
 
     let coinsToAdd = 0;
-
     if (successfulPayment.invoice_payload === "coins_50") {
       coinsToAdd = 50;
     }
@@ -708,8 +683,30 @@ async function processStarPurchase(userId, successfulPayment) {
   }
 }
 
+async function getRandomPairMembersFromDb(chatId) {
+  const result = await pool.query(
+    `
+    SELECT user_id, first_name, last_name, username
+    FROM chat_seen_users
+    WHERE chat_id = $1
+    ORDER BY RANDOM()
+    LIMIT 2
+    `,
+    [chatId]
+  );
+
+  if (result.rows.length < 2) return null;
+
+  return result.rows.map((row) => ({
+    id: Number(row.user_id),
+    first_name: row.first_name || "",
+    last_name: row.last_name || "",
+    username: row.username || ""
+  }));
+}
+
 // =========================
-// КАСТОМНЫЕ КОМАНДЫ
+// CUSTOM COMMANDS
 // =========================
 async function getUserCustomCommandCount(userId) {
   const result = await pool.query(
@@ -768,7 +765,7 @@ async function deleteCustomCommand(userId, trigger) {
 }
 
 function parseCreateCommandInput(text) {
-  const cleaned = text.trim().replace(/\s+/g, " ");
+  const cleaned = String(text || "").trim().replace(/\s+/g, " ");
   const parts = cleaned.split(" ");
 
   if (parts.length < 2) return null;
@@ -777,7 +774,6 @@ function parseCreateCommandInput(text) {
   const actionText = parts.slice(1).join(" ").trim();
 
   if (!trigger || !actionText) return null;
-
   return { trigger, actionText };
 }
 
@@ -786,7 +782,7 @@ function isValidTrigger(trigger) {
 }
 
 // =========================
-// МОНЕТЫ / ОХОТА / СНАЙПЕР
+// GAME
 // =========================
 async function claimDailyCoins(userId) {
   const result = await pool.query(
@@ -794,9 +790,7 @@ async function claimDailyCoins(userId) {
     [userId]
   );
 
-  if (!result.rows[0]) {
-    return { ok: false, reason: "not_found" };
-  }
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
   const now = new Date();
@@ -840,9 +834,7 @@ async function runHunt(userId) {
     [userId]
   );
 
-  if (!result.rows[0]) {
-    return { ok: false, reason: "not_found" };
-  }
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
   const now = new Date();
@@ -862,10 +854,7 @@ async function runHunt(userId) {
 
   const hunt = getHuntResult();
   let newBalance = Number(row.balance || 0) + hunt.coins;
-
-  if (newBalance < 0) {
-    newBalance = 0;
-  }
+  if (newBalance < 0) newBalance = 0;
 
   const updateResult = await pool.query(
     `
@@ -891,9 +880,7 @@ async function runSniper(userId) {
     [userId]
   );
 
-  if (!result.rows[0]) {
-    return { ok: false, reason: "not_found" };
-  }
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
   const now = new Date();
@@ -999,7 +986,7 @@ async function resolveTargetUserFromReply(msg) {
 }
 
 // =========================
-// РП КОМАНДЫ
+// STANDARD RP COMMANDS
 // =========================
 const rpCommands = {
   "убить": { text: "убил", stat: "kills", emoji: "💀" },
@@ -1020,10 +1007,10 @@ const rpCommands = {
 };
 
 // =========================
-// /start
+// COMMANDS
 // =========================
 bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
-  await bot.sendMessage(
+  await safeSendMessage(
     msg.chat.id,
     `🔥 RP BOT
 
@@ -1068,9 +1055,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   );
 });
 
-// =========================
-// /profile
-// =========================
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     let targetUser = null;
@@ -1087,13 +1071,10 @@ bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
     await sendProfile(msg.chat.id, targetUser, msg.message_id);
   } catch (error) {
     console.error("Ошибка /profile:", error);
-    await bot.sendMessage(msg.chat.id, "Ошибка при открытии профиля.");
+    await safeSendMessage(msg.chat.id, "Ошибка при открытии профиля.");
   }
 });
 
-// =========================
-// /balance
-// =========================
 bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
@@ -1101,7 +1082,7 @@ bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
 
     const stats = await getUserStats(msg.from.id);
 
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       `💰 ${getUserLink(msg.from)}, ваш баланс: ${stats.balance || 0} монет`,
       {
@@ -1111,22 +1092,18 @@ bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
     );
   } catch (error) {
     console.error("Ошибка /balance:", error);
-    await bot.sendMessage(msg.chat.id, "Ошибка при получении баланса.");
+    await safeSendMessage(msg.chat.id, "Ошибка при получении баланса.");
   }
 });
 
-// =========================
-// /createcommand
-// =========================
 bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
     await saveSeenUser(msg.chat.id, msg.from);
 
     const count = await getUserCustomCommandCount(msg.from.id);
-
     if (count >= 5) {
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         "❌ У тебя уже максимум команд: 5\nУдалить можно через /deletecommand"
       );
@@ -1134,9 +1111,8 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
     }
 
     const stats = await getUserStats(msg.from.id);
-
     if ((stats.balance || 0) < 20) {
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         "❌ Чтобы создать команду, нужно 20 монет."
       );
@@ -1146,7 +1122,7 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
     const key = getPendingKey(msg.chat.id, msg.from.id);
     pendingCommandCreation[key] = true;
 
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       `🛠 Создание команды
 
@@ -1157,28 +1133,14 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
 команда действие
 
 Пример:
-облил облил водой
-
-Где:
-облил — это команда, которую ты будешь писать в чат
-облил водой — это текст, который бот будет писать
-
-Пример использования:
-если ответить на сообщение игрока и написать:
-облил
-
-бот напишет:
-💬 Артем облил водой игрока`
+облил облил водой`
     );
   } catch (error) {
     console.error("Ошибка /createcommand:", error);
-    await bot.sendMessage(msg.chat.id, "Ошибка создания команды.");
+    await safeSendMessage(msg.chat.id, "Ошибка создания команды.");
   }
 });
 
-// =========================
-// /mycommands
-// =========================
 bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
@@ -1187,7 +1149,7 @@ bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
     const commands = await getUserCustomCommands(msg.from.id);
 
     if (!commands.length) {
-      await bot.sendMessage(msg.chat.id, "📜 У тебя пока нет своих команд.");
+      await safeSendMessage(msg.chat.id, "📜 У тебя пока нет своих команд.");
       return;
     }
 
@@ -1195,36 +1157,31 @@ bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
       `${index + 1}. ${escapeHtml(cmd.trigger)} — бот пишет: ${escapeHtml(cmd.action_text)}`
     );
 
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       `📜 Твои команды:\n\n${lines.join("\n")}`,
       { parse_mode: "HTML" }
     );
   } catch (error) {
     console.error("Ошибка /mycommands:", error);
-    await bot.sendMessage(msg.chat.id, "Ошибка при получении команд.");
+    await safeSendMessage(msg.chat.id, "Ошибка при получении команд.");
   }
 });
 
-// =========================
-// /deletecommand
-// =========================
 bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
   try {
     await initUser(msg.from);
     await saveSeenUser(msg.chat.id, msg.from);
 
-    const trigger = (match?.[2] || "").trim().toLowerCase();
-
+    const trigger = normalizeText(match?.[2] || "");
     if (!trigger) {
-      await bot.sendMessage(msg.chat.id, "❌ Напиши так:\n/deletecommand облил");
+      await safeSendMessage(msg.chat.id, "❌ Напиши так:\n/deletecommand облил");
       return;
     }
 
     const deleted = await deleteCustomCommand(msg.from.id, trigger);
-
     if (!deleted) {
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `❌ У тебя нет команды "${escapeHtml(trigger)}".`,
         { parse_mode: "HTML" }
@@ -1232,19 +1189,19 @@ bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) 
       return;
     }
 
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       `🗑 Команда "${escapeHtml(deleted.trigger)}" удалена.`,
       { parse_mode: "HTML" }
     );
   } catch (error) {
     console.error("Ошибка /deletecommand:", error);
-    await bot.sendMessage(msg.chat.id, "Ошибка удаления команды.");
+    await safeSendMessage(msg.chat.id, "Ошибка удаления команды.");
   }
 });
 
 // =========================
-// УЧАСТНИКИ, КОТОРЫХ БОТ УВИДЕЛ
+// TRACK USERS
 // =========================
 bot.on("message", async (msg) => {
   try {
@@ -1271,7 +1228,7 @@ bot.on("message", async (msg) => {
 });
 
 // =========================
-// УСПЕШНАЯ ОПЛАТА
+// PAYMENTS
 // =========================
 bot.on("message", async (msg) => {
   try {
@@ -1284,14 +1241,14 @@ bot.on("message", async (msg) => {
     const purchase = await processStarPurchase(msg.from.id, payment);
 
     if (purchase.alreadyProcessed) {
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `ℹ️ Оплата уже обработана.\n\nБаланс: ${purchase.balance} монет`
       );
       return;
     }
 
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       `✅ Оплата прошла успешно!
 
@@ -1303,9 +1260,6 @@ bot.on("message", async (msg) => {
   }
 });
 
-// =========================
-// CALLBACK КНОПКИ МАГАЗИНА
-// =========================
 bot.on("callback_query", async (query) => {
   try {
     if (!query.data || !query.message || !query.from) return;
@@ -1331,9 +1285,6 @@ bot.on("callback_query", async (query) => {
   }
 });
 
-// =========================
-// PRE CHECKOUT
-// =========================
 bot.on("pre_checkout_query", async (query) => {
   try {
     await bot.answerPreCheckoutQuery(query.id, true);
@@ -1343,7 +1294,7 @@ bot.on("pre_checkout_query", async (query) => {
 });
 
 // =========================
-// ОБРАБОТКА СООБЩЕНИЙ
+// MAIN HANDLER
 // =========================
 bot.on("message", async (msg) => {
   try {
@@ -1354,14 +1305,11 @@ bot.on("message", async (msg) => {
     await initUser(msg.from);
     await saveSeenUser(msg.chat.id, msg.from);
 
-    const text = msg.text.trim();
-    const lowerText = text.toLowerCase();
+    const text = (msg.text || "").trim();
+    const lowerText = normalizeText(text);
 
     if (lowerText.startsWith("/")) return;
 
-    // =========================
-    // СОЗДАНИЕ СВОЕЙ КОМАНДЫ
-    // =========================
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
@@ -1369,7 +1317,7 @@ bot.on("message", async (msg) => {
       const parsed = parseCreateCommandInput(text);
 
       if (!parsed) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           `❌ Напиши в формате:
 команда действие
@@ -1381,7 +1329,7 @@ bot.on("message", async (msg) => {
       }
 
       if (!isValidTrigger(parsed.trigger)) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "❌ Команда должна быть одним словом от 2 до 20 символов.\nМожно буквы, цифры, _ и -"
         );
@@ -1389,7 +1337,7 @@ bot.on("message", async (msg) => {
       }
 
       if (parsed.actionText.length < 2 || parsed.actionText.length > 60) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "❌ Текст действия должен быть от 2 до 60 символов."
         );
@@ -1397,7 +1345,7 @@ bot.on("message", async (msg) => {
       }
 
       if (rpCommands[parsed.trigger]) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "❌ Такая команда уже занята стандартной командой."
         );
@@ -1406,7 +1354,7 @@ bot.on("message", async (msg) => {
 
       const existing = await getCustomCommandByTrigger(parsed.trigger);
       if (existing) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "❌ Такая команда уже существует. Напиши другую."
         );
@@ -1415,7 +1363,7 @@ bot.on("message", async (msg) => {
 
       const count = await getUserCustomCommandCount(msg.from.id);
       if (count >= 5) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "❌ У тебя уже максимум команд: 5\nУдалить можно через /deletecommand"
         );
@@ -1424,7 +1372,7 @@ bot.on("message", async (msg) => {
 
       const stats = await getUserStats(msg.from.id);
       if ((stats.balance || 0) < 20) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "❌ Чтобы создать команду, нужно 20 монет."
         );
@@ -1432,30 +1380,19 @@ bot.on("message", async (msg) => {
       }
 
       await pool.query(
-        `
-        UPDATE users
-        SET balance = balance - 20
-        WHERE user_id = $1
-        `,
+        `UPDATE users SET balance = balance - 20 WHERE user_id = $1`,
         [msg.from.id]
       );
 
       await createCustomCommand(msg.from.id, parsed.trigger, parsed.actionText);
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `✅ Команда "${escapeHtml(parsed.trigger)}" создана!
 
 Теперь:
-${escapeHtml(parsed.trigger)} — это команда, которую надо писать в чат
-${escapeHtml(parsed.actionText)} — это текст, который будет писать бот
-
-Пример:
-если ответить на сообщение игрока и написать:
-${escapeHtml(parsed.trigger)}
-
-бот напишет:
-💬 ${escapeHtml(getUserName(msg.from))} ${escapeHtml(parsed.actionText)} игрока
+${escapeHtml(parsed.trigger)} — команда
+${escapeHtml(parsed.actionText)} — текст бота
 
 Списано: 20 монет`,
         { parse_mode: "HTML" }
@@ -1463,14 +1400,12 @@ ${escapeHtml(parsed.trigger)}
       return;
     }
 
-    // =========================
-    // БОМБА
-    // =========================
-    if (lowerText === "бомба") {
+    // BOMB START
+    if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
       if (activeBombs[bombKey]) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "💣 Бомба уже запущена. Дождись, пока она взорвётся."
         );
@@ -1479,7 +1414,7 @@ ${escapeHtml(parsed.trigger)}
 
       const candidates = getRecentActiveCandidates(msg.chat.id);
       if (candidates.length < 2) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "❌ Нужно хотя бы 2 активных человека в чате."
         );
@@ -1490,10 +1425,11 @@ ${escapeHtml(parsed.trigger)}
 
       activeBombs[bombKey] = {
         holder,
+        previousHolderId: null,
         timer: null
       };
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `💣 Бомба активирована!
 
@@ -1509,17 +1445,15 @@ ${escapeHtml(parsed.trigger)}
       return;
     }
 
-    if (lowerText === "передать") {
+    // BOMB PASS
+    if (isExactCommand(lowerText, "передать")) {
       const bombKey = getBombChatKey(msg.chat.id);
       const bomb = activeBombs[bombKey];
 
       if (!bomb) return;
 
       if (!bomb.holder || bomb.holder.id !== msg.from.id) {
-        await bot.sendMessage(
-          msg.chat.id,
-          "❌ Сейчас бомба не у тебя."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Сейчас бомба не у тебя.");
         return;
       }
 
@@ -1527,36 +1461,30 @@ ${escapeHtml(parsed.trigger)}
       return;
     }
 
-    // =========================
-    // МАГАЗИН
-    // =========================
-    if (lowerText === "магазин") {
-      await bot.sendMessage(
+    // SHOP
+    if (isExactCommand(lowerText, "магазин")) {
+      await safeSendMessage(
         msg.chat.id,
         `🛒 Магазин
 
 Товар:
 💰 50 монет — 5 ⭐`,
-        {
-          reply_markup: getShopKeyboard()
-        }
+        { reply_markup: getShopKeyboard() }
       );
       return;
     }
 
-    // =========================
-    // ДЕТЕКТОР ЛЖИ
-    // =========================
+    // LIE
     if (
-      lowerText === "он врет?" ||
-      lowerText === "врет?" ||
-      lowerText === "он врёт?" ||
-      lowerText === "врёт?"
+      isExactCommand(lowerText, "он врет?") ||
+      isExactCommand(lowerText, "врет?") ||
+      isExactCommand(lowerText, "он врёт?") ||
+      isExactCommand(lowerText, "врёт?")
     ) {
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "Ответь на сообщение человека и напиши: он врет?"
         );
@@ -1565,7 +1493,7 @@ ${escapeHtml(parsed.trigger)}
 
       const result = getLieResult();
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `🕵️ ${getUserLink(target)} проверен...\n\nВероятность лжи: ${result.percent}%\n${escapeHtml(result.text)}`,
         {
@@ -1576,17 +1504,13 @@ ${escapeHtml(parsed.trigger)}
       return;
     }
 
-    // =========================
-    // РЕСПЕКТ
-    // =========================
-    if (lowerText === "респект") {
+    // RESPECT
+    if (isExactCommand(lowerText, "респект")) {
       const sender = msg.from;
-      await initUser(sender);
-
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "Ответь на сообщение человека и напиши: респект"
         );
@@ -1597,23 +1521,18 @@ ${escapeHtml(parsed.trigger)}
       await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
-        await bot.sendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
+        await safeSendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
         return;
       }
 
       const result = await pool.query(
-        `
-        UPDATE users
-        SET respect = COALESCE(respect, 0) + 1
-        WHERE user_id = $1
-        RETURNING respect
-        `,
+        `UPDATE users SET respect = COALESCE(respect, 0) + 1 WHERE user_id = $1 RETURNING respect`,
         [target.id]
       );
 
       const respectCount = result.rows[0]?.respect || 0;
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `🤝 ${getUserLink(sender)} выразил респект ${getUserLink(target)}\n\nРеспект: ${respectCount}`,
         {
@@ -1624,14 +1543,12 @@ ${escapeHtml(parsed.trigger)}
       return;
     }
 
-    // =========================
-    // ПАРА
-    // =========================
-    if (lowerText === "пара") {
+    // PAIR
+    if (isExactCommand(lowerText, "пара")) {
       const pair = await getRandomPairMembersFromDb(msg.chat.id);
 
       if (!pair) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "Нужно хотя бы 2 человека, которых бот уже видел в этом чате 💞"
         );
@@ -1641,7 +1558,7 @@ ${escapeHtml(parsed.trigger)}
       const [firstUser, secondUser] = pair;
       const percent = Math.floor(Math.random() * 101);
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `💞 Случайная пара:\n${getUserLink(firstUser)} + ${getUserLink(secondUser)}\n\n❤️ Совместимость: ${percent}%`,
         {
@@ -1652,19 +1569,17 @@ ${escapeHtml(parsed.trigger)}
       return;
     }
 
-    // =========================
-    // ДЕНЬГИ
-    // =========================
-    if (lowerText === "деньги" || lowerText === "монеты") {
+    // MONEY
+    if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
       const result = await claimDailyCoins(msg.from.id);
 
       if (!result.ok) {
         if (result.reason === "not_found") {
-          await bot.sendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
           return;
         }
 
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           `⏳ ${getUserLink(msg.from)}, получить монеты снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
           {
@@ -1675,7 +1590,7 @@ ${escapeHtml(parsed.trigger)}
         return;
       }
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!\n\nБаланс: ${result.balance} монет`,
         {
@@ -1686,19 +1601,17 @@ ${escapeHtml(parsed.trigger)}
       return;
     }
 
-    // =========================
-    // ОХОТА
-    // =========================
-    if (lowerText === "охота") {
+    // HUNT
+    if (isExactCommand(lowerText, "охота")) {
       const result = await runHunt(msg.from.id);
 
       if (!result.ok) {
         if (result.reason === "not_found") {
-          await bot.sendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
           return;
         }
 
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
           {
@@ -1710,14 +1623,10 @@ ${escapeHtml(parsed.trigger)}
       }
 
       let coinsLine = "😐 0 монет";
+      if (result.hunt.coins > 0) coinsLine = `💰 +${result.hunt.coins} монет`;
+      else if (result.hunt.coins < 0) coinsLine = `💀 ${result.hunt.coins} монет`;
 
-      if (result.hunt.coins > 0) {
-        coinsLine = `💰 +${result.hunt.coins} монет`;
-      } else if (result.hunt.coins < 0) {
-        coinsLine = `💀 ${result.hunt.coins} монет`;
-      }
-
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `🏹 ${getUserLink(msg.from)} отправился на охоту...
 
@@ -1733,19 +1642,17 @@ ${coinsLine}
       return;
     }
 
-    // =========================
-    // СНАЙПЕР
-    // =========================
-    if (lowerText === "снайпер") {
+    // SNIPER
+    if (isExactCommand(lowerText, "снайпер")) {
       const result = await runSniper(msg.from.id);
 
       if (!result.ok) {
         if (result.reason === "not_found") {
-          await bot.sendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
           return;
         }
 
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
           {
@@ -1757,12 +1664,9 @@ ${coinsLine}
       }
 
       let coinsLine = "😐 0 монет";
+      if (result.sniper.coins > 0) coinsLine = `💰 +${result.sniper.coins} монет`;
 
-      if (result.sniper.coins > 0) {
-        coinsLine = `💰 +${result.sniper.coins} монет`;
-      }
-
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `🎯 ${getUserLink(msg.from)} прицелился...
 
@@ -1778,13 +1682,11 @@ ${coinsLine}
       return;
     }
 
-    // =========================
-    // ПРОГНОЗ
-    // =========================
-    if (lowerText === "прогноз") {
+    // PREDICTION
+    if (isExactCommand(lowerText, "прогноз")) {
       const prediction = getRandomPrediction();
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `🔮 ${getUserLink(msg.from)}\n${escapeHtml(prediction)}`,
         {
@@ -1795,9 +1697,7 @@ ${coinsLine}
       return;
     }
 
-    // =========================
-    // ОЦЕНКА
-    // =========================
+    // RATING
     if (lowerText.startsWith("оценка")) {
       let target = null;
 
@@ -1806,9 +1706,7 @@ ${coinsLine}
       } else {
         const parts = text.split(" ");
         if (parts.length > 1) {
-          target = {
-            first_name: parts.slice(1).join(" ")
-          };
+          target = { first_name: parts.slice(1).join(" ") };
         } else {
           target = msg.from;
         }
@@ -1816,7 +1714,7 @@ ${coinsLine}
 
       const rating = getRandomRating();
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
         {
@@ -1827,25 +1725,23 @@ ${coinsLine}
       return;
     }
 
-    // =========================
-    // КТО ...
-    // =========================
+    // WHO
     if (lowerText.startsWith("кто ")) {
       const subject = text.slice(4).trim();
 
       if (!subject) {
-        await bot.sendMessage(msg.chat.id, "Напиши, например: кто лучший");
+        await safeSendMessage(msg.chat.id, "Напиши, например: кто лучший");
         return;
       }
 
       const randomUser = getRandomChatMember(msg.chat.id);
 
       if (!randomUser) {
-        await bot.sendMessage(msg.chat.id, "Пока некого выбрать 🤔");
+        await safeSendMessage(msg.chat.id, "Пока некого выбрать 🤔");
         return;
       }
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `🤔 ${escapeHtml(subject)}? Думаю это ${getUserLink(randomUser)}`,
         {
@@ -1856,17 +1752,13 @@ ${coinsLine}
       return;
     }
 
-    // =========================
-    // ПОДАРОК
-    // =========================
-    if (lowerText === "подарок") {
+    // GIFT
+    if (isExactCommand(lowerText, "подарок")) {
       const sender = msg.from;
-      await initUser(sender);
-
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "Ответь на сообщение человека и напиши: подарок"
         );
@@ -1877,7 +1769,7 @@ ${coinsLine}
       await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           `🎁 ${getUserLink(sender)} подарил(а) подарок самому себе`,
           {
@@ -1890,7 +1782,7 @@ ${coinsLine}
 
       const gift = getRandomGift();
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `🎁 ${getUserLink(sender)} подарил(а) ${getUserLink(target)} ${escapeHtml(gift)}`,
         {
@@ -1901,16 +1793,14 @@ ${coinsLine}
       return;
     }
 
-    // =========================
-    // СВОИ КОМАНДЫ
-    // =========================
+    // CUSTOM COMMANDS
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           "Ответь на сообщение человека этой командой."
         );
@@ -1921,7 +1811,7 @@ ${coinsLine}
       await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
-        await bot.sendMessage(
+        await safeSendMessage(
           msg.chat.id,
           `😅 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} самого себя`,
           {
@@ -1932,7 +1822,7 @@ ${coinsLine}
         return;
       }
 
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `💬 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} ${getUserLink(target)}`,
         {
@@ -1943,19 +1833,15 @@ ${coinsLine}
       return;
     }
 
-    // =========================
-    // СТАНДАРТНЫЕ РП КОМАНДЫ
-    // =========================
+    // STANDARD RP COMMANDS
     const command = rpCommands[lowerText];
     if (!command) return;
 
     const sender = msg.from;
-    await initUser(sender);
-
     const target = await resolveTargetUserFromReply(msg);
 
     if (!target) {
-      await bot.sendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
+      await safeSendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
       return;
     }
 
@@ -1963,7 +1849,7 @@ ${coinsLine}
     await saveSeenUser(msg.chat.id, target);
 
     if (sender.id === target.id) {
-      await bot.sendMessage(
+      await safeSendMessage(
         msg.chat.id,
         `😅 ${getUserLink(sender)} ${command.text} самого себя`,
         {
@@ -1976,7 +1862,7 @@ ${coinsLine}
 
     await incrementStat(target.id, command.stat);
 
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       `${command.emoji} ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`,
       {
@@ -1994,7 +1880,7 @@ bot.on("polling_error", (error) => {
 });
 
 // =========================
-// ЗАПУСК
+// STARTUP
 // =========================
 (async () => {
   try {
