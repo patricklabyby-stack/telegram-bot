@@ -93,6 +93,31 @@ async function safeSendMessage(chatId, text, options = {}) {
   }
 }
 
+async function safeAnswerCallback(query, text = "", showAlert = false) {
+  try {
+    await bot.answerCallbackQuery(query.id, {
+      text,
+      show_alert: showAlert
+    });
+  } catch (error) {
+    console.error("Ошибка answerCallbackQuery:", error?.message || error);
+  }
+}
+
+async function removeInlineKeyboard(chatId, messageId) {
+  try {
+    await bot.editMessageReplyMarkup(
+      { inline_keyboard: [] },
+      {
+        chat_id: chatId,
+        message_id: messageId
+      }
+    );
+  } catch (error) {
+    console.error("Не удалось убрать кнопки:", error?.message || error);
+  }
+}
+
 function formatRemainingTime(ms) {
   const totalSeconds = Math.max(1, Math.ceil((Number(ms) || 0) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -1003,6 +1028,24 @@ async function isMyChild(parentUserId, childUserId) {
   return !!result.rows[0];
 }
 
+async function isChildInMyFamily(parentUserId, childUserId) {
+  const parentIds = await getFamilyParentIds(parentUserId);
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM adoptions
+    WHERE parent_user_id = ANY($1::bigint[])
+      AND child_user_id = $2
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [parentIds, childUserId]
+  );
+
+  return !!result.rows[0];
+}
+
 async function setFavoriteChild(parentUserId, childUserId) {
   const result = await pool.query(
     `
@@ -1662,7 +1705,10 @@ bot.on("callback_query", async (query) => {
     if (!query.data || !query.message || !query.from) return;
 
     const chatId = query.message.chat.id;
+    const messageId = query.message.message_id;
     const data = String(query.data);
+
+    await safeAnswerCallback(query);
 
     // =========================
     // BUY COINS
@@ -1670,8 +1716,6 @@ bot.on("callback_query", async (query) => {
     if (data === "buy_50_coins") {
       await initUser(query.from);
       await saveSeenUser(chatId, query.from);
-
-      await bot.answerCallbackQuery(query.id);
 
       await bot.sendInvoice(
         chatId,
@@ -1694,49 +1738,25 @@ bot.on("callback_query", async (query) => {
       const callbackChatId = Number(parts[1]);
       const targetUserId = Number(parts[2]);
 
-      if (Number(chatId) !== callbackChatId) {
-        await bot.answerCallbackQuery(query.id, {
-          text: "❌ Эта кнопка не для этого чата.",
-          show_alert: true
-        });
-        return;
-      }
-
-      if (Number(query.from.id) !== Number(targetUserId)) {
-        await bot.answerCallbackQuery(query.id, {
-          text: "❌ Ответить может только тот, кому сделали предложение.",
-          show_alert: true
-        });
-        return;
-      }
+      if (Number(chatId) !== callbackChatId) return;
+      if (Number(query.from.id) !== Number(targetUserId)) return;
 
       const marriageAnswerKey = getMarriageKey(chatId, targetUserId);
       const pendingMarriage = pendingMarriages[marriageAnswerKey];
 
-      if (!pendingMarriage) {
-        await bot.answerCallbackQuery(query.id, {
-          text: "⌛ Предложение уже недоступно.",
-          show_alert: true
-        });
-        return;
-      }
+      if (!pendingMarriage) return;
 
       const isExpired = Date.now() - pendingMarriage.createdAt > MARRIAGE_REQUEST_MS;
       if (isExpired) {
         delete pendingMarriages[marriageAnswerKey];
-        await bot.answerCallbackQuery(query.id, {
-          text: "⌛ Предложение брака устарело.",
-          show_alert: true
-        });
+        await removeInlineKeyboard(chatId, messageId);
+        await safeSendMessage(chatId, "⌛ Предложение брака устарело.");
         return;
       }
 
       if (action === "marriage_no") {
         delete pendingMarriages[marriageAnswerKey];
-
-        await bot.answerCallbackQuery(query.id, {
-          text: "Вы отказали в браке."
-        });
+        await removeInlineKeyboard(chatId, messageId);
 
         await safeSendMessage(
           chatId,
@@ -1754,12 +1774,7 @@ bot.on("callback_query", async (query) => {
 
       if (senderMarried || targetMarried) {
         delete pendingMarriages[marriageAnswerKey];
-
-        await bot.answerCallbackQuery(query.id, {
-          text: "❌ Кто-то из вас уже состоит в браке.",
-          show_alert: true
-        });
-
+        await removeInlineKeyboard(chatId, messageId);
         await safeSendMessage(chatId, "❌ Кто-то из вас уже состоит в браке.");
         return;
       }
@@ -1770,10 +1785,7 @@ bot.on("callback_query", async (query) => {
       );
 
       delete pendingMarriages[marriageAnswerKey];
-
-      await bot.answerCallbackQuery(query.id, {
-        text: "Брак зарегистрирован!"
-      });
+      await removeInlineKeyboard(chatId, messageId);
 
       await safeSendMessage(
         chatId,
@@ -1800,49 +1812,25 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       const callbackChatId = Number(parts[1]);
       const targetUserId = Number(parts[2]);
 
-      if (Number(chatId) !== callbackChatId) {
-        await bot.answerCallbackQuery(query.id, {
-          text: "❌ Эта кнопка не для этого чата.",
-          show_alert: true
-        });
-        return;
-      }
-
-      if (Number(query.from.id) !== Number(targetUserId)) {
-        await bot.answerCallbackQuery(query.id, {
-          text: "❌ Ответить может только тот, кого хотят усыновить.",
-          show_alert: true
-        });
-        return;
-      }
+      if (Number(chatId) !== callbackChatId) return;
+      if (Number(query.from.id) !== Number(targetUserId)) return;
 
       const adoptionAnswerKey = getAdoptionKey(chatId, targetUserId);
       const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
 
-      if (!pendingAdoption) {
-        await bot.answerCallbackQuery(query.id, {
-          text: "⌛ Предложение уже недоступно.",
-          show_alert: true
-        });
-        return;
-      }
+      if (!pendingAdoption) return;
 
       const isExpired = Date.now() - pendingAdoption.createdAt > ADOPTION_REQUEST_MS;
       if (isExpired) {
         delete pendingAdoptions[adoptionAnswerKey];
-        await bot.answerCallbackQuery(query.id, {
-          text: "⌛ Предложение усыновления устарело.",
-          show_alert: true
-        });
+        await removeInlineKeyboard(chatId, messageId);
+        await safeSendMessage(chatId, "⌛ Предложение усыновления устарело.");
         return;
       }
 
       if (action === "adoption_no") {
         delete pendingAdoptions[adoptionAnswerKey];
-
-        await bot.answerCallbackQuery(query.id, {
-          text: "Вы отказались от усыновления."
-        });
+        await removeInlineKeyboard(chatId, messageId);
 
         await safeSendMessage(
           chatId,
@@ -1855,15 +1843,19 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
         return;
       }
 
+      const parentMarriage = await getMarriagePartner(pendingAdoption.parentUser.id);
+
+      if (parentMarriage && Number(parentMarriage.partnerId) === Number(pendingAdoption.childUser.id)) {
+        delete pendingAdoptions[adoptionAnswerKey];
+        await removeInlineKeyboard(chatId, messageId);
+        await safeSendMessage(chatId, "❌ Нельзя усыновить своего супруга(у).");
+        return;
+      }
+
       const childAlreadyHasParent = await getActiveAdoptionByChildId(pendingAdoption.childUser.id);
       if (childAlreadyHasParent) {
         delete pendingAdoptions[adoptionAnswerKey];
-
-        await bot.answerCallbackQuery(query.id, {
-          text: "❌ У этого игрока уже есть семья.",
-          show_alert: true
-        });
-
+        await removeInlineKeyboard(chatId, messageId);
         await safeSendMessage(chatId, "❌ У этого игрока уже есть семья.");
         return;
       }
@@ -1871,12 +1863,7 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       const childrenCount = await getFamilyChildrenCount(pendingAdoption.parentUser.id);
       if (childrenCount >= MAX_CHILDREN_PER_FAMILY) {
         delete pendingAdoptions[adoptionAnswerKey];
-
-        await bot.answerCallbackQuery(query.id, {
-          text: `❌ В семье уже максимум ${MAX_CHILDREN_PER_FAMILY} ребёнка(детей).`,
-          show_alert: true
-        });
-
+        await removeInlineKeyboard(chatId, messageId);
         await safeSendMessage(
           chatId,
           `❌ В семье уже максимум ${MAX_CHILDREN_PER_FAMILY} ребёнка(детей).`
@@ -1891,21 +1878,13 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
 
       if (!adoption) {
         delete pendingAdoptions[adoptionAnswerKey];
-
-        await bot.answerCallbackQuery(query.id, {
-          text: "❌ У этого игрока уже есть семья.",
-          show_alert: true
-        });
-
+        await removeInlineKeyboard(chatId, messageId);
         await safeSendMessage(chatId, "❌ У этого игрока уже есть семья.");
         return;
       }
 
       delete pendingAdoptions[adoptionAnswerKey];
-
-      await bot.answerCallbackQuery(query.id, {
-        text: "Усыновление прошло успешно!"
-      });
+      await removeInlineKeyboard(chatId, messageId);
 
       await safeSendMessage(
         chatId,
@@ -1920,16 +1899,8 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       );
       return;
     }
-
-    await bot.answerCallbackQuery(query.id);
   } catch (error) {
     console.error("Ошибка callback_query:", error);
-    try {
-      await bot.answerCallbackQuery(query.id, {
-        text: "❌ Ошибка обработки кнопки.",
-        show_alert: true
-      });
-    } catch (_) {}
   }
 });
 
@@ -2130,6 +2101,14 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
         return;
       }
 
+      const parentMarriage = await getMarriagePartner(pendingAdoption.parentUser.id);
+
+      if (parentMarriage && Number(parentMarriage.partnerId) === Number(pendingAdoption.childUser.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить своего супруга(у).");
+        delete pendingAdoptions[adoptionAnswerKey];
+        return;
+      }
+
       const childAlreadyHasParent = await getActiveAdoptionByChildId(pendingAdoption.childUser.id);
       if (childAlreadyHasParent) {
         await safeSendMessage(msg.chat.id, "❌ У этого игрока уже есть семья.");
@@ -2277,6 +2256,14 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
         return;
       }
 
+      const senderAdoption = await getActiveAdoptionByChildId(sender.id);
+      const targetAdoption = await getActiveAdoptionByChildId(target.id);
+
+      if (senderAdoption || targetAdoption) {
+        await safeSendMessage(msg.chat.id, "❌ Игрок в роли ребёнка не может вступить в брак.");
+        return;
+      }
+
       const marriageKey = getMarriageKey(msg.chat.id, target.id);
 
       pendingMarriages[marriageKey] = {
@@ -2355,6 +2342,18 @@ ${getUserLink(target)}, выбери ниже:
 
       if (parent.id === child.id) {
         await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить самого себя.");
+        return;
+      }
+
+      const parentChildRole = await getActiveAdoptionByChildId(parent.id);
+      if (parentChildRole) {
+        await safeSendMessage(msg.chat.id, "❌ Ребёнок не может усыновлять других игроков.");
+        return;
+      }
+
+      const parentMarriage = await getMarriagePartner(parent.id);
+      if (parentMarriage && Number(parentMarriage.partnerId) === Number(child.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить своего супруга(у).");
         return;
       }
 
@@ -2485,7 +2484,7 @@ ${getUserLink(child)}, выбери ниже:
         return;
       }
 
-      const isChild = await isMyChild(parent.id, child.id);
+      const isChild = await isChildInMyFamily(parent.id, child.id);
 
       if (!isChild) {
         await safeSendMessage(
@@ -2638,17 +2637,7 @@ ${getUserLink(child)}, выбери ниже:
         return;
       }
 
-      const adoption = await getActiveAdoptionByChildId(target.id);
-
-      if (!adoption) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Этот игрок не является твоим ребёнком."
-        );
-        return;
-      }
-
-      const isChild = await isMyChild(sender.id, target.id);
+      const isChild = await isChildInMyFamily(sender.id, target.id);
       if (!isChild) {
         await safeSendMessage(
           msg.chat.id,
