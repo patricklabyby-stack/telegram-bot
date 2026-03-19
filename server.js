@@ -27,15 +27,12 @@ const pendingMarriagesByRequestId = {};
 const pendingMarriagesByUserKey = {};
 const pendingAdoptionsByRequestId = {};
 const pendingAdoptionsByUserKey = {};
-const pendingFriendshipsByRequestId = {};
-const pendingFriendshipsByUserKey = {};
 
 const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const BOMB_TIMER_MS = 5000;
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
 const MARRIAGE_REQUEST_MS = 10 * 60 * 1000;
 const ADOPTION_REQUEST_MS = 10 * 60 * 1000;
-const FRIEND_REQUEST_MS = 10 * 60 * 1000;
 const MAX_CUSTOM_COMMANDS = 5;
 const CUSTOM_COMMAND_COST = 20;
 const MAX_CHILDREN_PER_FAMILY = 3;
@@ -250,7 +247,10 @@ function getLieResult() {
 function getShopKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "💰 50 монет — 5 ⭐", callback_data: "buy_50_coins" }]
+      [{ text: "💰 50 монет — 5 ⭐", callback_data: "buy_50_coins" }],
+      [{ text: "💰 100 монет — 10 ⭐", callback_data: "buy_100_coins" }],
+      [{ text: "💰 200 монет — 20 ⭐", callback_data: "buy_200_coins" }],
+      [{ text: "💰 300 монет — 30 ⭐", callback_data: "buy_300_coins" }]
     ]
   };
 }
@@ -272,17 +272,6 @@ function getAdoptionDecisionKeyboard(requestId) {
       [
         { text: "✅ Да", callback_data: `adoption_yes:${requestId}` },
         { text: "❌ Нет", callback_data: `adoption_no:${requestId}` }
-      ]
-    ]
-  };
-}
-
-function getFriendshipDecisionKeyboard(requestId) {
-  return {
-    inline_keyboard: [
-      [
-        { text: "✅ Да", callback_data: `friend_yes:${requestId}` },
-        { text: "❌ Нет", callback_data: `friend_no:${requestId}` }
       ]
     ]
   };
@@ -339,14 +328,6 @@ function cleanupPendingRequests() {
     if (!req || isRequestExpired(req.createdAt, ADOPTION_REQUEST_MS)) {
       if (req?.userKey) delete pendingAdoptionsByUserKey[req.userKey];
       delete pendingAdoptionsByRequestId[requestId];
-    }
-  }
-
-  for (const requestId of Object.keys(pendingFriendshipsByRequestId)) {
-    const req = pendingFriendshipsByRequestId[requestId];
-    if (!req || isRequestExpired(req.createdAt, FRIEND_REQUEST_MS)) {
-      if (req?.userKey) delete pendingFriendshipsByUserKey[req.userKey];
-      delete pendingFriendshipsByRequestId[requestId];
     }
   }
 }
@@ -611,24 +592,6 @@ async function initDb() {
     )
   `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS friendships (
-      id SERIAL PRIMARY KEY,
-      user1_id BIGINT NOT NULL,
-      user2_id BIGINT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      is_active BOOLEAN DEFAULT TRUE
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS best_friends (
-      user_id BIGINT PRIMARY KEY,
-      friend_user_id BIGINT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
@@ -807,8 +770,15 @@ async function processStarPurchase(userId, successfulPayment) {
     }
 
     let coinsToAdd = 0;
+
     if (successfulPayment.invoice_payload === "coins_50") {
       coinsToAdd = 50;
+    } else if (successfulPayment.invoice_payload === "coins_100") {
+      coinsToAdd = 100;
+    } else if (successfulPayment.invoice_payload === "coins_200") {
+      coinsToAdd = 200;
+    } else if (successfulPayment.invoice_payload === "coins_300") {
+      coinsToAdd = 300;
     }
 
     await client.query(
@@ -944,170 +914,6 @@ async function isSpouse(userId, targetUserId) {
   return (
     Number(marriage.user1_id) === Number(targetUserId) ||
     Number(marriage.user2_id) === Number(targetUserId)
-  );
-}
-
-// =========================
-// FRIENDSHIPS
-// =========================
-async function areFriends(userId1, userId2) {
-  const smaller = Math.min(Number(userId1), Number(userId2));
-  const bigger = Math.max(Number(userId1), Number(userId2));
-
-  const result = await pool.query(
-    `
-    SELECT *
-    FROM friendships
-    WHERE user1_id = $1
-      AND user2_id = $2
-      AND is_active = TRUE
-    LIMIT 1
-    `,
-    [smaller, bigger]
-  );
-
-  return !!result.rows[0];
-}
-
-async function createFriendship(userId1, userId2) {
-  const smaller = Math.min(Number(userId1), Number(userId2));
-  const bigger = Math.max(Number(userId1), Number(userId2));
-
-  const existing = await pool.query(
-    `
-    SELECT *
-    FROM friendships
-    WHERE user1_id = $1 AND user2_id = $2
-    LIMIT 1
-    `,
-    [smaller, bigger]
-  );
-
-  if (existing.rows[0]) {
-    const updated = await pool.query(
-      `
-      UPDATE friendships
-      SET is_active = TRUE,
-          created_at = NOW()
-      WHERE user1_id = $1 AND user2_id = $2
-      RETURNING *
-      `,
-      [smaller, bigger]
-    );
-    return updated.rows[0];
-  }
-
-  const inserted = await pool.query(
-    `
-    INSERT INTO friendships (user1_id, user2_id, is_active)
-    VALUES ($1, $2, TRUE)
-    RETURNING *
-    `,
-    [smaller, bigger]
-  );
-
-  return inserted.rows[0];
-}
-
-async function removeFriendship(userId1, userId2) {
-  const smaller = Math.min(Number(userId1), Number(userId2));
-  const bigger = Math.max(Number(userId1), Number(userId2));
-
-  const result = await pool.query(
-    `
-    UPDATE friendships
-    SET is_active = FALSE
-    WHERE user1_id = $1
-      AND user2_id = $2
-      AND is_active = TRUE
-    RETURNING *
-    `,
-    [smaller, bigger]
-  );
-
-  await removeBestFriendIfMatches(userId1, userId2);
-  await removeBestFriendIfMatches(userId2, userId1);
-
-  return result.rows[0] || null;
-}
-
-async function getFriendsOfUser(userId) {
-  const result = await pool.query(
-    `
-    SELECT *
-    FROM friendships
-    WHERE is_active = TRUE
-      AND (user1_id = $1 OR user2_id = $1)
-    ORDER BY created_at ASC
-    `,
-    [userId]
-  );
-
-  return result.rows.map((row) => {
-    const friendId =
-      Number(row.user1_id) === Number(userId)
-        ? Number(row.user2_id)
-        : Number(row.user1_id);
-
-    return {
-      friendship: row,
-      friendId
-    };
-  });
-}
-
-async function setBestFriend(userId, friendUserId) {
-  const result = await pool.query(
-    `
-    INSERT INTO best_friends (user_id, friend_user_id, created_at)
-    VALUES ($1, $2, NOW())
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-      friend_user_id = EXCLUDED.friend_user_id,
-      created_at = NOW()
-    RETURNING *
-    `,
-    [userId, friendUserId]
-  );
-
-  return result.rows[0] || null;
-}
-
-async function getBestFriend(userId) {
-  const result = await pool.query(
-    `
-    SELECT *
-    FROM best_friends
-    WHERE user_id = $1
-    LIMIT 1
-    `,
-    [userId]
-  );
-
-  return result.rows[0] || null;
-}
-
-async function removeBestFriend(userId) {
-  const result = await pool.query(
-    `
-    DELETE FROM best_friends
-    WHERE user_id = $1
-    RETURNING *
-    `,
-    [userId]
-  );
-
-  return result.rows[0] || null;
-}
-
-async function removeBestFriendIfMatches(userId, friendUserId) {
-  await pool.query(
-    `
-    DELETE FROM best_friends
-    WHERE user_id = $1
-      AND friend_user_id = $2
-    `,
-    [userId, friendUserId]
   );
 }
 
@@ -2152,22 +1958,14 @@ async function getCooldownText(userId) {
 async function getProfileText(user) {
   await initUser(user);
   const stats = await getUserStats(user.id);
-  const bestFriendRow = await getBestFriend(user.id);
-  const bestFriend = bestFriendRow ? await getStoredUser(Number(bestFriendRow.friend_user_id)) : null;
 
-  let text = `👤 Профиль пользователя
+  return `👤 Профиль пользователя
 
 Имя: ${getUserLink(user)}
 ID: ${user.id}
 
 💰 Монеты: ${stats.balance || 0}
-🤝 Респект: ${stats.respect || 0}`;
-
-  if (bestFriend) {
-    text += `\n🫂 Лучший друг: ${getUserLink(bestFriend)}`;
-  }
-
-  text += `
+🤝 Респект: ${stats.respect || 0}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
@@ -2188,8 +1986,6 @@ ID: ${user.id}
 🛡️ Спасли: ${stats.saves}
 
 🔥 Всего взаимодействий: ${stats.total}`;
-
-  return text;
 }
 
 async function sendProfile(chatId, targetUser, replyToMessageId = undefined) {
@@ -2266,23 +2062,6 @@ function findAdoptionRequestByUser(chatId, userId) {
   const requestId = pendingAdoptionsByUserKey[`${chatId}:${userId}`];
   if (!requestId) return null;
   return pendingAdoptionsByRequestId[requestId] || null;
-}
-
-function saveFriendshipRequest(request) {
-  pendingFriendshipsByRequestId[request.requestId] = request;
-  pendingFriendshipsByUserKey[request.userKey] = request.requestId;
-}
-
-function deleteFriendshipRequest(request) {
-  if (!request) return;
-  delete pendingFriendshipsByRequestId[request.requestId];
-  delete pendingFriendshipsByUserKey[request.userKey];
-}
-
-function findFriendshipRequestByUser(chatId, userId) {
-  const requestId = pendingFriendshipsByUserKey[`${chatId}:${userId}`];
-  if (!requestId) return null;
-  return pendingFriendshipsByRequestId[requestId] || null;
 }
 
 async function finalizeMarriageAccept(request, chatId, messageId = null) {
@@ -2429,60 +2208,6 @@ async function finalizeAdoptionDecline(request, chatId, messageId = null) {
   deleteAdoptionRequest(request);
 }
 
-async function finalizeFriendshipAccept(request, chatId, messageId = null) {
-  if (!request) return;
-
-  if (isRequestExpired(request.createdAt, FRIEND_REQUEST_MS)) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteFriendshipRequest(request);
-    await safeSendMessage(chatId, "⌛ Запрос дружбы устарел.");
-    return;
-  }
-
-  const alreadyFriends = await areFriends(request.fromUser.id, request.targetUser.id);
-  if (alreadyFriends) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteFriendshipRequest(request);
-    await safeSendMessage(chatId, "✅ Вы уже друзья.");
-    return;
-  }
-
-  const friendship = await createFriendship(request.fromUser.id, request.targetUser.id);
-
-  if (messageId) await removeInlineKeyboard(chatId, messageId);
-  deleteFriendshipRequest(request);
-
-  await safeSendMessage(
-    chatId,
-    `🫂 Дружба подтверждена!
-
-${getUserLink(request.fromUser)} + ${getUserLink(request.targetUser)}
-
-📅 С: ${formatDate(friendship.created_at)}`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-}
-
-async function finalizeFriendshipDecline(request, chatId, messageId = null) {
-  if (!request) return;
-
-  if (messageId) await removeInlineKeyboard(chatId, messageId);
-
-  await safeSendMessage(
-    chatId,
-    `💔 ${getUserLink(request.targetUser)} отказал(а) ${getUserLink(request.fromUser)} в дружбе.`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-
-  deleteFriendshipRequest(request);
-}
-
 // =========================
 // STANDARD RP COMMANDS
 // =========================
@@ -2544,13 +2269,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • наказание
 • снять наказание
 
-<b>🫂 Дружба</b>
-• добавить в друзья
-• удалить из друзей
-• друзья
-• лучший друг
-• убрать лучшего друга
-
 <b>💰 Деньги</b>
 • деньги
 • охота
@@ -2597,6 +2315,12 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • прогноз
 • он врет?
 • врет?
+
+<b>🛒 Магазин Stars</b>
+• 50 монет — 5 ⭐
+• 100 монет — 10 ⭐
+• 200 монет — 20 ⭐
+• 300 монет — 30 ⭐
 
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
@@ -2833,19 +2557,51 @@ bot.on("callback_query", async (query) => {
     const messageId = query.message.message_id;
     const data = String(query.data);
 
-    if (data === "buy_50_coins") {
+    if (
+      data === "buy_50_coins" ||
+      data === "buy_100_coins" ||
+      data === "buy_200_coins" ||
+      data === "buy_300_coins"
+    ) {
       await safeAnswerCallback(query);
       await initUser(query.from);
       await saveSeenUser(chatId, query.from);
 
+      let title = "";
+      let description = "";
+      let payload = "";
+      let amount = 0;
+
+      if (data === "buy_50_coins") {
+        title = "50 монет";
+        description = "Покупка 50 монет за 5 Telegram Stars";
+        payload = "coins_50";
+        amount = 5;
+      } else if (data === "buy_100_coins") {
+        title = "100 монет";
+        description = "Покупка 100 монет за 10 Telegram Stars";
+        payload = "coins_100";
+        amount = 10;
+      } else if (data === "buy_200_coins") {
+        title = "200 монет";
+        description = "Покупка 200 монет за 20 Telegram Stars";
+        payload = "coins_200";
+        amount = 20;
+      } else if (data === "buy_300_coins") {
+        title = "300 монет";
+        description = "Покупка 300 монет за 30 Telegram Stars";
+        payload = "coins_300";
+        amount = 30;
+      }
+
       await bot.sendInvoice(
         chatId,
-        "50 монет",
-        "Покупка 50 монет за 5 Telegram Stars",
-        "coins_50",
+        title,
+        description,
+        payload,
         "",
         "XTR",
-        [{ label: "50 монет", amount: 5 }]
+        [{ label: title, amount }]
       );
       return;
     }
@@ -2899,32 +2655,6 @@ bot.on("callback_query", async (query) => {
       }
 
       await finalizeAdoptionAccept(request, chatId, messageId);
-      return;
-    }
-
-    if (data.startsWith("friend_yes:") || data.startsWith("friend_no:")) {
-      const [action, requestId] = data.split(":");
-      const request = pendingFriendshipsByRequestId[requestId];
-
-      if (!request) {
-        await safeAnswerCallback(query, "⌛ Эта заявка уже недействительна.", true);
-        await removeInlineKeyboard(chatId, messageId);
-        return;
-      }
-
-      if (Number(query.from.id) !== Number(request.targetUser.id)) {
-        await safeAnswerCallback(query, "❌ Это не твоя кнопка.", true);
-        return;
-      }
-
-      await safeAnswerCallback(query, "✅ Ответ принят");
-
-      if (action === "friend_no") {
-        await finalizeFriendshipDecline(request, chatId, messageId);
-        return;
-      }
-
-      await finalizeFriendshipAccept(request, chatId, messageId);
       return;
     }
 
@@ -3058,215 +2788,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
-      return;
-    }
-
-    const pendingFriendship = findFriendshipRequestByUser(msg.chat.id, msg.from.id);
-    if (pendingFriendship && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
-      if (isExactCommand(lowerText, "нет")) {
-        await finalizeFriendshipDecline(pendingFriendship, msg.chat.id);
-        return;
-      }
-
-      await finalizeFriendshipAccept(pendingFriendship, msg.chat.id);
-      return;
-    }
-
-    // =========================
-    // FRIENDSHIP COMMANDS
-    // =========================
-    if (isExactCommand(lowerText, "добавить в друзья")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение человека и напиши: добавить в друзья");
-        return;
-      }
-
-      await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
-
-      if (Number(sender.id) === Number(target.id)) {
-        await safeSendMessage(msg.chat.id, "❌ Нельзя добавить в друзья самого себя.");
-        return;
-      }
-
-      const alreadyFriends = await areFriends(sender.id, target.id);
-      if (alreadyFriends) {
-        await safeSendMessage(msg.chat.id, "✅ Вы уже друзья.");
-        return;
-      }
-
-      const existingReq = findFriendshipRequestByUser(msg.chat.id, target.id);
-      if (existingReq) {
-        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активный запрос дружбы.");
-        return;
-      }
-
-      const requestId = generateRequestId("friend");
-      const request = {
-        requestId,
-        userKey: `${msg.chat.id}:${target.id}`,
-        fromUser: {
-          id: sender.id,
-          first_name: sender.first_name || "",
-          last_name: sender.last_name || "",
-          username: sender.username || ""
-        },
-        targetUser: {
-          id: target.id,
-          first_name: target.first_name || "",
-          last_name: target.last_name || "",
-          username: target.username || ""
-        },
-        createdAt: Date.now()
-      };
-
-      saveFriendshipRequest(request);
-
-      const sent = await safeSendMessage(
-        msg.chat.id,
-        `🫂 ${getUserLink(sender)} хочет подружиться с ${getUserLink(target)}!
-
-${getUserLink(target)}, выбери ниже:
-✅ Да
-❌ Нет
-
-⌛ У вас есть 10 минут.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true,
-          reply_markup: getFriendshipDecisionKeyboard(requestId)
-        }
-      );
-
-      if (sent) {
-        request.requestMessageId = sent.message_id;
-      }
-
-      return;
-    }
-
-    if (isExactCommand(lowerText, "удалить из друзей")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение друга и напиши: удалить из друзей");
-        return;
-      }
-
-      const removed = await removeFriendship(sender.id, target.id);
-      if (!removed) {
-        await safeSendMessage(msg.chat.id, "❌ Этот игрок не в твоих друзьях.");
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `💔 ${getUserLink(sender)} удалил(а) ${getUserLink(target)} из друзей.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "лучший друг")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение друга и напиши: лучший друг");
-        return;
-      }
-
-      const friends = await areFriends(sender.id, target.id);
-      if (!friends) {
-        await safeSendMessage(msg.chat.id, "❌ Лучшим другом можно сделать только своего друга.");
-        return;
-      }
-
-      await setBestFriend(sender.id, target.id);
-
-      await safeSendMessage(
-        msg.chat.id,
-        `⭐ ${getUserLink(sender)} выбрал(а) ${getUserLink(target)} лучшим другом!`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "убрать лучшего друга")) {
-      const removed = await removeBestFriend(msg.from.id);
-
-      if (!removed) {
-        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет лучшего друга.");
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `⭐ ${getUserLink(msg.from)} убрал(а) лучшего друга.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "друзья")) {
-      let targetUser = msg.from;
-
-      if (msg.reply_to_message) {
-        const resolved = await resolveTargetUserFromReply(msg);
-        if (resolved) targetUser = resolved;
-      }
-
-      const friends = await getFriendsOfUser(targetUser.id);
-      const bestFriendRow = await getBestFriend(targetUser.id);
-      const bestFriendId = bestFriendRow ? Number(bestFriendRow.friend_user_id) : null;
-
-      if (!friends.length) {
-        await safeSendMessage(
-          msg.chat.id,
-          `${getUserLink(targetUser)} пока не добавил(а) друзей.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      const lines = [];
-      for (const item of friends) {
-        const friendUser = await getStoredUser(item.friendId);
-        if (!friendUser) continue;
-
-        if (bestFriendId && Number(item.friendId) === bestFriendId) {
-          lines.push(`⭐ ${getUserLink(friendUser)} — лучший друг`);
-        } else {
-          lines.push(`• ${getUserLink(friendUser)}`);
-        }
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🫂 Друзья ${getUserLink(targetUser)}
-
-${lines.join("\n")}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
       return;
     }
 
@@ -4073,8 +3594,13 @@ ${lines.join("\n")}`,
         msg.chat.id,
         `🛒 Магазин
 
-Товар:
-💰 50 монет — 5 ⭐`,
+Доступные товары:
+💰 50 монет — 5 ⭐
+💰 100 монет — 10 ⭐
+💰 200 монет — 20 ⭐
+💰 300 монет — 30 ⭐
+
+Нажми на кнопку ниже, чтобы купить.`,
         { reply_markup: getShopKeyboard() }
       );
       return;
