@@ -560,6 +560,14 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS piggy_banks (
+      child_user_id BIGINT PRIMARY KEY,
+      balance INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
@@ -1320,6 +1328,140 @@ async function takeFromFamilyBudget(userId, amount) {
 }
 
 // =========================
+// PIGGY BANK
+// =========================
+async function getPiggyBank(childUserId) {
+  const result = await pool.query(
+    `SELECT child_user_id, balance, updated_at FROM piggy_banks WHERE child_user_id = $1 LIMIT 1`,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function createPiggyBank(childUserId) {
+  const result = await pool.query(
+    `
+    INSERT INTO piggy_banks (child_user_id, balance, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET updated_at = piggy_banks.updated_at
+    RETURNING child_user_id, balance, updated_at
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function addToPiggyBank(childUserId, amount) {
+  const existing = await getPiggyBank(childUserId);
+  if (!existing) throw new Error("NO_PIGGY_BANK");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [childUserId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const userBalance = Number(userRow.rows[0].balance || 0);
+    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [childUserId, amount]
+    );
+
+    const piggy = await client.query(
+      `
+      UPDATE piggy_banks
+      SET balance = balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      piggyBalance: Number(piggy.rows[0].balance || 0),
+      userBalance: Number(updatedUser.rows[0].balance || 0),
+      updatedAt: piggy.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function breakPiggyBank(childUserId) {
+  const existing = await getPiggyBank(childUserId);
+  if (!existing) throw new Error("NO_PIGGY_BANK");
+
+  const amount = Number(existing.balance || 0);
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    if (amount > 0) {
+      await client.query(
+        `UPDATE users SET balance = balance + $2 WHERE user_id = $1`,
+        [childUserId, amount]
+      );
+    }
+
+    await client.query(
+      `
+      UPDATE piggy_banks
+      SET balance = 0,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      `,
+      [childUserId]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    const piggy = await client.query(
+      `SELECT balance, updated_at FROM piggy_banks WHERE child_user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      taken: amount,
+      userBalance: Number(updatedUser.rows[0]?.balance || 0),
+      piggyBalance: Number(piggy.rows[0]?.balance || 0),
+      updatedAt: piggy.rows[0]?.updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// =========================
 // CUSTOM COMMANDS
 // =========================
 async function getUserCustomCommandCount(userId) {
@@ -1842,6 +1984,12 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 семейный бюджет
 вложить в бюджет 5
 взять с бюджета 5
+попросить денег 5
+дать ребенку 5
+создать копилку
+копилка
+пополнить копилку 5
+разбить копилку
 он врет?
 врет?
 /createcommand
@@ -2400,6 +2548,264 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
         console.error("Ошибка снятия с семейного бюджета:", error);
         await safeSendMessage(msg.chat.id, "❌ Ошибка снятия денег из семейного бюджета.");
+      }
+
+      return;
+    }
+
+    if (isExactCommand(lowerText, "создать копилку")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      const existing = await getPiggyBank(msg.from.id);
+      if (existing) {
+        await safeSendMessage(
+          msg.chat.id,
+          `🐷 У тебя уже есть копилка.\n💰 В копилке: ${Number(existing.balance || 0)} монет`
+        );
+        return;
+      }
+
+      const piggy = await createPiggyBank(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🐷 ${getUserLink(msg.from)} создал(а) копилку!
+
+💰 В копилке: ${Number(piggy.balance || 0)} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "копилка")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      const piggy = await getPiggyBank(msg.from.id);
+      if (!piggy) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ У тебя нет копилки.\nНапиши: создать копилку"
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🐷 Копилка ${getUserLink(msg.from)}
+
+💰 В копилке: ${Number(piggy.balance || 0)} монет
+🕒 Обновлена: ${formatDateTime(piggy.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("пополнить копилку")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      const match = lowerText.match(/^пополнить копилку\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5"
+        );
+        return;
+      }
+
+      try {
+        const result = await addToPiggyBank(msg.from.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🐷 ${getUserLink(msg.from)} положил(а) в копилку ${amount} монет
+
+💰 В копилке: ${result.piggyBalance}
+👛 Твой баланс: ${result.userBalance}
+🕒 Обновлена: ${formatDateTime(result.updatedAt)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NO_PIGGY_BANK") {
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ У тебя нет копилки.\nНапиши: создать копилку"
+          );
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка пополнения копилки:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения копилки.");
+      }
+
+      return;
+    }
+
+    if (isExactCommand(lowerText, "разбить копилку")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      try {
+        const result = await breakPiggyBank(msg.from.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `💥 ${getUserLink(msg.from)} разбил(а) копилку и достал(а) ${result.taken} монет!
+
+🐷 В копилке: ${result.piggyBalance}
+👛 Твой баланс: ${result.userBalance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NO_PIGGY_BANK") {
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ У тебя нет копилки.\nНапиши: создать копилку"
+          );
+          return;
+        }
+
+        console.error("Ошибка разбития копилки:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка при разбитии копилки.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("попросить денег")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет родителей в семье.");
+        return;
+      }
+
+      const match = lowerText.match(/^попросить денег\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: попросить денег 5"
+        );
+        return;
+      }
+
+      const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
+      const parentPartnerInfo = parentUser ? await getMarriagePartner(parentUser.id) : null;
+      const secondParent = parentPartnerInfo
+        ? await getStoredUser(Number(parentPartnerInfo.partnerId))
+        : null;
+
+      let parentsText = "";
+      if (parentUser) parentsText += `${getUserLink(parentUser)}`;
+      if (secondParent) parentsText += ` и ${getUserLink(secondParent)}`;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `👶 ${getUserLink(msg.from)} просит у родителей ${amount} монет.
+
+👨‍👩‍👧 Родители: ${parentsText || "не найдены"}
+💬 Родитель может ответить на сообщение ребёнка командой:
+дать ребенку ${amount}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("дать ребенку")) {
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5"
+        );
+        return;
+      }
+
+      const match = lowerText.match(/^дать ребенку\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: дать ребенку 5"
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(msg.from.id, target.id);
+      if (!isChild) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ты можешь давать деньги только своему ребёнку."
+        );
+        return;
+      }
+
+      try {
+        const transferResult = await transferCoins(msg.from.id, target.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `💸 ${getUserLink(msg.from)} дал(а) ${getUserLink(target)} ${amount} монет
+
+Баланс ${escapeHtml(getUserName(msg.from))}: ${transferResult.fromBalance}
+Баланс ${escapeHtml(getUserName(target))}: ${transferResult.toBalance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка выдачи денег ребёнку:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка перевода монет ребёнку.");
       }
 
       return;
