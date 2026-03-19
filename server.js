@@ -11,8 +11,6 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!token) throw new Error("BOT_TOKEN не найден");
 if (!databaseUrl) throw new Error("DATABASE_URL не найден");
 
-const ADMIN_ID = 7837011810;
-
 const bot = new TelegramBot(token, { polling: true });
 
 const pool = new Pool({
@@ -39,6 +37,7 @@ const MAX_CUSTOM_COMMANDS = 5;
 const CUSTOM_COMMAND_COST = 20;
 const MAX_CHILDREN_PER_FAMILY = 3;
 const MAX_PUNISHMENT_DAYS = 7;
+const MAX_GOOD_DEED_LENGTH = 120;
 
 // =========================
 // SERVER
@@ -152,6 +151,10 @@ function formatDateTime(dateValue) {
   return `${day}.${month}.${year} ${hours}:${mins}`;
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
 function getRandomGift() {
   const gifts = [
     "шоколад 🍫",
@@ -249,10 +252,7 @@ function getLieResult() {
 function getShopKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "💰 50 монет — 5 ⭐", callback_data: "buy_50_coins" }],
-      [{ text: "💰 100 монет — 10 ⭐", callback_data: "buy_100_coins" }],
-      [{ text: "💰 200 монет — 20 ⭐", callback_data: "buy_200_coins" }],
-      [{ text: "💰 300 монет — 30 ⭐", callback_data: "buy_300_coins" }]
+      [{ text: "💰 50 монет — 5 ⭐", callback_data: "buy_50_coins" }]
     ]
   };
 }
@@ -594,6 +594,24 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_good_deeds (
+      id SERIAL PRIMARY KEY,
+      child_user_id BIGINT NOT NULL,
+      added_by_user_id BIGINT NOT NULL,
+      deed_text TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_obedience (
+      child_user_id BIGINT PRIMARY KEY,
+      value INTEGER DEFAULT 50,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
@@ -749,26 +767,6 @@ async function transferCoins(fromUserId, toUserId, amount) {
   }
 }
 
-async function addCoinsToUser(targetUserId, amount) {
-  const result = await pool.query(
-    `
-    UPDATE users
-    SET balance = balance + $2
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [targetUserId, amount]
-  );
-
-  if (!result.rows[0]) {
-    throw new Error("USER_NOT_FOUND");
-  }
-
-  return {
-    balance: Number(result.rows[0].balance || 0)
-  };
-}
-
 async function processStarPurchase(userId, successfulPayment) {
   const client = await pool.connect();
 
@@ -792,10 +790,9 @@ async function processStarPurchase(userId, successfulPayment) {
     }
 
     let coinsToAdd = 0;
-    if (successfulPayment.invoice_payload === "coins_50") coinsToAdd = 50;
-    if (successfulPayment.invoice_payload === "coins_100") coinsToAdd = 100;
-    if (successfulPayment.invoice_payload === "coins_200") coinsToAdd = 200;
-    if (successfulPayment.invoice_payload === "coins_300") coinsToAdd = 300;
+    if (successfulPayment.invoice_payload === "coins_50") {
+      coinsToAdd = 50;
+    }
 
     await client.query(
       `
@@ -1215,11 +1212,6 @@ async function getActivePunishment(childUserId) {
   return result.rows[0] || null;
 }
 
-async function isChildPunished(childUserId) {
-  const punishment = await getActivePunishment(childUserId);
-  return !!punishment;
-}
-
 async function setPunishment(parentUserId, childUserId, days) {
   const result = await pool.query(
     `
@@ -1266,6 +1258,113 @@ async function getPunishedBlockText(childUserId) {
 
   const remaining = new Date(punishment.until_at).getTime() - Date.now();
   return `❌ Ребёнок сейчас наказан(а).\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
+}
+
+// =========================
+// OBEDIENCE / GOOD DEEDS
+// =========================
+async function ensureChildObedience(childUserId) {
+  await pool.query(
+    `
+    INSERT INTO child_obedience (child_user_id, value, updated_at)
+    VALUES ($1, 50, NOW())
+    ON CONFLICT (child_user_id) DO NOTHING
+    `,
+    [childUserId]
+  );
+}
+
+async function getChildObedience(childUserId) {
+  await ensureChildObedience(childUserId);
+
+  const result = await pool.query(
+    `
+    SELECT child_user_id, value, updated_at
+    FROM child_obedience
+    WHERE child_user_id = $1
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function changeChildObedience(childUserId, diff) {
+  await ensureChildObedience(childUserId);
+
+  const current = await getChildObedience(childUserId);
+  const currentValue = Number(current?.value || 50);
+  const newValue = clamp(currentValue + Number(diff || 0), 0, 100);
+
+  const result = await pool.query(
+    `
+    UPDATE child_obedience
+    SET value = $2,
+        updated_at = NOW()
+    WHERE child_user_id = $1
+    RETURNING child_user_id, value, updated_at
+    `,
+    [childUserId, newValue]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function addGoodDeed(parentUserId, childUserId, deedText) {
+  const cleaned = String(deedText || "").trim();
+  const result = await pool.query(
+    `
+    INSERT INTO child_good_deeds (child_user_id, added_by_user_id, deed_text)
+    VALUES ($1, $2, $3)
+    RETURNING *
+    `,
+    [childUserId, parentUserId, cleaned]
+  );
+  return result.rows[0] || null;
+}
+
+async function getGoodDeeds(childUserId) {
+  const result = await pool.query(
+    `
+    SELECT id, child_user_id, added_by_user_id, deed_text, created_at
+    FROM child_good_deeds
+    WHERE child_user_id = $1
+    ORDER BY created_at ASC, id ASC
+    `,
+    [childUserId]
+  );
+  return result.rows;
+}
+
+async function deleteGoodDeedByIndex(childUserId, index) {
+  const deeds = await getGoodDeeds(childUserId);
+  if (!deeds[index - 1]) return null;
+
+  const deedId = Number(deeds[index - 1].id);
+
+  const result = await pool.query(
+    `
+    DELETE FROM child_good_deeds
+    WHERE id = $1 AND child_user_id = $2
+    RETURNING *
+    `,
+    [deedId, childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function clearGoodDeeds(childUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM child_good_deeds
+    WHERE child_user_id = $1
+    RETURNING id
+    `,
+    [childUserId]
+  );
+  return result.rowCount || 0;
 }
 
 // =========================
@@ -2164,6 +2263,8 @@ async function finalizeAdoptionAccept(request, chatId, messageId = null) {
     return;
   }
 
+  await ensureChildObedience(request.childUser.id);
+
   if (messageId) await removeInlineKeyboard(chatId, messageId);
 
   const spouseInfo = await getMarriagePartner(request.parentUser.id);
@@ -2264,6 +2365,13 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • наказать ребенка 1
 • наказание
 • снять наказание
+• похвалить ребенка
+• наградить ребенка 20
+• добавить доброе дело помог по дому
+• список добрых дел
+• удалить доброе дело 1
+• очистить добрые дела
+• послушание
 
 <b>💰 Деньги</b>
 • деньги
@@ -2311,9 +2419,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • прогноз
 • он врет?
 • врет?
-
-<b>👑 Владелец</b>
-• выдать монеты 100
 
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
@@ -2550,57 +2655,19 @@ bot.on("callback_query", async (query) => {
     const messageId = query.message.message_id;
     const data = String(query.data);
 
-    if (
-      data === "buy_50_coins" ||
-      data === "buy_100_coins" ||
-      data === "buy_200_coins" ||
-      data === "buy_300_coins"
-    ) {
+    if (data === "buy_50_coins") {
       await safeAnswerCallback(query);
       await initUser(query.from);
       await saveSeenUser(chatId, query.from);
 
-      let title = "";
-      let description = "";
-      let payload = "";
-      let amount = 0;
-
-      if (data === "buy_50_coins") {
-        title = "50 монет";
-        description = "Покупка 50 монет за 5 Telegram Stars";
-        payload = "coins_50";
-        amount = 5;
-      }
-
-      if (data === "buy_100_coins") {
-        title = "100 монет";
-        description = "Покупка 100 монет за 10 Telegram Stars";
-        payload = "coins_100";
-        amount = 10;
-      }
-
-      if (data === "buy_200_coins") {
-        title = "200 монет";
-        description = "Покупка 200 монет за 20 Telegram Stars";
-        payload = "coins_200";
-        amount = 20;
-      }
-
-      if (data === "buy_300_coins") {
-        title = "300 монет";
-        description = "Покупка 300 монет за 30 Telegram Stars";
-        payload = "coins_300";
-        amount = 30;
-      }
-
       await bot.sendInvoice(
         chatId,
-        title,
-        description,
-        payload,
+        "50 монет",
+        "Покупка 50 монет за 5 Telegram Stars",
+        "coins_50",
         "",
         "XTR",
-        [{ label: title, amount }]
+        [{ label: "50 монет", amount: 5 }]
       );
       return;
     }
@@ -2791,65 +2858,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     // =========================
-    // ADMIN GIVE COINS
-    // =========================
-    if (lowerText.startsWith("выдать монеты")) {
-      if (Number(msg.from.id) !== ADMIN_ID) {
-        await safeSendMessage(msg.chat.id, "❌ Эта команда доступна только владельцу бота.");
-        return;
-      }
-
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение участника и напиши: выдать монеты 100"
-        );
-        return;
-      }
-
-      const match = lowerText.match(/^выдать монеты\s+(\d+)$/);
-      const amount = match ? Number(match[1]) : NaN;
-
-      if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: выдать монеты 100"
-        );
-        return;
-      }
-
-      try {
-        await initUser(target);
-        await saveSeenUser(msg.chat.id, target);
-
-        const result = await addCoinsToUser(target.id, amount);
-
-        await safeSendMessage(
-          msg.chat.id,
-          `👑 ${getUserLink(msg.from)} выдал(а) ${getUserLink(target)} ${amount} монет
-
-💰 Новый баланс ${escapeHtml(getUserName(target))}: ${result.balance}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-      } catch (error) {
-        if (error.message === "USER_NOT_FOUND") {
-          await safeSendMessage(msg.chat.id, "❌ Пользователь не найден.");
-          return;
-        }
-
-        console.error("Ошибка выдачи монет админом:", error);
-        await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
-      }
-
-      return;
-    }
-
-    // =========================
     // PUNISHMENT COMMANDS
     // =========================
     if (lowerText.startsWith("наказать ребенка")) {
@@ -2882,6 +2890,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       const punishment = await setPunishment(parent.id, child.id, days);
+      await changeChildObedience(child.id, -10);
 
       await safeSendMessage(
         msg.chat.id,
@@ -2925,6 +2934,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
         return;
       }
 
+      await changeChildObedience(child.id, 5);
+
       await safeSendMessage(
         msg.chat.id,
         `✅ ${getUserLink(parent)} снял(а) наказание с ${getUserLink(child)}.`,
@@ -2966,6 +2977,301 @@ ${escapeHtml(parsed.actionText)} — текст бота
 • нельзя просить деньги
 • нельзя получать карманные деньги
 • нельзя брать из семейного бюджета`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // GOOD DEEDS / OBEDIENCE
+    // =========================
+    if (isExactCommand(lowerText, "похвалить ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка"
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(parent.id, child.id);
+      if (!isChild) {
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь хвалить только своего ребёнка.");
+        return;
+      }
+
+      const obedience = await changeChildObedience(child.id, 5);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🌟 ${getUserLink(parent)} похвалил(а) ${getUserLink(child)}!
+
+📈 Послушание: ${Number(obedience.value || 0)}/100`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("наградить ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20"
+        );
+        return;
+      }
+
+      const match = lowerText.match(/^наградить ребенка\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20"
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(parent.id, child.id);
+      if (!isChild) {
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь награждать только своего ребёнка.");
+        return;
+      }
+
+      try {
+        const transferResult = await transferCoins(parent.id, child.id, amount);
+        const obedience = await changeChildObedience(child.id, 3);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🎁 ${getUserLink(parent)} наградил(а) ${getUserLink(child)} на ${amount} монет!
+
+👛 Баланс ${escapeHtml(getUserName(parent))}: ${transferResult.fromBalance}
+👛 Баланс ${escapeHtml(getUserName(child))}: ${transferResult.toBalance}
+📈 Послушание: ${Number(obedience.value || 0)}/100`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка награды ребёнку:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка награждения ребёнка.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("добавить доброе дело")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому"
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(parent.id, child.id);
+      if (!isChild) {
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь добавлять добрые дела только своему ребёнку.");
+        return;
+      }
+
+      const deedText = text.slice("добавить доброе дело".length).trim();
+      if (!deedText || deedText.length < 2) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Напиши так:\nдобавить доброе дело помог по дому"
+        );
+        return;
+      }
+
+      if (deedText.length > MAX_GOOD_DEED_LENGTH) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`
+        );
+        return;
+      }
+
+      await addGoodDeed(parent.id, child.id, deedText);
+      const obedience = await changeChildObedience(child.id, 3);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ ${getUserLink(parent)} добавил(а) доброе дело для ${getUserLink(child)}
+
+📔 Дело: ${escapeHtml(deedText)}
+📈 Послушание: ${Number(obedience.value || 0)}/100`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "список добрых дел")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Список добрых дел доступен только ребёнку в семье.");
+        return;
+      }
+
+      const deeds = await getGoodDeeds(targetUser.id);
+      if (!deeds.length) {
+        await safeSendMessage(
+          msg.chat.id,
+          `📔 У ${escapeHtml(getUserName(targetUser))} пока нет добрых дел.`,
+          { parse_mode: "HTML" }
+        );
+        return;
+      }
+
+      const lines = deeds.map((deed, index) => `${index + 1}. ${escapeHtml(deed.deed_text)}`);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `📔 Добрые дела ${getUserLink(targetUser)}
+
+${lines.join("\n")}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("удалить доброе дело")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1"
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(parent.id, child.id);
+      if (!isChild) {
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь удалять добрые дела только у своего ребёнка.");
+        return;
+      }
+
+      const match = lowerText.match(/^удалить доброе дело\s+(\d+)$/);
+      const index = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(index) || index <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи номер.\nПример: удалить доброе дело 1"
+        );
+        return;
+      }
+
+      const deleted = await deleteGoodDeedByIndex(child.id, index);
+      if (!deleted) {
+        await safeSendMessage(msg.chat.id, "❌ Доброго дела с таким номером нет.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🗑 ${getUserLink(parent)} удалил(а) доброе дело у ${getUserLink(child)}
+
+Удалено: ${escapeHtml(deleted.deed_text)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "очистить добрые дела")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела"
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(parent.id, child.id);
+      if (!isChild) {
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь очищать добрые дела только у своего ребёнка.");
+        return;
+      }
+
+      const deletedCount = await clearGoodDeeds(child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🧹 ${getUserLink(parent)} очистил(а) список добрых дел ${getUserLink(child)}
+
+Удалено записей: ${deletedCount}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "послушание")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Послушание доступно только ребёнку в семье.");
+        return;
+      }
+
+      const obedience = await getChildObedience(targetUser.id);
+      await safeSendMessage(
+        msg.chat.id,
+        `📈 Послушание ${getUserLink(targetUser)}
+
+Уровень: ${Number(obedience?.value || 0)}/100
+🕒 Обновлено: ${formatDateTime(obedience.updated_at)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -3652,11 +3958,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
         msg.chat.id,
         `🛒 Магазин
 
-Товары:
-💰 50 монет — 5 ⭐
-💰 100 монет — 10 ⭐
-💰 200 монет — 20 ⭐
-💰 300 монет — 30 ⭐`,
+Товар:
+💰 50 монет — 5 ⭐`,
         { reply_markup: getShopKeyboard() }
       );
       return;
@@ -3958,6 +4261,7 @@ ${getUserLink(child)}, выбери ниже:
           ? await getStoredUser(Number(parentPartnerInfo.partnerId))
           : null;
         const punishment = await getActivePunishment(targetUser.id);
+        const obedience = await getChildObedience(targetUser.id);
 
         let textFamily = `🏡 Семья
 
@@ -3969,6 +4273,7 @@ ${getUserLink(child)}, выбери ниже:
         }
 
         textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
+        textFamily += `\n📈 Послушание: ${Number(obedience?.value || 0)}/100`;
 
         if (punishment) {
           const remaining = new Date(punishment.until_at).getTime() - Date.now();
@@ -4020,6 +4325,7 @@ ${getUserLink(child)}, выбери ниже:
           const childUser = await getStoredUser(Number(childRow.child_user_id));
           const childId = Number(childRow.child_user_id);
           const punishment = await getActivePunishment(childId);
+          const obedience = await getChildObedience(childId);
 
           let line = "";
           if (favoriteChildId && favoriteChildId === childId) {
@@ -4027,6 +4333,8 @@ ${getUserLink(child)}, выбери ниже:
           } else {
             line += `• ${getUserLink(childUser)}`;
           }
+
+          line += `\n   📈 Послушание: ${Number(obedience?.value || 0)}/100`;
 
           if (punishment) {
             const remaining = new Date(punishment.until_at).getTime() - Date.now();
