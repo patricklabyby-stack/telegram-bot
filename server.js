@@ -139,6 +139,16 @@ function formatDate(dateValue) {
   return `${day}.${month}.${year}`;
 }
 
+function formatDateTime(dateValue) {
+  const date = new Date(dateValue);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, "0");
+  const mins = String(date.getMinutes()).padStart(2, "0");
+  return `${day}.${month}.${year} ${hours}:${mins}`;
+}
+
 function getRandomGift() {
   const gifts = [
     "шоколад 🍫",
@@ -539,6 +549,14 @@ async function initDb() {
       parent_user_id BIGINT PRIMARY KEY,
       child_user_id BIGINT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS family_budgets (
+      family_key TEXT PRIMARY KEY,
+      balance INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
 
@@ -1113,6 +1131,195 @@ async function canAdoptUser(parentUserId, targetUserId) {
 }
 
 // =========================
+// FAMILY BUDGET
+// =========================
+async function getFamilyKeyByUserId(userId) {
+  const childInfo = await getActiveAdoptionByChildId(userId);
+
+  if (childInfo) {
+    const parentId = Number(childInfo.parent_user_id);
+    const partnerInfo = await getMarriagePartner(parentId);
+
+    if (partnerInfo) {
+      const ids = [parentId, Number(partnerInfo.partnerId)].sort((a, b) => a - b);
+      return `married:${ids[0]}:${ids[1]}`;
+    }
+
+    return `single:${parentId}`;
+  }
+
+  const marriageInfo = await getMarriagePartner(userId);
+  if (marriageInfo) {
+    const ids = [Number(userId), Number(marriageInfo.partnerId)].sort((a, b) => a - b);
+    return `married:${ids[0]}:${ids[1]}`;
+  }
+
+  return null;
+}
+
+async function getFamilyBudget(userId) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) return null;
+
+  await pool.query(
+    `
+    INSERT INTO family_budgets (family_key, balance, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (family_key) DO NOTHING
+    `,
+    [familyKey]
+  );
+
+  const result = await pool.query(
+    `SELECT family_key, balance, updated_at FROM family_budgets WHERE family_key = $1 LIMIT 1`,
+    [familyKey]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function addToFamilyBudget(userId, amount) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) throw new Error("NO_FAMILY");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO family_budgets (family_key, balance, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (family_key) DO NOTHING
+      `,
+      [familyKey]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const currentBalance = Number(userRow.rows[0].balance || 0);
+    if (currentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, amount]
+    );
+
+    const familyBudgetRow = await client.query(
+      `
+      UPDATE family_budgets
+      SET balance = balance + $2,
+          updated_at = NOW()
+      WHERE family_key = $1
+      RETURNING balance, updated_at
+      `,
+      [familyKey, amount]
+    );
+
+    const updatedUserRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      familyKey,
+      familyBalance: Number(familyBudgetRow.rows[0].balance || 0),
+      userBalance: Number(updatedUserRow.rows[0].balance || 0),
+      updatedAt: familyBudgetRow.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function takeFromFamilyBudget(userId, amount) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) throw new Error("NO_FAMILY");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO family_budgets (family_key, balance, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (family_key) DO NOTHING
+      `,
+      [familyKey]
+    );
+
+    const budgetRow = await client.query(
+      `SELECT balance FROM family_budgets WHERE family_key = $1 FOR UPDATE`,
+      [familyKey]
+    );
+
+    if (!budgetRow.rows[0]) throw new Error("BUDGET_NOT_FOUND");
+
+    const currentBudget = Number(budgetRow.rows[0].balance || 0);
+    if (currentBudget < amount) throw new Error("NOT_ENOUGH_FAMILY_MONEY");
+
+    await client.query(
+      `
+      UPDATE family_budgets
+      SET balance = balance - $2,
+          updated_at = NOW()
+      WHERE family_key = $1
+      `,
+      [familyKey, amount]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const updatedUser = await client.query(
+      `
+      UPDATE users
+      SET balance = balance + $2
+      WHERE user_id = $1
+      RETURNING balance
+      `,
+      [userId, amount]
+    );
+
+    const updatedBudget = await client.query(
+      `SELECT balance, updated_at FROM family_budgets WHERE family_key = $1`,
+      [familyKey]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      familyKey,
+      familyBalance: Number(updatedBudget.rows[0].balance || 0),
+      userBalance: Number(updatedUser.rows[0].balance || 0),
+      updatedAt: updatedBudget.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// =========================
 // CUSTOM COMMANDS
 // =========================
 async function getUserCustomCommandCount(userId) {
@@ -1632,6 +1839,9 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 любимый ребенок
 убрать любимого ребенка
 карманные деньги 50
+семейный бюджет
+вложить в бюджет 5
+взять с бюджета 5
 он врет?
 врет?
 /createcommand
@@ -2070,6 +2280,128 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
+      return;
+    }
+
+    if (isExactCommand(lowerText, "семейный бюджет")) {
+      const budget = await getFamilyBudget(msg.from.id);
+
+      if (!budget) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ты не состоишь в семье. Семейный бюджет доступен только семье."
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏦 Семейный бюджет
+
+👤 Игрок: ${getUserLink(msg.from)}
+💰 В бюджете семьи: ${Number(budget.balance || 0)} монет
+🕒 Обновлён: ${formatDateTime(budget.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("вложить в бюджет")) {
+      const match = lowerText.match(/^вложить в бюджет\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5"
+        );
+        return;
+      }
+
+      try {
+        const result = await addToFamilyBudget(msg.from.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🏦 ${getUserLink(msg.from)} вложил(а) в семейный бюджет ${amount} монет
+
+💰 Бюджет семьи: ${result.familyBalance}
+👛 Твой баланс: ${result.userBalance}
+🕒 Обновлён: ${formatDateTime(result.updatedAt)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NO_FAMILY") {
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя."
+          );
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка вложения в семейный бюджет:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения семейного бюджета.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("взять с бюджета")) {
+      const match = lowerText.match(/^взять с бюджета\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5"
+        );
+        return;
+      }
+
+      try {
+        const result = await takeFromFamilyBudget(msg.from.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🏦 ${getUserLink(msg.from)} взял(а) из семейного бюджета ${amount} монет
+
+💰 Бюджет семьи: ${result.familyBalance}
+👛 Твой баланс: ${result.userBalance}
+🕒 Обновлён: ${formatDateTime(result.updatedAt)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NO_FAMILY") {
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя."
+          );
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_FAMILY_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ В семейном бюджете недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка снятия с семейного бюджета:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка снятия денег из семейного бюджета.");
+      }
+
       return;
     }
 
