@@ -11,6 +11,8 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!token) throw new Error("BOT_TOKEN не найден");
 if (!databaseUrl) throw new Error("DATABASE_URL не найден");
 
+const ADMIN_ID = 7837011810;
+
 const bot = new TelegramBot(token, { polling: true });
 
 const pool = new Pool({
@@ -747,6 +749,26 @@ async function transferCoins(fromUserId, toUserId, amount) {
   }
 }
 
+async function addCoinsToUser(targetUserId, amount) {
+  const result = await pool.query(
+    `
+    UPDATE users
+    SET balance = balance + $2
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [targetUserId, amount]
+  );
+
+  if (!result.rows[0]) {
+    throw new Error("USER_NOT_FOUND");
+  }
+
+  return {
+    balance: Number(result.rows[0].balance || 0)
+  };
+}
+
 async function processStarPurchase(userId, successfulPayment) {
   const client = await pool.connect();
 
@@ -770,16 +792,10 @@ async function processStarPurchase(userId, successfulPayment) {
     }
 
     let coinsToAdd = 0;
-
-    if (successfulPayment.invoice_payload === "coins_50") {
-      coinsToAdd = 50;
-    } else if (successfulPayment.invoice_payload === "coins_100") {
-      coinsToAdd = 100;
-    } else if (successfulPayment.invoice_payload === "coins_200") {
-      coinsToAdd = 200;
-    } else if (successfulPayment.invoice_payload === "coins_300") {
-      coinsToAdd = 300;
-    }
+    if (successfulPayment.invoice_payload === "coins_50") coinsToAdd = 50;
+    if (successfulPayment.invoice_payload === "coins_100") coinsToAdd = 100;
+    if (successfulPayment.invoice_payload === "coins_200") coinsToAdd = 200;
+    if (successfulPayment.invoice_payload === "coins_300") coinsToAdd = 300;
 
     await client.query(
       `
@@ -1242,26 +1258,6 @@ async function removePunishment(childUserId) {
   );
 
   return result.rows[0] || null;
-}
-
-async function getPunishmentTextForChild(childUserId) {
-  const punishment = await getActivePunishment(childUserId);
-  if (!punishment) return null;
-
-  const remaining = new Date(punishment.until_at).getTime() - Date.now();
-  const punisher = await getStoredUser(Number(punishment.punished_by_user_id));
-
-  return `⛔ Наказание активно
-
-👶 Ребёнок: ${getUserLink(await getStoredUser(childUserId))}
-👨 Наказал(а): ${getUserLink(punisher)}
-🕒 До: ${formatDateTime(punishment.until_at)}
-⏳ Осталось: ${formatRemainingTime(remaining)}
-
-📌 Ограничения:
-• нельзя просить деньги
-• нельзя получать карманные деньги
-• нельзя брать из семейного бюджета`;
 }
 
 async function getPunishedBlockText(childUserId) {
@@ -2316,11 +2312,8 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • он врет?
 • врет?
 
-<b>🛒 Магазин Stars</b>
-• 50 монет — 5 ⭐
-• 100 монет — 10 ⭐
-• 200 монет — 20 ⭐
-• 300 монет — 30 ⭐
+<b>👑 Владелец</b>
+• выдать монеты 100
 
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
@@ -2577,17 +2570,23 @@ bot.on("callback_query", async (query) => {
         description = "Покупка 50 монет за 5 Telegram Stars";
         payload = "coins_50";
         amount = 5;
-      } else if (data === "buy_100_coins") {
+      }
+
+      if (data === "buy_100_coins") {
         title = "100 монет";
         description = "Покупка 100 монет за 10 Telegram Stars";
         payload = "coins_100";
         amount = 10;
-      } else if (data === "buy_200_coins") {
+      }
+
+      if (data === "buy_200_coins") {
         title = "200 монет";
         description = "Покупка 200 монет за 20 Telegram Stars";
         payload = "coins_200";
         amount = 20;
-      } else if (data === "buy_300_coins") {
+      }
+
+      if (data === "buy_300_coins") {
         title = "300 монет";
         description = "Покупка 300 монет за 30 Telegram Stars";
         payload = "coins_300";
@@ -2788,6 +2787,65 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
+      return;
+    }
+
+    // =========================
+    // ADMIN GIVE COINS
+    // =========================
+    if (lowerText.startsWith("выдать монеты")) {
+      if (Number(msg.from.id) !== ADMIN_ID) {
+        await safeSendMessage(msg.chat.id, "❌ Эта команда доступна только владельцу бота.");
+        return;
+      }
+
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение участника и напиши: выдать монеты 100"
+        );
+        return;
+      }
+
+      const match = lowerText.match(/^выдать монеты\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: выдать монеты 100"
+        );
+        return;
+      }
+
+      try {
+        await initUser(target);
+        await saveSeenUser(msg.chat.id, target);
+
+        const result = await addCoinsToUser(target.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `👑 ${getUserLink(msg.from)} выдал(а) ${getUserLink(target)} ${amount} монет
+
+💰 Новый баланс ${escapeHtml(getUserName(target))}: ${result.balance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "USER_NOT_FOUND") {
+          await safeSendMessage(msg.chat.id, "❌ Пользователь не найден.");
+          return;
+        }
+
+        console.error("Ошибка выдачи монет админом:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
+      }
+
       return;
     }
 
@@ -3594,13 +3652,11 @@ ${escapeHtml(parsed.actionText)} — текст бота
         msg.chat.id,
         `🛒 Магазин
 
-Доступные товары:
+Товары:
 💰 50 монет — 5 ⭐
 💰 100 монет — 10 ⭐
 💰 200 монет — 20 ⭐
-💰 300 монет — 30 ⭐
-
-Нажми на кнопку ниже, чтобы купить.`,
+💰 300 монет — 30 ⭐`,
         { reply_markup: getShopKeyboard() }
       );
       return;
