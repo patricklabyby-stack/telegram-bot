@@ -23,7 +23,6 @@ const recentActiveUsers = {};
 const activeBombs = {};
 const pendingCommandCreation = {};
 
-// Хранилища заявок
 const pendingMarriagesByRequestId = {};
 const pendingMarriagesByUserKey = {};
 const pendingAdoptionsByRequestId = {};
@@ -305,16 +304,16 @@ function cleanupPendingRequests() {
   for (const requestId of Object.keys(pendingMarriagesByRequestId)) {
     const req = pendingMarriagesByRequestId[requestId];
     if (!req || isRequestExpired(req.createdAt, MARRIAGE_REQUEST_MS)) {
+      if (req?.userKey) delete pendingMarriagesByUserKey[req.userKey];
       delete pendingMarriagesByRequestId[requestId];
-      delete pendingMarriagesByUserKey[req.userKey];
     }
   }
 
   for (const requestId of Object.keys(pendingAdoptionsByRequestId)) {
     const req = pendingAdoptionsByRequestId[requestId];
     if (!req || isRequestExpired(req.createdAt, ADOPTION_REQUEST_MS)) {
+      if (req?.userKey) delete pendingAdoptionsByUserKey[req.userKey];
       delete pendingAdoptionsByRequestId[requestId];
-      delete pendingAdoptionsByUserKey[req.userKey];
     }
   }
 }
@@ -2045,7 +2044,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // Ответ текстом на брак
     const pendingMarriage = findMarriageRequestByUser(msg.chat.id, msg.from.id);
     if (pendingMarriage && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
       if (isExactCommand(lowerText, "нет")) {
@@ -2057,7 +2055,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // Ответ текстом на усыновление
     const pendingAdoption = findAdoptionRequestByUser(msg.chat.id, msg.from.id);
     if (pendingAdoption && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
       if (isExactCommand(lowerText, "нет")) {
@@ -2206,12 +2203,7 @@ ${getUserLink(target)}, выбери ниже:
 ✅ Да
 ❌ Нет
 
-⌛ У вас есть 10 минут.
-
-Можно также ответить текстом:
-да
-или
-нет`,
+⌛ У вас есть 10 минут.`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true,
@@ -2305,12 +2297,7 @@ ${getUserLink(child)}, выбери ниже:
 ✅ Да
 ❌ Нет
 
-⌛ У вас есть 10 минут.
-
-Можно также ответить текстом:
-да
-или
-нет`;
+⌛ У вас есть 10 минут.`;
 
       const sent = await safeSendMessage(msg.chat.id, requestText, {
         parse_mode: "HTML",
