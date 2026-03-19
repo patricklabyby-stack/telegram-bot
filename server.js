@@ -2112,71 +2112,89 @@ const rpCommands = {
 bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   await safeSendMessage(
     msg.chat.id,
-    `🔥 RP BOT
+    `🔥 <b>Мини Модератор — чат бот для Telegram групп</b>
 
-Команды:
-убить
-обнять
-поцеловать
-ударить
-укусить
-погладить
-пнуть
-шлепнуть
-врезать
-лизнуть
-украсть
-заскамить
-уничтожить
-разбудить
-заморозить
-спасти
-подарок
-респект
-кто ...
-оценка
-прогноз
-деньги
-охота
-снайпер
-пара
-магазин
-бомба
-передать
-брак
-зарегистрироваться в брак
-развод
-семья
-усыновить
-отказаться от ребенка
-сбежать из семьи
-любимый ребенок
-убрать любимого ребенка
-карманные деньги 50
-семейный бюджет
-вложить в бюджет 5
-взять с бюджета 5
-попросить денег 5
-дать ребенку 5
-создать копилку
-копилка
-пополнить копилку 5
-разбить копилку
-загадать мечту айфон
-моя мечта
-удалить мечту
-пополнить баланс на мечту 5
-на мечту 5
-он врет?
-врет?
-/createcommand
-/mycommands
-/deletecommand
-/balance
-/cooldowns
+<b>📚 Разделы бота:</b>
 
-/profile — показать свой профиль
-/profile ответом — показать профиль игрока`
+<b>👨‍👩‍👧 Семья</b>
+• брак
+• зарегистрироваться в брак
+• развод
+• семья
+• усыновить
+• отказаться от ребенка
+• сбежать из семьи
+• любимый ребенок
+• убрать любимого ребенка
+• карманные деньги 50
+• попросить денег 5
+• дать ребенку 5
+• семейный бюджет
+• вложить в бюджет 5
+• взять с бюджета 5
+• создать копилку
+• копилка
+• пополнить копилку 5
+• разбить копилку
+• загадать мечту айфон
+• моя мечта
+• удалить мечту
+• пополнить баланс на мечту 5
+• на мечту 5
+
+<b>💰 Деньги</b>
+• деньги
+• охота
+• снайпер
+• магазин
+• /balance
+• /cooldowns
+
+<b>👤 Профиль</b>
+• /profile
+• /profile ответом
+• респект
+
+<b>🎭 RP команды</b>
+• убить
+• обнять
+• поцеловать
+• ударить
+• укусить
+• погладить
+• пнуть
+• шлепнуть
+• врезать
+• лизнуть
+• украсть
+• заскамить
+• уничтожить
+• разбудить
+• заморозить
+• спасти
+• подарок
+
+<b>🛠 Свои команды</b>
+• /createcommand
+• /mycommands
+• /deletecommand
+
+<b>🎮 Игры и фан</b>
+• бомба
+• передать
+• пара
+• кто ...
+• оценка
+• прогноз
+• он врет?
+• врет?
+
+<b>ℹ️ Подсказка</b>
+Многие команды работают <b>ответом на сообщение</b> игрока.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 });
 
@@ -3558,6 +3576,7 @@ ${getUserLink(child)}, выбери ниже:
         const secondParent = parentPartnerInfo
           ? await getStoredUser(Number(parentPartnerInfo.partnerId))
           : null;
+        const dream = await getChildDream(targetUser.id);
 
         let textFamily = `🏡 Семья
 
@@ -3569,6 +3588,14 @@ ${getUserLink(child)}, выбери ниже:
         }
 
         textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
+
+        if (dream) {
+          textFamily += `\n\n🌟 Мечта:
+🎯 ${escapeHtml(dream.dream_text)}
+💰 Баланс мечты: ${Number(dream.dream_balance || 0)}`;
+        } else {
+          textFamily += `\n\n🌟 Мечта: нет`;
+        }
 
         await safeSendMessage(msg.chat.id, textFamily, {
           parse_mode: "HTML",
@@ -3610,12 +3637,21 @@ ${getUserLink(child)}, выбери ниже:
         for (const childRow of children) {
           const childUser = await getStoredUser(Number(childRow.child_user_id));
           const childId = Number(childRow.child_user_id);
+          const childDream = await getChildDream(childId);
 
+          let line = "";
           if (favoriteChildId && favoriteChildId === childId) {
-            childLines.push(`⭐ ${getUserLink(childUser)} — любимый`);
+            line += `⭐ ${getUserLink(childUser)} — любимый`;
           } else {
-            childLines.push(`• ${getUserLink(childUser)}`);
+            line += `• ${getUserLink(childUser)}`;
           }
+
+          if (childDream) {
+            line += `\n   🌟 Мечта: ${escapeHtml(childDream.dream_text)}`
+            line += `\n   💰 Баланс мечты: ${Number(childDream.dream_balance || 0)}`;
+          }
+
+          childLines.push(line);
         }
 
         familyText += `\n\n👶 Дети:\n${childLines.join("\n")}`;
