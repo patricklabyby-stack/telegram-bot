@@ -465,6 +465,7 @@ async function initDb() {
       destroys INTEGER DEFAULT 0,
       wakes INTEGER DEFAULT 0,
       freezes INTEGER DEFAULT 0,
+      saves INTEGER DEFAULT 0,
       balance INTEGER DEFAULT 0,
       respect INTEGER DEFAULT 0,
       last_daily_at TIMESTAMPTZ,
@@ -540,6 +541,8 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
 }
@@ -629,7 +632,8 @@ async function getProfileOwnerByMessageId(messageId) {
 async function incrementStat(targetUserId, statField) {
   const allowedFields = [
     "kills", "hugs", "kisses", "hits", "bites", "pats", "kicks", "slaps",
-    "punches", "licks", "steals", "scams", "destroys", "wakes", "freezes"
+    "punches", "licks", "steals", "scams", "destroys", "wakes", "freezes",
+    "saves"
   ];
 
   if (!allowedFields.includes(statField)) return;
@@ -1334,6 +1338,7 @@ ID: ${user.id}
 ☠️ Уничтожили: ${stats.destroys}
 ⏰ Разбудили: ${stats.wakes}
 🧊 Заморозили: ${stats.freezes}
+🛡️ Спасли: ${stats.saves}
 
 🔥 Всего взаимодействий: ${stats.total}`;
 }
@@ -1576,7 +1581,8 @@ const rpCommands = {
   "заскамить": { text: "заскамил", stat: "scams", emoji: "💸" },
   "уничтожить": { text: "уничтожил", stat: "destroys", emoji: "☠️" },
   "разбудить": { text: "разбудил", stat: "wakes", emoji: "⏰" },
-  "заморозить": { text: "заморозил", stat: "freezes", emoji: "🧊" }
+  "заморозить": { text: "заморозил", stat: "freezes", emoji: "🧊" },
+  "спасти": { text: "спас", stat: "saves", emoji: "🛡️" }
 };
 
 // =========================
@@ -1603,6 +1609,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 уничтожить
 разбудить
 заморозить
+спасти
 подарок
 респект
 кто ...
