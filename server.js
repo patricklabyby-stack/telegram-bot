@@ -356,7 +356,7 @@ function getRecentActiveCandidates(chatId, excludeUserIds = []) {
   return users.filter((user) => {
     if (!user || !user.id) return false;
     if (excludeUserIds.includes(user.id)) return false;
-    return (now - (user.last_seen_at || 0)) <= ACTIVE_WINDOW_MS;
+    return now - (user.last_seen_at || 0) <= ACTIVE_WINDOW_MS;
   });
 }
 
@@ -625,10 +625,7 @@ async function saveSeenUser(chatId, user) {
 }
 
 async function getUserStats(userId) {
-  const result = await pool.query(
-    `SELECT * FROM users WHERE user_id = $1`,
-    [userId]
-  );
+  const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
   return result.rows[0] || null;
 }
 
@@ -693,7 +690,6 @@ async function transferCoins(fromUserId, toUserId, amount) {
       `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
       [fromUserId]
     );
-
     const toResult = await client.query(
       `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
       [toUserId]
@@ -704,7 +700,6 @@ async function transferCoins(fromUserId, toUserId, amount) {
     }
 
     const fromBalance = Number(fromResult.rows[0].balance || 0);
-
     if (fromBalance < amount) {
       throw new Error("NOT_ENOUGH_MONEY");
     }
@@ -1371,14 +1366,20 @@ async function resolveTargetUserFromReply(msg) {
 
   const replyMsg = msg.reply_to_message;
 
-  const profileOwnerId = await getProfileOwnerByMessageId(replyMsg.message_id);
-  if (profileOwnerId) {
-    return await getStoredUser(profileOwnerId);
-  }
-
   if (replyMsg.from && !replyMsg.from.is_bot) {
     await initUser(replyMsg.from);
-    return replyMsg.from;
+    return {
+      id: Number(replyMsg.from.id),
+      first_name: replyMsg.from.first_name || "",
+      last_name: replyMsg.from.last_name || "",
+      username: replyMsg.from.username || ""
+    };
+  }
+
+  const profileOwnerId = await getProfileOwnerByMessageId(replyMsg.message_id);
+  if (profileOwnerId) {
+    const storedUser = await getStoredUser(profileOwnerId);
+    if (storedUser) return storedUser;
   }
 
   return null;
@@ -1875,12 +1876,14 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       delete pendingAdoptions[adoptionAnswerKey];
       await removeInlineKeyboard(chatId, messageId);
 
+      const spouseUser = await getStoredUser(parentMarriage.partnerId);
+
       await safeSendMessage(
         chatId,
         `👶 Усыновление прошло успешно!
 
 ${getUserLink(pendingAdoption.parentUser)} теперь родитель для ${getUserLink(pendingAdoption.childUser)}
-💍 Второй родитель: ${getUserLink(await getStoredUser(parentMarriage.partnerId))}
+💍 Второй родитель: ${getUserLink(spouseUser)}
 📅 Дата: ${formatDate(adoption.created_at)}`,
         {
           parse_mode: "HTML",
@@ -2164,19 +2167,13 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       const bombKey = getBombChatKey(msg.chat.id);
 
       if (activeBombs[bombKey]) {
-        await safeSendMessage(
-          msg.chat.id,
-          "💣 Бомба уже запущена. Дождись, пока она взорвётся."
-        );
+        await safeSendMessage(msg.chat.id, "💣 Бомба уже запущена. Дождись, пока она взорвётся.");
         return;
       }
 
       const candidates = getRecentActiveCandidates(msg.chat.id);
       if (candidates.length < 2) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Нужно хотя бы 2 активных человека в чате."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Нужно хотя бы 2 активных человека в чате.");
         return;
       }
 
@@ -2340,10 +2337,7 @@ ${getUserLink(target)}, выбери ниже:
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение игрока и напиши: усыновить"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: усыновить");
         return;
       }
 
@@ -2451,10 +2445,7 @@ ${getUserLink(child)}, выбери ниже:
       const removed = await removeChildFromParent(parent.id, child.id);
 
       if (!removed) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Этот игрок не является твоим ребёнком."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Этот игрок не является твоим ребёнком.");
         return;
       }
 
@@ -2510,10 +2501,7 @@ ${getUserLink(child)}, выбери ниже:
       const isChild = await isChildInMyFamily(parent.id, child.id);
 
       if (!isChild) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Любимым можно сделать только своего ребёнка."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Любимым можно сделать только своего ребёнка.");
         return;
       }
 
@@ -2535,10 +2523,7 @@ ${getUserLink(child)}, выбери ниже:
       const removedFavorite = await removeFavoriteChild(parent.id);
 
       if (!removedFavorite) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ У тебя пока нет любимого ребёнка."
-        );
+        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет любимого ребёнка.");
         return;
       }
 
@@ -2662,10 +2647,7 @@ ${getUserLink(child)}, выбери ниже:
 
       const isChild = await isChildInMyFamily(sender.id, target.id);
       if (!isChild) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ты можешь давать карманные деньги только своему ребёнку."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь давать карманные деньги только своему ребёнку.");
         return;
       }
 
@@ -2705,10 +2687,7 @@ ${getUserLink(child)}, выбери ниже:
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "Ответь на сообщение человека и напиши: он врет?"
-        );
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: он врет?");
         return;
       }
 
@@ -2730,10 +2709,7 @@ ${getUserLink(child)}, выбери ниже:
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "Ответь на сообщение человека и напиши: респект"
-        );
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: респект");
         return;
       }
 
@@ -2970,10 +2946,7 @@ ${coinsLine}
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "Ответь на сообщение человека и напиши: подарок"
-        );
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: подарок");
         return;
       }
 
@@ -3011,10 +2984,7 @@ ${coinsLine}
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "Ответь на сообщение человека этой командой."
-        );
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
         return;
       }
 
