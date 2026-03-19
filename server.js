@@ -1012,22 +1012,6 @@ async function childEscapeFamily(childUserId) {
   return result.rows[0] || null;
 }
 
-async function isMyChild(parentUserId, childUserId) {
-  const result = await pool.query(
-    `
-    SELECT *
-    FROM adoptions
-    WHERE parent_user_id = $1
-      AND child_user_id = $2
-      AND is_active = TRUE
-    LIMIT 1
-    `,
-    [parentUserId, childUserId]
-  );
-
-  return !!result.rows[0];
-}
-
 async function isChildInMyFamily(parentUserId, childUserId) {
   const parentIds = await getFamilyParentIds(parentUserId);
 
@@ -1710,9 +1694,6 @@ bot.on("callback_query", async (query) => {
 
     await safeAnswerCallback(query);
 
-    // =========================
-    // BUY COINS
-    // =========================
     if (data === "buy_50_coins") {
       await initUser(query.from);
       await saveSeenUser(chatId, query.from);
@@ -1729,9 +1710,6 @@ bot.on("callback_query", async (query) => {
       return;
     }
 
-    // =========================
-    // MARRIAGE BUTTONS
-    // =========================
     if (data.startsWith("marriage_yes:") || data.startsWith("marriage_no:")) {
       const parts = data.split(":");
       const action = parts[0];
@@ -1743,7 +1721,6 @@ bot.on("callback_query", async (query) => {
 
       const marriageAnswerKey = getMarriageKey(chatId, targetUserId);
       const pendingMarriage = pendingMarriages[marriageAnswerKey];
-
       if (!pendingMarriage) return;
 
       const isExpired = Date.now() - pendingMarriage.createdAt > MARRIAGE_REQUEST_MS;
@@ -1779,6 +1756,16 @@ bot.on("callback_query", async (query) => {
         return;
       }
 
+      const senderChildRole = await getActiveAdoptionByChildId(pendingMarriage.fromUser.id);
+      const targetChildRole = await getActiveAdoptionByChildId(pendingMarriage.targetUser.id);
+
+      if (senderChildRole || targetChildRole) {
+        delete pendingMarriages[marriageAnswerKey];
+        await removeInlineKeyboard(chatId, messageId);
+        await safeSendMessage(chatId, "❌ Игрок в роли ребёнка не может вступить в брак.");
+        return;
+      }
+
       const marriage = await createMarriage(
         pendingMarriage.fromUser.id,
         pendingMarriage.targetUser.id
@@ -1803,9 +1790,6 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       return;
     }
 
-    // =========================
-    // ADOPTION BUTTONS
-    // =========================
     if (data.startsWith("adoption_yes:") || data.startsWith("adoption_no:")) {
       const parts = data.split(":");
       const action = parts[0];
@@ -1817,7 +1801,6 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
 
       const adoptionAnswerKey = getAdoptionKey(chatId, targetUserId);
       const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
-
       if (!pendingAdoption) return;
 
       const isExpired = Date.now() - pendingAdoption.createdAt > ADOPTION_REQUEST_MS;
@@ -1844,8 +1827,14 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       }
 
       const parentMarriage = await getMarriagePartner(pendingAdoption.parentUser.id);
+      if (!parentMarriage) {
+        delete pendingAdoptions[adoptionAnswerKey];
+        await removeInlineKeyboard(chatId, messageId);
+        await safeSendMessage(chatId, "❌ Усыновлять ребёнка могут только люди в браке.");
+        return;
+      }
 
-      if (parentMarriage && Number(parentMarriage.partnerId) === Number(pendingAdoption.childUser.id)) {
+      if (Number(parentMarriage.partnerId) === Number(pendingAdoption.childUser.id)) {
         delete pendingAdoptions[adoptionAnswerKey];
         await removeInlineKeyboard(chatId, messageId);
         await safeSendMessage(chatId, "❌ Нельзя усыновить своего супруга(у).");
@@ -1891,6 +1880,7 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
         `👶 Усыновление прошло успешно!
 
 ${getUserLink(pendingAdoption.parentUser)} теперь родитель для ${getUserLink(pendingAdoption.childUser)}
+💍 Второй родитель: ${getUserLink(await getStoredUser(parentMarriage.partnerId))}
 📅 Дата: ${formatDate(adoption.created_at)}`,
         {
           parse_mode: "HTML",
@@ -2053,6 +2043,15 @@ ${escapeHtml(parsed.actionText)} — текст бота
         return;
       }
 
+      const senderChildRole = await getActiveAdoptionByChildId(pendingMarriage.fromUser.id);
+      const targetChildRole = await getActiveAdoptionByChildId(pendingMarriage.targetUser.id);
+
+      if (senderChildRole || targetChildRole) {
+        await safeSendMessage(msg.chat.id, "❌ Игрок в роли ребёнка не может вступить в брак.");
+        delete pendingMarriages[marriageAnswerKey];
+        return;
+      }
+
       const marriage = await createMarriage(
         pendingMarriage.fromUser.id,
         pendingMarriage.targetUser.id
@@ -2102,8 +2101,13 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
       }
 
       const parentMarriage = await getMarriagePartner(pendingAdoption.parentUser.id);
+      if (!parentMarriage) {
+        await safeSendMessage(msg.chat.id, "❌ Усыновлять ребёнка могут только люди в браке.");
+        delete pendingAdoptions[adoptionAnswerKey];
+        return;
+      }
 
-      if (parentMarriage && Number(parentMarriage.partnerId) === Number(pendingAdoption.childUser.id)) {
+      if (Number(parentMarriage.partnerId) === Number(pendingAdoption.childUser.id)) {
         await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить своего супруга(у).");
         delete pendingAdoptions[adoptionAnswerKey];
         return;
@@ -2137,11 +2141,14 @@ ${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetU
         return;
       }
 
+      const spouseUser = await getStoredUser(parentMarriage.partnerId);
+
       await safeSendMessage(
         msg.chat.id,
         `👶 Усыновление прошло успешно!
 
 ${getUserLink(pendingAdoption.parentUser)} теперь родитель для ${getUserLink(pendingAdoption.childUser)}
+💍 Второй родитель: ${getUserLink(spouseUser)}
 📅 Дата: ${formatDate(adoption.created_at)}`,
         {
           parse_mode: "HTML",
@@ -2333,7 +2340,10 @@ ${getUserLink(target)}, выбери ниже:
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: усыновить");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение игрока и напиши: усыновить"
+        );
         return;
       }
 
@@ -2345,14 +2355,19 @@ ${getUserLink(target)}, выбери ниже:
         return;
       }
 
+      const parentMarriage = await getMarriagePartner(parent.id);
+      if (!parentMarriage) {
+        await safeSendMessage(msg.chat.id, "❌ Усыновлять ребёнка могут только люди в браке.");
+        return;
+      }
+
       const parentChildRole = await getActiveAdoptionByChildId(parent.id);
       if (parentChildRole) {
         await safeSendMessage(msg.chat.id, "❌ Ребёнок не может усыновлять других игроков.");
         return;
       }
 
-      const parentMarriage = await getMarriagePartner(parent.id);
-      if (parentMarriage && Number(parentMarriage.partnerId) === Number(child.id)) {
+      if (Number(parentMarriage.partnerId) === Number(child.id)) {
         await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить своего супруга(у).");
         return;
       }
@@ -2360,6 +2375,12 @@ ${getUserLink(target)}, выбери ниже:
       const existingParent = await getActiveAdoptionByChildId(child.id);
       if (existingParent) {
         await safeSendMessage(msg.chat.id, "❌ У этого игрока уже есть семья.");
+        return;
+      }
+
+      const childMarriage = await getMarriagePartner(child.id);
+      if (childMarriage) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить игрока, который состоит в браке.");
         return;
       }
 
@@ -2390,9 +2411,11 @@ ${getUserLink(target)}, выбери ниже:
         createdAt: Date.now()
       };
 
+      const spouseUser = await getStoredUser(parentMarriage.partnerId);
+
       await safeSendMessage(
         msg.chat.id,
-        `👶 ${getUserLink(parent)} хочет усыновить ${getUserLink(child)}!
+        `👶 ${getUserLink(parent)} и ${getUserLink(spouseUser)} хотят усыновить ${getUserLink(child)}!
 
 ${getUserLink(child)}, выбери ниже:
 ✅ Да
