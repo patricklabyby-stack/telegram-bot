@@ -1,6 +1,7 @@
 const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
 const { Pool } = require("pg");
+const crypto = require("crypto");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,11 +19,15 @@ const pool = new Pool({
 });
 
 const chatMembers = {};
-const pendingCommandCreation = {};
-const activeBombs = {};
 const recentActiveUsers = {};
-const pendingMarriages = {};
-const pendingAdoptions = {};
+const activeBombs = {};
+const pendingCommandCreation = {};
+
+// Хранилища заявок
+const pendingMarriagesByRequestId = {};
+const pendingMarriagesByUserKey = {};
+const pendingAdoptionsByRequestId = {};
+const pendingAdoptionsByUserKey = {};
 
 const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const BOMB_TIMER_MS = 5000;
@@ -65,6 +70,10 @@ function isExactCommand(text, command) {
   return normalizeText(text) === normalizeText(command);
 }
 
+function generateRequestId(prefix) {
+  return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
+}
+
 function getUserName(user) {
   if (!user) return "Пользователь";
 
@@ -95,10 +104,7 @@ async function safeSendMessage(chatId, text, options = {}) {
 
 async function safeAnswerCallback(query, text = "", showAlert = false) {
   try {
-    await bot.answerCallbackQuery(query.id, {
-      text,
-      show_alert: showAlert
-    });
+    await bot.answerCallbackQuery(query.id, { text, show_alert: showAlert });
   } catch (error) {
     console.error("Ошибка answerCallbackQuery:", error?.message || error);
   }
@@ -236,23 +242,23 @@ function getShopKeyboard() {
   };
 }
 
-function getMarriageDecisionKeyboard(chatId, targetUserId) {
+function getMarriageDecisionKeyboard(requestId) {
   return {
     inline_keyboard: [
       [
-        { text: "✅ Да", callback_data: `marriage_yes:${chatId}:${targetUserId}` },
-        { text: "❌ Нет", callback_data: `marriage_no:${chatId}:${targetUserId}` }
+        { text: "✅ Да", callback_data: `marriage_yes:${requestId}` },
+        { text: "❌ Нет", callback_data: `marriage_no:${requestId}` }
       ]
     ]
   };
 }
 
-function getAdoptionDecisionKeyboard(chatId, targetUserId) {
+function getAdoptionDecisionKeyboard(requestId) {
   return {
     inline_keyboard: [
       [
-        { text: "✅ Да", callback_data: `adoption_yes:${chatId}:${targetUserId}` },
-        { text: "❌ Нет", callback_data: `adoption_no:${chatId}:${targetUserId}` }
+        { text: "✅ Да", callback_data: `adoption_yes:${requestId}` },
+        { text: "❌ Нет", callback_data: `adoption_no:${requestId}` }
       ]
     ]
   };
@@ -260,14 +266,6 @@ function getAdoptionDecisionKeyboard(chatId, targetUserId) {
 
 function getPendingKey(chatId, userId) {
   return `${chatId}:${userId}`;
-}
-
-function getMarriageKey(chatId, targetUserId) {
-  return `${chatId}:${targetUserId}`;
-}
-
-function getAdoptionKey(chatId, targetUserId) {
-  return `${chatId}:${targetUserId}`;
 }
 
 function addChatMember(chatId, user) {
@@ -295,6 +293,33 @@ function getRandomFromArray(arr) {
   if (!arr || !arr.length) return null;
   return arr[Math.floor(Math.random() * arr.length)];
 }
+
+function isRequestExpired(createdAt, ttlMs) {
+  return Date.now() - createdAt > ttlMs;
+}
+
+// =========================
+// CLEANUP
+// =========================
+function cleanupPendingRequests() {
+  for (const requestId of Object.keys(pendingMarriagesByRequestId)) {
+    const req = pendingMarriagesByRequestId[requestId];
+    if (!req || isRequestExpired(req.createdAt, MARRIAGE_REQUEST_MS)) {
+      delete pendingMarriagesByRequestId[requestId];
+      delete pendingMarriagesByUserKey[req.userKey];
+    }
+  }
+
+  for (const requestId of Object.keys(pendingAdoptionsByRequestId)) {
+    const req = pendingAdoptionsByRequestId[requestId];
+    if (!req || isRequestExpired(req.createdAt, ADOPTION_REQUEST_MS)) {
+      delete pendingAdoptionsByRequestId[requestId];
+      delete pendingAdoptionsByUserKey[req.userKey];
+    }
+  }
+}
+
+setInterval(cleanupPendingRequests, 60 * 1000);
 
 // =========================
 // BOMB
@@ -332,11 +357,7 @@ function getRecentActiveCandidates(chatId, excludeUserIds = []) {
 
 function clearBomb(chatId) {
   const key = getBombChatKey(chatId);
-
-  if (activeBombs[key]?.timer) {
-    clearTimeout(activeBombs[key].timer);
-  }
-
+  if (activeBombs[key]?.timer) clearTimeout(activeBombs[key].timer);
   delete activeBombs[key];
 }
 
@@ -383,10 +404,7 @@ async function passBomb(chatId, fromUser) {
   if (bomb.previousHolderId) excludeIds.push(bomb.previousHolderId);
 
   let candidates = getRecentActiveCandidates(chatId, excludeIds);
-
-  if (!candidates.length) {
-    candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
-  }
+  if (!candidates.length) candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
 
   if (!candidates.length) {
     clearBomb(chatId);
@@ -524,28 +542,6 @@ async function initDb() {
     )
   `);
 
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kills INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hugs INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kisses INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hits INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bites INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pats INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kicks INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS slaps INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS punches INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS licks INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS steals INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS scams INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS destroys INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS wakes INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS freezes INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS respect INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_hunt_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_sniper_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0`);
-
   console.log("✅ Database ready");
 }
 
@@ -675,22 +671,12 @@ async function transferCoins(fromUserId, toUserId, amount) {
     }
 
     const updatedFrom = await client.query(
-      `
-      UPDATE users
-      SET balance = balance - $2
-      WHERE user_id = $1
-      RETURNING balance
-      `,
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
       [fromUserId, amount]
     );
 
     const updatedTo = await client.query(
-      `
-      UPDATE users
-      SET balance = balance + $2
-      WHERE user_id = $1
-      RETURNING balance
-      `,
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
       [toUserId, amount]
     );
 
@@ -715,20 +701,12 @@ async function processStarPurchase(userId, successfulPayment) {
     await client.query("BEGIN");
 
     const existing = await client.query(
-      `
-      SELECT telegram_payment_charge_id
-      FROM star_purchases
-      WHERE telegram_payment_charge_id = $1
-      `,
+      `SELECT telegram_payment_charge_id FROM star_purchases WHERE telegram_payment_charge_id = $1`,
       [successfulPayment.telegram_payment_charge_id]
     );
 
     if (existing.rows.length > 0) {
-      const balanceRow = await client.query(
-        `SELECT balance FROM users WHERE user_id = $1`,
-        [userId]
-      );
-
+      const balanceRow = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [userId]);
       await client.query("COMMIT");
 
       return {
@@ -751,8 +729,7 @@ async function processStarPurchase(userId, successfulPayment) {
         payload,
         amount,
         currency
-      )
-      VALUES ($1, $2, $3, $4, $5)
+      ) VALUES ($1, $2, $3, $4, $5)
       `,
       [
         successfulPayment.telegram_payment_charge_id,
@@ -764,12 +741,7 @@ async function processStarPurchase(userId, successfulPayment) {
     );
 
     const balanceResult = await client.query(
-      `
-      UPDATE users
-      SET balance = COALESCE(balance, 0) + $2
-      WHERE user_id = $1
-      RETURNING balance
-      `,
+      `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
       [userId, coinsToAdd]
     );
 
@@ -829,13 +801,12 @@ async function getActiveMarriageByUserId(userId) {
 }
 
 async function isUserMarried(userId) {
-  const marriage = await getActiveMarriageByUserId(userId);
-  return !!marriage;
+  return !!(await getActiveMarriageByUserId(userId));
 }
 
 async function createMarriage(user1Id, user2Id) {
-  const smaller = Math.min(user1Id, user2Id);
-  const bigger = Math.max(user1Id, user2Id);
+  const smaller = Math.min(Number(user1Id), Number(user2Id));
+  const bigger = Math.max(Number(user1Id), Number(user2Id));
 
   const result = await pool.query(
     `
@@ -873,10 +844,7 @@ async function getMarriagePartner(userId) {
       ? Number(marriage.user2_id)
       : Number(marriage.user1_id);
 
-  return {
-    marriage,
-    partnerId
-  };
+  return { marriage, partnerId };
 }
 
 async function isSpouse(userId, targetUserId) {
@@ -890,7 +858,7 @@ async function isSpouse(userId, targetUserId) {
 }
 
 // =========================
-// ADOPTIONS / CHILDREN
+// ADOPTIONS / FAMILY
 // =========================
 async function getActiveAdoptionByChildId(childUserId) {
   const result = await pool.query(
@@ -926,11 +894,7 @@ async function getChildrenByParentIds(parentIds) {
 
 async function getFamilyParentIds(userId) {
   const marriagePartner = await getMarriagePartner(userId);
-
-  if (!marriagePartner) {
-    return [Number(userId)];
-  }
-
+  if (!marriagePartner) return [Number(userId)];
   return [Number(userId), Number(marriagePartner.partnerId)];
 }
 
@@ -948,12 +912,7 @@ async function createAdoption(parentUserId, childUserId) {
   const mainParentId = Number(familyParentIds[0]);
 
   const existingAny = await pool.query(
-    `
-    SELECT *
-    FROM adoptions
-    WHERE child_user_id = $1
-    LIMIT 1
-    `,
+    `SELECT * FROM adoptions WHERE child_user_id = $1 LIMIT 1`,
     [childUserId]
   );
 
@@ -1095,17 +1054,13 @@ async function getFavoriteChild(parentUserId) {
 
 async function removeFavoriteIfMatches(parentUserId, childUserId) {
   await pool.query(
-    `
-    DELETE FROM favorite_children
-    WHERE parent_user_id = $1 AND child_user_id = $2
-    `,
+    `DELETE FROM favorite_children WHERE parent_user_id = $1 AND child_user_id = $2`,
     [parentUserId, childUserId]
   );
 }
 
 async function isUserChild(userId) {
-  const adoption = await getActiveAdoptionByChildId(userId);
-  return !!adoption;
+  return !!(await getActiveAdoptionByChildId(userId));
 }
 
 async function canAdoptUser(parentUserId, targetUserId) {
@@ -1193,10 +1148,7 @@ async function getCustomCommandByTrigger(trigger) {
 
 async function createCustomCommand(userId, trigger, actionText) {
   await pool.query(
-    `
-    INSERT INTO custom_commands (user_id, trigger, action_text)
-    VALUES ($1, $2, $3)
-    `,
+    `INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`,
     [userId, trigger, actionText]
   );
 }
@@ -1234,11 +1186,7 @@ function isValidTrigger(trigger) {
 // GAME
 // =========================
 async function claimDailyCoins(userId) {
-  const result = await pool.query(
-    `SELECT balance, last_daily_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
+  const result = await pool.query(`SELECT balance, last_daily_at FROM users WHERE user_id = $1`, [userId]);
   if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
@@ -1247,12 +1195,8 @@ async function claimDailyCoins(userId) {
 
   if (lastDailyAt) {
     const nextTime = new Date(lastDailyAt.getTime() + DAILY_COOLDOWN_MS);
-
     if (now < nextTime) {
-      return {
-        ok: false,
-        remainingMs: nextTime.getTime() - now.getTime()
-      };
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
   }
 
@@ -1269,19 +1213,11 @@ async function claimDailyCoins(userId) {
     [userId, coins]
   );
 
-  return {
-    ok: true,
-    coins,
-    balance: updateResult.rows[0].balance
-  };
+  return { ok: true, coins, balance: updateResult.rows[0].balance };
 }
 
 async function runHunt(userId) {
-  const result = await pool.query(
-    `SELECT balance, last_hunt_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
+  const result = await pool.query(`SELECT balance, last_hunt_at FROM users WHERE user_id = $1`, [userId]);
   if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
@@ -1290,12 +1226,8 @@ async function runHunt(userId) {
 
   if (lastHuntAt) {
     const nextTime = new Date(lastHuntAt.getTime() + DAILY_COOLDOWN_MS);
-
     if (now < nextTime) {
-      return {
-        ok: false,
-        remainingMs: nextTime.getTime() - now.getTime()
-      };
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
   }
 
@@ -1314,19 +1246,11 @@ async function runHunt(userId) {
     [userId, newBalance]
   );
 
-  return {
-    ok: true,
-    hunt,
-    balance: updateResult.rows[0].balance
-  };
+  return { ok: true, hunt, balance: updateResult.rows[0].balance };
 }
 
 async function runSniper(userId) {
-  const result = await pool.query(
-    `SELECT balance, last_sniper_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
+  const result = await pool.query(`SELECT balance, last_sniper_at FROM users WHERE user_id = $1`, [userId]);
   if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
@@ -1335,12 +1259,8 @@ async function runSniper(userId) {
 
   if (lastSniperAt) {
     const nextTime = new Date(lastSniperAt.getTime() + DAILY_COOLDOWN_MS);
-
     if (now < nextTime) {
-      return {
-        ok: false,
-        remainingMs: nextTime.getTime() - now.getTime()
-      };
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
   }
 
@@ -1358,11 +1278,7 @@ async function runSniper(userId) {
     [userId, newBalance]
   );
 
-  return {
-    ok: true,
-    sniper,
-    balance: updateResult.rows[0].balance
-  };
+  return { ok: true, sniper, balance: updateResult.rows[0].balance };
 }
 
 async function getCooldownText(userId) {
@@ -1463,6 +1379,187 @@ async function resolveTargetUserFromReply(msg) {
 }
 
 // =========================
+// REQUEST HELPERS
+// =========================
+function saveMarriageRequest(request) {
+  pendingMarriagesByRequestId[request.requestId] = request;
+  pendingMarriagesByUserKey[request.userKey] = request.requestId;
+}
+
+function deleteMarriageRequest(request) {
+  if (!request) return;
+  delete pendingMarriagesByRequestId[request.requestId];
+  delete pendingMarriagesByUserKey[request.userKey];
+}
+
+function findMarriageRequestByUser(chatId, userId) {
+  const requestId = pendingMarriagesByUserKey[`${chatId}:${userId}`];
+  if (!requestId) return null;
+  return pendingMarriagesByRequestId[requestId] || null;
+}
+
+function saveAdoptionRequest(request) {
+  pendingAdoptionsByRequestId[request.requestId] = request;
+  pendingAdoptionsByUserKey[request.userKey] = request.requestId;
+}
+
+function deleteAdoptionRequest(request) {
+  if (!request) return;
+  delete pendingAdoptionsByRequestId[request.requestId];
+  delete pendingAdoptionsByUserKey[request.userKey];
+}
+
+function findAdoptionRequestByUser(chatId, userId) {
+  const requestId = pendingAdoptionsByUserKey[`${chatId}:${userId}`];
+  if (!requestId) return null;
+  return pendingAdoptionsByRequestId[requestId] || null;
+}
+
+async function finalizeMarriageAccept(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (isRequestExpired(request.createdAt, MARRIAGE_REQUEST_MS)) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "⌛ Предложение брака устарело.");
+    return;
+  }
+
+  const senderMarried = await isUserMarried(request.fromUser.id);
+  const targetMarried = await isUserMarried(request.targetUser.id);
+
+  if (senderMarried || targetMarried) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "❌ Кто-то из вас уже состоит в браке.");
+    return;
+  }
+
+  const senderChildRole = await getActiveAdoptionByChildId(request.fromUser.id);
+  const targetChildRole = await getActiveAdoptionByChildId(request.targetUser.id);
+
+  if (senderChildRole || targetChildRole) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "❌ Игрок в роли ребёнка не может вступить в брак.");
+    return;
+  }
+
+  const marriage = await createMarriage(request.fromUser.id, request.targetUser.id);
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+  deleteMarriageRequest(request);
+
+  await safeSendMessage(
+    chatId,
+    `💍 Брак зарегистрирован!
+
+${getUserLink(request.fromUser)} + ${getUserLink(request.targetUser)}
+
+📅 Дата: ${formatDate(marriage.created_at)}
+🏡 Теперь вы семья!`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+}
+
+async function finalizeMarriageDecline(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  await safeSendMessage(
+    chatId,
+    `💔 ${getUserLink(request.targetUser)} отказал(а) ${getUserLink(request.fromUser)} в браке.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  deleteMarriageRequest(request);
+}
+
+async function finalizeAdoptionAccept(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (isRequestExpired(request.createdAt, ADOPTION_REQUEST_MS)) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "⌛ Предложение усыновления устарело.");
+    return;
+  }
+
+  const validation = await canAdoptUser(request.parentUser.id, request.childUser.id);
+
+  if (!validation.ok) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, validation.text);
+    return;
+  }
+
+  let creation;
+  try {
+    creation = await createAdoption(request.parentUser.id, request.childUser.id);
+  } catch (error) {
+    console.error("Ошибка createAdoption:", error);
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "❌ Ошибка усыновления. Попробуй ещё раз.");
+    return;
+  }
+
+  if (!creation.ok) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка.");
+    return;
+  }
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  const spouseInfo = await getMarriagePartner(request.parentUser.id);
+  const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
+
+  let successText = `👶 Усыновление прошло успешно!
+
+${getUserLink(request.parentUser)} теперь родитель для ${getUserLink(request.childUser)}`;
+
+  if (spouseUser) {
+    successText += `\n💍 Второй родитель: ${getUserLink(spouseUser)}`;
+  }
+
+  successText += `\n📅 Дата: ${formatDate(creation.adoption.created_at)}`;
+
+  deleteAdoptionRequest(request);
+
+  await safeSendMessage(chatId, successText, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+}
+
+async function finalizeAdoptionDecline(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  await safeSendMessage(
+    chatId,
+    `❌ ${getUserLink(request.childUser)} отказал(а) ${getUserLink(request.parentUser)} в усыновлении.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  deleteAdoptionRequest(request);
+}
+
+// =========================
 // STANDARD RP COMMANDS
 // =========================
 const rpCommands = {
@@ -1538,9 +1635,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 /cooldowns
 
 /profile — показать свой профиль
-/profile ответом — показать профиль игрока
-/balance — показать баланс
-/cooldowns — показать кулдауны`
+/profile ответом — показать профиль игрока`
   );
 });
 
@@ -1552,9 +1647,7 @@ bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
       targetUser = await resolveTargetUserFromReply(msg);
     }
 
-    if (!targetUser) {
-      targetUser = msg.from;
-    }
+    if (!targetUser) targetUser = msg.from;
 
     await initUser(targetUser);
     await sendProfile(msg.chat.id, targetUser, msg.message_id);
@@ -1739,8 +1832,7 @@ bot.on("message", async (msg) => {
     await initUser(msg.from);
     await saveSeenUser(msg.chat.id, msg.from);
 
-    const payment = msg.successful_payment;
-    const purchase = await processStarPurchase(msg.from.id, payment);
+    const purchase = await processStarPurchase(msg.from.id, msg.successful_payment);
 
     if (purchase.alreadyProcessed) {
       await safeSendMessage(
@@ -1762,6 +1854,9 @@ bot.on("message", async (msg) => {
   }
 });
 
+// =========================
+// CALLBACKS
+// =========================
 bot.on("callback_query", async (query) => {
   try {
     if (!query.data || !query.message || !query.from) return;
@@ -1770,9 +1865,8 @@ bot.on("callback_query", async (query) => {
     const messageId = query.message.message_id;
     const data = String(query.data);
 
-    await safeAnswerCallback(query);
-
     if (data === "buy_50_coins") {
+      await safeAnswerCallback(query);
       await initUser(query.from);
       await saveSeenUser(chatId, query.from);
 
@@ -1789,176 +1883,58 @@ bot.on("callback_query", async (query) => {
     }
 
     if (data.startsWith("marriage_yes:") || data.startsWith("marriage_no:")) {
-      const parts = data.split(":");
-      const action = parts[0];
-      const callbackChatId = Number(parts[1]);
-      const targetUserId = Number(parts[2]);
+      const [action, requestId] = data.split(":");
+      const request = pendingMarriagesByRequestId[requestId];
 
-      if (Number(chatId) !== callbackChatId) return;
-      if (Number(query.from.id) !== Number(targetUserId)) return;
-
-      const marriageAnswerKey = getMarriageKey(chatId, targetUserId);
-      const pendingMarriage = pendingMarriages[marriageAnswerKey];
-      if (!pendingMarriage) return;
-
-      const isExpired = Date.now() - pendingMarriage.createdAt > MARRIAGE_REQUEST_MS;
-      if (isExpired) {
-        delete pendingMarriages[marriageAnswerKey];
+      if (!request) {
+        await safeAnswerCallback(query, "⌛ Эта заявка уже недействительна.", true);
         await removeInlineKeyboard(chatId, messageId);
-        await safeSendMessage(chatId, "⌛ Предложение брака устарело.");
         return;
       }
+
+      if (Number(query.from.id) !== Number(request.targetUser.id)) {
+        await safeAnswerCallback(query, "❌ Это не твоя кнопка.", true);
+        return;
+      }
+
+      await safeAnswerCallback(query, "✅ Ответ принят");
 
       if (action === "marriage_no") {
-        delete pendingMarriages[marriageAnswerKey];
-        await removeInlineKeyboard(chatId, messageId);
-
-        await safeSendMessage(
-          chatId,
-          `💔 ${getUserLink(pendingMarriage.targetUser)} отказал(а) ${getUserLink(pendingMarriage.fromUser)} в браке.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
+        await finalizeMarriageDecline(request, chatId, messageId);
         return;
       }
 
-      const senderMarried = await isUserMarried(pendingMarriage.fromUser.id);
-      const targetMarried = await isUserMarried(pendingMarriage.targetUser.id);
-
-      if (senderMarried || targetMarried) {
-        delete pendingMarriages[marriageAnswerKey];
-        await removeInlineKeyboard(chatId, messageId);
-        await safeSendMessage(chatId, "❌ Кто-то из вас уже состоит в браке.");
-        return;
-      }
-
-      const senderChildRole = await getActiveAdoptionByChildId(pendingMarriage.fromUser.id);
-      const targetChildRole = await getActiveAdoptionByChildId(pendingMarriage.targetUser.id);
-
-      if (senderChildRole || targetChildRole) {
-        delete pendingMarriages[marriageAnswerKey];
-        await removeInlineKeyboard(chatId, messageId);
-        await safeSendMessage(chatId, "❌ Игрок в роли ребёнка не может вступить в брак.");
-        return;
-      }
-
-      const marriage = await createMarriage(
-        pendingMarriage.fromUser.id,
-        pendingMarriage.targetUser.id
-      );
-
-      delete pendingMarriages[marriageAnswerKey];
-      await removeInlineKeyboard(chatId, messageId);
-
-      await safeSendMessage(
-        chatId,
-        `💍 Брак зарегистрирован!
-
-${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetUser)}
-
-📅 Дата: ${formatDate(marriage.created_at)}
-🏡 Теперь вы семья!`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
+      await finalizeMarriageAccept(request, chatId, messageId);
       return;
     }
 
     if (data.startsWith("adoption_yes:") || data.startsWith("adoption_no:")) {
-      const parts = data.split(":");
-      const action = parts[0];
-      const callbackChatId = Number(parts[1]);
-      const targetUserId = Number(parts[2]);
+      const [action, requestId] = data.split(":");
+      const request = pendingAdoptionsByRequestId[requestId];
 
-      if (Number(chatId) !== callbackChatId) return;
-      if (Number(query.from.id) !== Number(targetUserId)) return;
-
-      const adoptionAnswerKey = getAdoptionKey(chatId, targetUserId);
-      const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
-      if (!pendingAdoption) return;
-
-      const isExpired = Date.now() - pendingAdoption.createdAt > ADOPTION_REQUEST_MS;
-      if (isExpired) {
-        delete pendingAdoptions[adoptionAnswerKey];
+      if (!request) {
+        await safeAnswerCallback(query, "⌛ Эта заявка уже недействительна.", true);
         await removeInlineKeyboard(chatId, messageId);
-        await safeSendMessage(chatId, "⌛ Предложение усыновления устарело.");
         return;
       }
+
+      if (Number(query.from.id) !== Number(request.childUser.id)) {
+        await safeAnswerCallback(query, "❌ Это не твоя кнопка.", true);
+        return;
+      }
+
+      await safeAnswerCallback(query, "✅ Ответ принят");
 
       if (action === "adoption_no") {
-        delete pendingAdoptions[adoptionAnswerKey];
-        await removeInlineKeyboard(chatId, messageId);
-
-        await safeSendMessage(
-          chatId,
-          `❌ ${getUserLink(pendingAdoption.childUser)} отказал(а) ${getUserLink(pendingAdoption.parentUser)} в усыновлении.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
+        await finalizeAdoptionDecline(request, chatId, messageId);
         return;
       }
 
-      const validation = await canAdoptUser(
-        pendingAdoption.parentUser.id,
-        pendingAdoption.childUser.id
-      );
-
-      if (!validation.ok) {
-        delete pendingAdoptions[adoptionAnswerKey];
-        await removeInlineKeyboard(chatId, messageId);
-        await safeSendMessage(chatId, validation.text);
-        return;
-      }
-
-      let creation;
-      try {
-        creation = await createAdoption(
-          pendingAdoption.parentUser.id,
-          pendingAdoption.childUser.id
-        );
-      } catch (error) {
-        console.error("Ошибка createAdoption callback:", error);
-        delete pendingAdoptions[adoptionAnswerKey];
-        await removeInlineKeyboard(chatId, messageId);
-        await safeSendMessage(chatId, "❌ Ошибка усыновления. Попробуй ещё раз.");
-        return;
-      }
-
-      if (!creation.ok) {
-        delete pendingAdoptions[adoptionAnswerKey];
-        await removeInlineKeyboard(chatId, messageId);
-        await safeSendMessage(chatId, "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка.");
-        return;
-      }
-
-      delete pendingAdoptions[adoptionAnswerKey];
-      await removeInlineKeyboard(chatId, messageId);
-
-      const spouseInfo = await getMarriagePartner(pendingAdoption.parentUser.id);
-      const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
-
-      let successText = `👶 Усыновление прошло успешно!
-
-${getUserLink(pendingAdoption.parentUser)} теперь родитель для ${getUserLink(pendingAdoption.childUser)}`;
-
-      if (spouseUser) {
-        successText += `\n💍 Второй родитель: ${getUserLink(spouseUser)}`;
-      }
-
-      successText += `\n📅 Дата: ${formatDate(creation.adoption.created_at)}`;
-
-      await safeSendMessage(chatId, successText, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
+      await finalizeAdoptionAccept(request, chatId, messageId);
       return;
     }
+
+    await safeAnswerCallback(query);
   } catch (error) {
     console.error("Ошибка callback_query:", error);
     await safeAnswerCallback(query, "❌ Ошибка кнопки.", true);
@@ -1991,6 +1967,7 @@ bot.on("message", async (msg) => {
     if (lowerText.startsWith("/")) return;
 
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
+
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
 
@@ -2047,10 +2024,10 @@ bot.on("message", async (msg) => {
         return;
       }
 
-      await pool.query(
-        `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-        [msg.from.id, CUSTOM_COMMAND_COST]
-      );
+      await pool.query(`UPDATE users SET balance = balance - $2 WHERE user_id = $1`, [
+        msg.from.id,
+        CUSTOM_COMMAND_COST
+      ]);
 
       await createCustomCommand(msg.from.id, parsed.trigger, parsed.actionText);
 
@@ -2068,146 +2045,27 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    const marriageAnswerKey = getMarriageKey(msg.chat.id, msg.from.id);
-    const pendingMarriage = pendingMarriages[marriageAnswerKey];
-
+    // Ответ текстом на брак
+    const pendingMarriage = findMarriageRequestByUser(msg.chat.id, msg.from.id);
     if (pendingMarriage && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
-      const isExpired = Date.now() - pendingMarriage.createdAt > MARRIAGE_REQUEST_MS;
-
-      if (isExpired) {
-        delete pendingMarriages[marriageAnswerKey];
-        await safeSendMessage(msg.chat.id, "⌛ Предложение брака устарело.");
-        return;
-      }
-
       if (isExactCommand(lowerText, "нет")) {
-        await safeSendMessage(
-          msg.chat.id,
-          `💔 ${getUserLink(pendingMarriage.targetUser)} отказал(а) ${getUserLink(pendingMarriage.fromUser)} в браке.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        delete pendingMarriages[marriageAnswerKey];
+        await finalizeMarriageDecline(pendingMarriage, msg.chat.id);
         return;
       }
 
-      const senderMarried = await isUserMarried(pendingMarriage.fromUser.id);
-      const targetMarried = await isUserMarried(pendingMarriage.targetUser.id);
-
-      if (senderMarried || targetMarried) {
-        await safeSendMessage(msg.chat.id, "❌ Кто-то из вас уже состоит в браке.");
-        delete pendingMarriages[marriageAnswerKey];
-        return;
-      }
-
-      const senderChildRole = await getActiveAdoptionByChildId(pendingMarriage.fromUser.id);
-      const targetChildRole = await getActiveAdoptionByChildId(pendingMarriage.targetUser.id);
-
-      if (senderChildRole || targetChildRole) {
-        await safeSendMessage(msg.chat.id, "❌ Игрок в роли ребёнка не может вступить в брак.");
-        delete pendingMarriages[marriageAnswerKey];
-        return;
-      }
-
-      const marriage = await createMarriage(
-        pendingMarriage.fromUser.id,
-        pendingMarriage.targetUser.id
-      );
-
-      await safeSendMessage(
-        msg.chat.id,
-        `💍 Брак зарегистрирован!
-
-${getUserLink(pendingMarriage.fromUser)} + ${getUserLink(pendingMarriage.targetUser)}
-
-📅 Дата: ${formatDate(marriage.created_at)}
-🏡 Теперь вы семья!`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-
-      delete pendingMarriages[marriageAnswerKey];
+      await finalizeMarriageAccept(pendingMarriage, msg.chat.id);
       return;
     }
 
-    const adoptionAnswerKey = getAdoptionKey(msg.chat.id, msg.from.id);
-    const pendingAdoption = pendingAdoptions[adoptionAnswerKey];
-
+    // Ответ текстом на усыновление
+    const pendingAdoption = findAdoptionRequestByUser(msg.chat.id, msg.from.id);
     if (pendingAdoption && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
-      const isExpired = Date.now() - pendingAdoption.createdAt > ADOPTION_REQUEST_MS;
-
-      if (isExpired) {
-        delete pendingAdoptions[adoptionAnswerKey];
-        await safeSendMessage(msg.chat.id, "⌛ Предложение усыновления устарело.");
-        return;
-      }
-
       if (isExactCommand(lowerText, "нет")) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ ${getUserLink(pendingAdoption.childUser)} отказал(а) ${getUserLink(pendingAdoption.parentUser)} в усыновлении.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        delete pendingAdoptions[adoptionAnswerKey];
+        await finalizeAdoptionDecline(pendingAdoption, msg.chat.id);
         return;
       }
 
-      const validation = await canAdoptUser(
-        pendingAdoption.parentUser.id,
-        pendingAdoption.childUser.id
-      );
-
-      if (!validation.ok) {
-        await safeSendMessage(msg.chat.id, validation.text);
-        delete pendingAdoptions[adoptionAnswerKey];
-        return;
-      }
-
-      let creation;
-      try {
-        creation = await createAdoption(
-          pendingAdoption.parentUser.id,
-          pendingAdoption.childUser.id
-        );
-      } catch (error) {
-        console.error("Ошибка createAdoption text:", error);
-        await safeSendMessage(msg.chat.id, "❌ Ошибка усыновления. Попробуй ещё раз.");
-        delete pendingAdoptions[adoptionAnswerKey];
-        return;
-      }
-
-      if (!creation.ok) {
-        await safeSendMessage(msg.chat.id, "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка.");
-        delete pendingAdoptions[adoptionAnswerKey];
-        return;
-      }
-
-      const spouseInfo = await getMarriagePartner(pendingAdoption.parentUser.id);
-      const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
-
-      let successText = `👶 Усыновление прошло успешно!
-
-${getUserLink(pendingAdoption.parentUser)} теперь родитель для ${getUserLink(pendingAdoption.childUser)}`;
-
-      if (spouseUser) {
-        successText += `\n💍 Второй родитель: ${getUserLink(spouseUser)}`;
-      }
-
-      successText += `\n📅 Дата: ${formatDate(creation.adoption.created_at)}`;
-
-      await safeSendMessage(msg.chat.id, successText, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-
-      delete pendingAdoptions[adoptionAnswerKey];
+      await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
       return;
     }
 
@@ -2276,10 +2134,7 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
       return;
     }
 
-    if (
-      isExactCommand(lowerText, "брак") ||
-      isExactCommand(lowerText, "зарегистрироваться в брак")
-    ) {
+    if (isExactCommand(lowerText, "брак") || isExactCommand(lowerText, "зарегистрироваться в брак")) {
       const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
 
@@ -2316,9 +2171,16 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
         return;
       }
 
-      const marriageKey = getMarriageKey(msg.chat.id, target.id);
+      const existingReq = findMarriageRequestByUser(msg.chat.id, target.id);
+      if (existingReq) {
+        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активное предложение брака.");
+        return;
+      }
 
-      pendingMarriages[marriageKey] = {
+      const requestId = generateRequestId("marriage");
+      const request = {
+        requestId,
+        userKey: `${msg.chat.id}:${target.id}`,
         fromUser: {
           id: sender.id,
           first_name: sender.first_name || "",
@@ -2334,7 +2196,9 @@ ${getUserLink(pendingAdoption.parentUser)} теперь родитель для 
         createdAt: Date.now()
       };
 
-      await safeSendMessage(
+      saveMarriageRequest(request);
+
+      const sent = await safeSendMessage(
         msg.chat.id,
         `💍 ${getUserLink(sender)} сделал(а) предложение ${getUserLink(target)}!
 
@@ -2351,9 +2215,14 @@ ${getUserLink(target)}, выбери ниже:
         {
           parse_mode: "HTML",
           disable_web_page_preview: true,
-          reply_markup: getMarriageDecisionKeyboard(msg.chat.id, target.id)
+          reply_markup: getMarriageDecisionKeyboard(requestId)
         }
       );
+
+      if (sent) {
+        request.requestMessageId = sent.message_id;
+      }
+
       return;
     }
 
@@ -2398,9 +2267,16 @@ ${getUserLink(target)}, выбери ниже:
         return;
       }
 
-      const adoptionKey = getAdoptionKey(msg.chat.id, child.id);
+      const existingReq = findAdoptionRequestByUser(msg.chat.id, child.id);
+      if (existingReq) {
+        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активный запрос на усыновление.");
+        return;
+      }
 
-      pendingAdoptions[adoptionKey] = {
+      const requestId = generateRequestId("adoption");
+      const request = {
+        requestId,
+        userKey: `${msg.chat.id}:${child.id}`,
         parentUser: {
           id: parent.id,
           first_name: parent.first_name || "",
@@ -2416,13 +2292,13 @@ ${getUserLink(target)}, выбери ниже:
         createdAt: Date.now()
       };
 
+      saveAdoptionRequest(request);
+
       const spouseInfo = await getMarriagePartner(parent.id);
       const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
 
       let requestText = `👶 ${getUserLink(parent)}`;
-      if (spouseUser) {
-        requestText += ` и ${getUserLink(spouseUser)}`;
-      }
+      if (spouseUser) requestText += ` и ${getUserLink(spouseUser)}`;
       requestText += ` хотят усыновить ${getUserLink(child)}!
 
 ${getUserLink(child)}, выбери ниже:
@@ -2436,11 +2312,16 @@ ${getUserLink(child)}, выбери ниже:
 или
 нет`;
 
-      await safeSendMessage(msg.chat.id, requestText, {
+      const sent = await safeSendMessage(msg.chat.id, requestText, {
         parse_mode: "HTML",
         disable_web_page_preview: true,
-        reply_markup: getAdoptionDecisionKeyboard(msg.chat.id, child.id)
+        reply_markup: getAdoptionDecisionKeyboard(requestId)
       });
+
+      if (sent) {
+        request.requestMessageId = sent.message_id;
+      }
+
       return;
     }
 
@@ -2449,10 +2330,7 @@ ${getUserLink(child)}, выбери ниже:
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "Ответь на сообщение ребёнка и напиши: отказаться от ребенка"
-        );
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение ребёнка и напиши: отказаться от ребенка");
         return;
       }
 
@@ -2502,15 +2380,11 @@ ${getUserLink(child)}, выбери ниже:
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение своего ребёнка и напиши: любимый ребенок"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: любимый ребенок");
         return;
       }
 
       const isChild = await isChildInMyFamily(parent.id, child.id);
-
       if (!isChild) {
         await safeSendMessage(msg.chat.id, "❌ Любимым можно сделать только своего ребёнка.");
         return;
@@ -2530,8 +2404,7 @@ ${getUserLink(child)}, выбери ниже:
     }
 
     if (isExactCommand(lowerText, "убрать любимого ребенка")) {
-      const parent = msg.from;
-      const removedFavorite = await removeFavoriteChild(parent.id);
+      const removedFavorite = await removeFavoriteChild(msg.from.id);
 
       if (!removedFavorite) {
         await safeSendMessage(msg.chat.id, "❌ У тебя пока нет любимого ребёнка.");
@@ -2540,7 +2413,7 @@ ${getUserLink(child)}, выбери ниже:
 
       await safeSendMessage(
         msg.chat.id,
-        `⭐ ${getUserLink(parent)} убрал(а) любимого ребёнка.`,
+        `⭐ ${getUserLink(msg.from)} убрал(а) любимого ребёнка.`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -2567,7 +2440,10 @@ ${getUserLink(child)}, выбери ниже:
           ? await getStoredUser(Number(parentPartnerInfo.partnerId))
           : null;
 
-        let textFamily = `🏡 Семья\n\n👶 Ребёнок: ${getUserLink(targetUser)}\n👨 Родитель: ${getUserLink(parentUser)}`;
+        let textFamily = `🏡 Семья
+
+👶 Ребёнок: ${getUserLink(targetUser)}
+👨 Родитель: ${getUserLink(parentUser)}`;
 
         if (secondParent) {
           textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
@@ -2597,7 +2473,9 @@ ${getUserLink(child)}, выбери ниже:
         return;
       }
 
-      let familyText = `🏡 Семья\n\n👤 Игрок: ${getUserLink(targetUser)}`;
+      let familyText = `🏡 Семья
+
+👤 Игрок: ${getUserLink(targetUser)}`;
 
       if (partnerInfo) {
         const partnerUser = await getStoredUser(partnerInfo.partnerId);
@@ -2638,10 +2516,7 @@ ${getUserLink(child)}, выбери ниже:
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение своего ребёнка и напиши: карманные деньги 50"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: карманные деньги 50");
         return;
       }
 
@@ -2649,10 +2524,7 @@ ${getUserLink(child)}, выбери ниже:
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму больше 0.\nПример: карманные деньги 50"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму больше 0.\nПример: карманные деньги 50");
         return;
       }
 
@@ -2706,7 +2578,10 @@ ${getUserLink(child)}, выбери ниже:
 
       await safeSendMessage(
         msg.chat.id,
-        `🕵️ ${getUserLink(target)} проверен...\n\nВероятность лжи: ${result.percent}%\n${escapeHtml(result.text)}`,
+        `🕵️ ${getUserLink(target)} проверен...
+
+Вероятность лжи: ${result.percent}%
+${escapeHtml(result.text)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -2741,7 +2616,9 @@ ${getUserLink(child)}, выбери ниже:
 
       await safeSendMessage(
         msg.chat.id,
-        `🤝 ${getUserLink(sender)} выразил респект ${getUserLink(target)}\n\nРеспект: ${respectCount}`,
+        `🤝 ${getUserLink(sender)} выразил респект ${getUserLink(target)}
+
+Респект: ${respectCount}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -2754,10 +2631,7 @@ ${getUserLink(child)}, выбери ниже:
       const pair = await getRandomPairMembersFromDb(msg.chat.id);
 
       if (!pair) {
-        await safeSendMessage(
-          msg.chat.id,
-          "Нужно хотя бы 2 человека, которых бот уже видел в этом чате 💞"
-        );
+        await safeSendMessage(msg.chat.id, "Нужно хотя бы 2 человека, которых бот уже видел в этом чате 💞");
         return;
       }
 
@@ -2766,7 +2640,10 @@ ${getUserLink(child)}, выбери ниже:
 
       await safeSendMessage(
         msg.chat.id,
-        `💞 Случайная пара:\n${getUserLink(firstUser)} + ${getUserLink(secondUser)}\n\n❤️ Совместимость: ${percent}%`,
+        `💞 Случайная пара:
+${getUserLink(firstUser)} + ${getUserLink(secondUser)}
+
+❤️ Совместимость: ${percent}%`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -2797,7 +2674,9 @@ ${getUserLink(child)}, выбери ниже:
 
       await safeSendMessage(
         msg.chat.id,
-        `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!\n\nБаланс: ${result.balance} монет`,
+        `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!
+
+Баланс: ${result.balance} монет`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -2890,7 +2769,8 @@ ${coinsLine}
 
       await safeSendMessage(
         msg.chat.id,
-        `🔮 ${getUserLink(msg.from)}\n${escapeHtml(prediction)}`,
+        `🔮 ${getUserLink(msg.from)}
+${escapeHtml(prediction)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
