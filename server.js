@@ -36,6 +36,7 @@ const ADOPTION_REQUEST_MS = 10 * 60 * 1000;
 const MAX_CUSTOM_COMMANDS = 5;
 const CUSTOM_COMMAND_COST = 20;
 const MAX_CHILDREN_PER_FAMILY = 3;
+const MAX_PUNISHMENT_DAYS = 7;
 
 // =========================
 // SERVER
@@ -575,6 +576,16 @@ async function initDb() {
       dream_balance INTEGER DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_punishments (
+      child_user_id BIGINT PRIMARY KEY,
+      punished_by_user_id BIGINT NOT NULL,
+      until_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
     )
   `);
 
@@ -1146,6 +1157,109 @@ async function canAdoptUser(parentUserId, targetUserId) {
   }
 
   return { ok: true };
+}
+
+// =========================
+// PUNISHMENTS
+// =========================
+async function cleanupExpiredPunishments() {
+  await pool.query(`
+    UPDATE child_punishments
+    SET is_active = FALSE
+    WHERE is_active = TRUE
+      AND until_at <= NOW()
+  `);
+}
+
+async function getActivePunishment(childUserId) {
+  await cleanupExpiredPunishments();
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM child_punishments
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+      AND until_at > NOW()
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function isChildPunished(childUserId) {
+  const punishment = await getActivePunishment(childUserId);
+  return !!punishment;
+}
+
+async function setPunishment(parentUserId, childUserId, days) {
+  const result = await pool.query(
+    `
+    INSERT INTO child_punishments (
+      child_user_id,
+      punished_by_user_id,
+      until_at,
+      created_at,
+      is_active
+    )
+    VALUES ($1, $2, NOW() + ($3 || ' days')::interval, NOW(), TRUE)
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET
+      punished_by_user_id = EXCLUDED.punished_by_user_id,
+      until_at = EXCLUDED.until_at,
+      created_at = NOW(),
+      is_active = TRUE
+    RETURNING *
+    `,
+    [childUserId, parentUserId, String(days)]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function removePunishment(childUserId) {
+  const result = await pool.query(
+    `
+    UPDATE child_punishments
+    SET is_active = FALSE
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+    RETURNING *
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getPunishmentTextForChild(childUserId) {
+  const punishment = await getActivePunishment(childUserId);
+  if (!punishment) return null;
+
+  const remaining = new Date(punishment.until_at).getTime() - Date.now();
+  const punisher = await getStoredUser(Number(punishment.punished_by_user_id));
+
+  return `⛔ Наказание активно
+
+👶 Ребёнок: ${getUserLink(await getStoredUser(childUserId))}
+👨 Наказал(а): ${getUserLink(punisher)}
+🕒 До: ${formatDateTime(punishment.until_at)}
+⏳ Осталось: ${formatRemainingTime(remaining)}
+
+📌 Ограничения:
+• нельзя просить деньги
+• нельзя получать карманные деньги
+• нельзя брать из семейного бюджета`;
+}
+
+async function getPunishedBlockText(childUserId) {
+  const punishment = await getActivePunishment(childUserId);
+  if (!punishment) return null;
+
+  const remaining = new Date(punishment.until_at).getTime() - Date.now();
+  return `❌ Ребёнок сейчас наказан(а).\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
 }
 
 // =========================
@@ -2141,6 +2255,9 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • удалить мечту
 • пополнить баланс на мечту 5
 • на мечту 5
+• наказать ребенка 1
+• наказание
+• снять наказание
 
 <b>💰 Деньги</b>
 • деньги
@@ -2626,6 +2743,131 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
+    // =========================
+    // PUNISHMENT COMMANDS
+    // =========================
+    if (lowerText.startsWith("наказать ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1"
+        );
+        return;
+      }
+
+      const match = lowerText.match(/^наказать ребенка\s+(\d+)$/);
+      const days = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.\nПример: наказать ребенка 3`
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(parent.id, child.id);
+      if (!isChild) {
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь наказывать только своего ребёнка.");
+        return;
+      }
+
+      const punishment = await setPunishment(parent.id, child.id, days);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⛔ ${getUserLink(parent)} наказал(а) ${getUserLink(child)} на ${days} дн.
+
+📌 Ограничения:
+• нельзя просить деньги
+• нельзя получать карманные деньги
+• нельзя брать из семейного бюджета
+
+🕒 До: ${formatDateTime(punishment.until_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "снять наказание")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: снять наказание"
+        );
+        return;
+      }
+
+      const isChild = await isChildInMyFamily(parent.id, child.id);
+      if (!isChild) {
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь снимать наказание только у своего ребёнка.");
+        return;
+      }
+
+      const removed = await removePunishment(child.id);
+      if (!removed) {
+        await safeSendMessage(msg.chat.id, "✅ У этого ребёнка и так нет активного наказания.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ ${getUserLink(parent)} снял(а) наказание с ${getUserLink(child)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "наказание")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const punishment = await getActivePunishment(targetUser.id);
+      if (!punishment) {
+        await safeSendMessage(msg.chat.id, "✅ Наказания нет.");
+        return;
+      }
+
+      const punisher = await getStoredUser(Number(punishment.punished_by_user_id));
+      const remaining = new Date(punishment.until_at).getTime() - Date.now();
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⛔ Наказание активно
+
+👶 Ребёнок: ${getUserLink(targetUser)}
+👨 Наказал(а): ${getUserLink(punisher)}
+🕒 До: ${formatDateTime(punishment.until_at)}
+⏳ Осталось: ${formatRemainingTime(remaining)}
+
+📌 Ограничения:
+• нельзя просить деньги
+• нельзя получать карманные деньги
+• нельзя брать из семейного бюджета`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
     if (isExactCommand(lowerText, "семейный бюджет")) {
       const budget = await getFamilyBudget(msg.from.id);
 
@@ -2710,6 +2952,18 @@ ${escapeHtml(parsed.actionText)} — текст бота
           "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5"
         );
         return;
+      }
+
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+      if (childInfo) {
+        const punishmentText = await getPunishedBlockText(msg.from.id);
+        if (punishmentText) {
+          await safeSendMessage(
+            msg.chat.id,
+            `${punishmentText}\nВо время наказания нельзя брать деньги из семейного бюджета.`
+          );
+          return;
+        }
       }
 
       try {
@@ -3122,6 +3376,15 @@ ${escapeHtml(parsed.actionText)} — текст бота
         return;
       }
 
+      const punishmentText = await getPunishedBlockText(msg.from.id);
+      if (punishmentText) {
+        await safeSendMessage(
+          msg.chat.id,
+          `${punishmentText}\nВо время наказания нельзя просить деньги.`
+        );
+        return;
+      }
+
       const match = lowerText.match(/^попросить денег\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
 
@@ -3185,6 +3448,15 @@ ${escapeHtml(parsed.actionText)} — текст бота
         await safeSendMessage(
           msg.chat.id,
           "❌ Ты можешь давать деньги только своему ребёнку."
+        );
+        return;
+      }
+
+      const punishmentText = await getPunishedBlockText(target.id);
+      if (punishmentText) {
+        await safeSendMessage(
+          msg.chat.id,
+          `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`
         );
         return;
       }
@@ -3576,7 +3848,7 @@ ${getUserLink(child)}, выбери ниже:
         const secondParent = parentPartnerInfo
           ? await getStoredUser(Number(parentPartnerInfo.partnerId))
           : null;
-        const dream = await getChildDream(targetUser.id);
+        const punishment = await getActivePunishment(targetUser.id);
 
         let textFamily = `🏡 Семья
 
@@ -3589,12 +3861,13 @@ ${getUserLink(child)}, выбери ниже:
 
         textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
 
-        if (dream) {
-          textFamily += `\n\n🌟 Мечта:
-🎯 ${escapeHtml(dream.dream_text)}
-💰 Баланс мечты: ${Number(dream.dream_balance || 0)}`;
+        if (punishment) {
+          const remaining = new Date(punishment.until_at).getTime() - Date.now();
+          textFamily += `\n\n⛔ Наказание: активно`;
+          textFamily += `\n🕒 До: ${formatDateTime(punishment.until_at)}`;
+          textFamily += `\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
         } else {
-          textFamily += `\n\n🌟 Мечта: нет`;
+          textFamily += `\n\n⛔ Наказание: нет`;
         }
 
         await safeSendMessage(msg.chat.id, textFamily, {
@@ -3637,7 +3910,7 @@ ${getUserLink(child)}, выбери ниже:
         for (const childRow of children) {
           const childUser = await getStoredUser(Number(childRow.child_user_id));
           const childId = Number(childRow.child_user_id);
-          const childDream = await getChildDream(childId);
+          const punishment = await getActivePunishment(childId);
 
           let line = "";
           if (favoriteChildId && favoriteChildId === childId) {
@@ -3646,9 +3919,10 @@ ${getUserLink(child)}, выбери ниже:
             line += `• ${getUserLink(childUser)}`;
           }
 
-          if (childDream) {
-            line += `\n   🌟 Мечта: ${escapeHtml(childDream.dream_text)}`
-            line += `\n   💰 Баланс мечты: ${Number(childDream.dream_balance || 0)}`;
+          if (punishment) {
+            const remaining = new Date(punishment.until_at).getTime() - Date.now();
+            line += `\n   ⛔ Наказан(а)`;
+            line += `\n   ⏳ Осталось: ${formatRemainingTime(remaining)}`;
           }
 
           childLines.push(line);
@@ -3686,6 +3960,15 @@ ${getUserLink(child)}, выбери ниже:
       const isChild = await isChildInMyFamily(sender.id, target.id);
       if (!isChild) {
         await safeSendMessage(msg.chat.id, "❌ Ты можешь давать карманные деньги только своему ребёнку.");
+        return;
+      }
+
+      const punishmentText = await getPunishedBlockText(target.id);
+      if (punishmentText) {
+        await safeSendMessage(
+          msg.chat.id,
+          `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`
+        );
         return;
       }
 
@@ -4114,6 +4397,7 @@ bot.on("polling_error", (error) => {
     console.log("✅ DB connected:", test.rows[0]);
 
     await initDb();
+    await cleanupExpiredPunishments();
     console.log("✅ Bot started");
   } catch (error) {
     console.error("❌ Ошибка запуска:", error);
