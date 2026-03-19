@@ -568,6 +568,16 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_dreams (
+      child_user_id BIGINT PRIMARY KEY,
+      dream_text TEXT NOT NULL,
+      dream_balance INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
 
   console.log("✅ Database ready");
@@ -1462,6 +1472,168 @@ async function breakPiggyBank(childUserId) {
 }
 
 // =========================
+// DREAMS
+// =========================
+async function getChildDream(childUserId) {
+  const result = await pool.query(
+    `
+    SELECT child_user_id, dream_text, dream_balance, created_at, updated_at
+    FROM child_dreams
+    WHERE child_user_id = $1
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function setChildDream(childUserId, dreamText) {
+  const cleaned = String(dreamText || "").trim();
+
+  const result = await pool.query(
+    `
+    INSERT INTO child_dreams (child_user_id, dream_text, dream_balance, created_at, updated_at)
+    VALUES ($1, $2, 0, NOW(), NOW())
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET
+      dream_text = EXCLUDED.dream_text,
+      updated_at = NOW()
+    RETURNING child_user_id, dream_text, dream_balance, created_at, updated_at
+    `,
+    [childUserId, cleaned]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deleteChildDream(childUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM child_dreams
+    WHERE child_user_id = $1
+    RETURNING child_user_id
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function addSelfMoneyToDream(childUserId, amount) {
+  const dream = await getChildDream(childUserId);
+  if (!dream) throw new Error("NO_DREAM");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [childUserId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const userBalance = Number(userRow.rows[0].balance || 0);
+    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [childUserId, amount]
+    );
+
+    const dreamRow = await client.query(
+      `
+      UPDATE child_dreams
+      SET dream_balance = dream_balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING dream_text, dream_balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      dreamText: dreamRow.rows[0].dream_text,
+      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
+      updatedAt: dreamRow.rows[0].updated_at,
+      userBalance: Number(updatedUser.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function addParentMoneyToDream(parentUserId, childUserId, amount) {
+  const dream = await getChildDream(childUserId);
+  if (!dream) throw new Error("NO_DREAM");
+
+  const isChild = await isChildInMyFamily(parentUserId, childUserId);
+  if (!isChild) throw new Error("NOT_MY_CHILD");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const parentRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [parentUserId]
+    );
+
+    if (!parentRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const parentBalance = Number(parentRow.rows[0].balance || 0);
+    if (parentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [parentUserId, amount]
+    );
+
+    const dreamRow = await client.query(
+      `
+      UPDATE child_dreams
+      SET dream_balance = dream_balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING dream_text, dream_balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedParent = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [parentUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      dreamText: dreamRow.rows[0].dream_text,
+      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
+      updatedAt: dreamRow.rows[0].updated_at,
+      parentBalance: Number(updatedParent.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// =========================
 // CUSTOM COMMANDS
 // =========================
 async function getUserCustomCommandCount(userId) {
@@ -1990,6 +2162,11 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 копилка
 пополнить копилку 5
 разбить копилку
+загадать мечту айфон
+моя мечта
+удалить мечту
+пополнить баланс на мечту 5
+на мечту 5
 он врет?
 врет?
 /createcommand
@@ -2704,6 +2881,216 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
         console.error("Ошибка разбития копилки:", error);
         await safeSendMessage(msg.chat.id, "❌ Ошибка при разбитии копилки.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("загадать мечту")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта доступна только ребёнку в семье.");
+        return;
+      }
+
+      const dreamText = text.slice("загадать мечту".length).trim();
+      if (!dreamText || dreamText.length < 2) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Напиши так:\nзагадать мечту айфон"
+        );
+        return;
+      }
+
+      if (dreamText.length > 120) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта слишком длинная. Максимум 120 символов.");
+        return;
+      }
+
+      const dream = await setChildDream(msg.from.id, dreamText);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🌟 ${getUserLink(msg.from)} загадал(а) мечту!
+
+🎯 Мечта: ${escapeHtml(dream.dream_text)}
+💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "моя мечта")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта доступна только ребёнку в семье.");
+        return;
+      }
+
+      const dream = await getChildDream(msg.from.id);
+      if (!dream) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон"
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🌠 Мечта ${getUserLink(msg.from)}
+
+🎯 Мечта: ${escapeHtml(dream.dream_text)}
+💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}
+🕒 Обновлена: ${formatDateTime(dream.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "удалить мечту")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта доступна только ребёнку в семье.");
+        return;
+      }
+
+      const deleted = await deleteChildDream(msg.from.id);
+      if (!deleted) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🗑 ${getUserLink(msg.from)} удалил(а) свою мечту.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("пополнить баланс на мечту")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Команда доступна только ребёнку в семье.");
+        return;
+      }
+
+      const match = lowerText.match(/^пополнить баланс на мечту\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5"
+        );
+        return;
+      }
+
+      try {
+        const result = await addSelfMoneyToDream(msg.from.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🌟 ${getUserLink(msg.from)} пополнил(а) баланс на мечту на ${amount} монет
+
+🎯 Мечта: ${escapeHtml(result.dreamText)}
+💰 Баланс мечты: ${result.dreamBalance}
+👛 Твой баланс: ${result.userBalance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NO_DREAM") {
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон"
+          );
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка пополнения баланса мечты:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения баланса на мечту.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("на мечту")) {
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: на мечту 5"
+        );
+        return;
+      }
+
+      const match = lowerText.match(/^на мечту\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: на мечту 5"
+        );
+        return;
+      }
+
+      try {
+        const result = await addParentMoneyToDream(msg.from.id, target.id, amount);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🎁 ${getUserLink(msg.from)} пополнил(а) мечту ${getUserLink(target)} на ${amount} монет
+
+🎯 Мечта: ${escapeHtml(result.dreamText)}
+💰 Баланс мечты: ${result.dreamBalance}
+👛 Твой баланс: ${result.parentBalance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NO_DREAM") {
+          await safeSendMessage(msg.chat.id, "❌ У ребёнка нет мечты.");
+          return;
+        }
+
+        if (error.message === "NOT_MY_CHILD") {
+          await safeSendMessage(msg.chat.id, "❌ Ты можешь помогать только мечте своего ребёнка.");
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка помощи на мечту:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения мечты.");
       }
 
       return;
