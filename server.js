@@ -2916,9 +2916,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • /mycommands
 • /deletecommand
 
-<b>👑 Админ</b>
-• /givemoney 1000 (ответом на игрока)
-
 <b>🎮 Игры и фан</b>
 • бомба
 • передать
