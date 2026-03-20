@@ -45,6 +45,8 @@ const ROBBERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const POLICE_JAIL_MS = 60 * 60 * 1000;
 
 const SHIELD_COST = 250;
+const MAX_SHIELDS = 3;
+
 const JAIL_ESCAPE_COOLDOWN_MS = 20 * 60 * 1000;
 const JAIL_LAWYER_COOLDOWN_MS = 20 * 60 * 1000;
 const JAIL_BRIBE_COOLDOWN_MS = 20 * 60 * 1000;
@@ -1025,9 +1027,20 @@ async function buyShield(userId) {
       [userId]
     );
 
+    const shieldRow = await client.query(
+      `SELECT count FROM user_shields WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
     if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const currentBalance = Number(userRow.rows[0].balance || 0);
+    const currentShields = Number(shieldRow.rows[0]?.count || 0);
+
+    if (currentShields >= MAX_SHIELDS) {
+      throw new Error("MAX_SHIELDS_REACHED");
+    }
+
     if (currentBalance < SHIELD_COST) throw new Error("NOT_ENOUGH_MONEY");
 
     await client.query(
@@ -1035,7 +1048,7 @@ async function buyShield(userId) {
       [userId, SHIELD_COST]
     );
 
-    const shieldRow = await client.query(
+    const updatedShield = await client.query(
       `
       UPDATE user_shields
       SET count = count + 1,
@@ -1054,8 +1067,8 @@ async function buyShield(userId) {
     await client.query("COMMIT");
 
     return {
-      shieldCount: Number(shieldRow.rows[0].count || 0),
-      updatedAt: shieldRow.rows[0].updated_at,
+      shieldCount: Number(updatedShield.rows[0].count || 0),
+      updatedAt: updatedShield.rows[0].updated_at,
       userBalance: Number(updatedUser.rows[0].balance || 0)
     };
   } catch (error) {
@@ -2687,7 +2700,7 @@ ID: ${user.id}
 
 💰 Монеты: ${stats.balance || 0}
 🤝 Респект: ${stats.respect || 0}
-🛡 Щиты: ${Number(shield?.count || 0)}
+🛡 Щиты: ${Number(shield?.count || 0)}/${MAX_SHIELDS}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
@@ -3009,17 +3022,26 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • охота
 • снайпер
 • ограбить
-• тюрьма
-• сбежать из тюрьмы
-• адвокат
-• подкупить охрану
-• отсидеть
 • купить монеты
 • купить монеты другу
 • купить щит
 • мой щит
 • /balance
 • /cooldowns
+
+<b>🚔 Тюрьма</b>
+• тюрьма
+• сбежать из тюрьмы
+• адвокат
+• подкупить охрану
+• отсидеть
+
+<b>Что есть в тюрьме:</b>
+• можно попасть после неудачного или палёного ограбления
+• можно попробовать сбежать
+• можно нанять адвоката
+• можно подкупить охрану
+• можно просто ждать конца срока
 
 <b>👤 Профиль</b>
 • /profile
@@ -3704,15 +3726,35 @@ ${mood}`,
     // SHIELD COMMANDS
     // =========================
     if (isExactCommand(lowerText, "купить щит")) {
+      const shield = await getShieldRow(msg.from.id);
+
+      if (Number(shield?.count || 0) >= MAX_SHIELDS) {
+        await safeSendMessage(
+          msg.chat.id,
+          `🛡 Щит стоит ${SHIELD_COST} монет.
+
+У тебя уже максимум щитов: ${MAX_SHIELDS}/${MAX_SHIELDS}
+Больше купить нельзя.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
       try {
         const result = await buyShield(msg.from.id);
 
         await safeSendMessage(
           msg.chat.id,
-          `🛡 ${getUserLink(msg.from)} купил(а) щит за ${SHIELD_COST} монет.
+          `🛡 ${getUserLink(msg.from)} купил(а) щит.
 
-🛡 Щитов: ${result.shieldCount}
-👛 Твой баланс: ${result.userBalance}`,
+💸 Цена щита: ${SHIELD_COST} монет
+🛡 Щитов сейчас: ${result.shieldCount}/${MAX_SHIELDS}
+👛 Твой баланс: ${result.userBalance}
+
+💡 Один щит блокирует одно успешное ограбление.`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
@@ -3720,7 +3762,19 @@ ${mood}`,
         );
       } catch (error) {
         if (error.message === "NOT_ENOUGH_MONEY") {
-          await safeSendMessage(msg.chat.id, `❌ Для покупки щита нужно ${SHIELD_COST} монет.`);
+          await safeSendMessage(
+            msg.chat.id,
+            `❌ Щит стоит ${SHIELD_COST} монет.
+У тебя недостаточно монет.`
+          );
+          return;
+        }
+
+        if (error.message === "MAX_SHIELDS_REACHED") {
+          await safeSendMessage(
+            msg.chat.id,
+            `❌ У тебя уже максимум щитов: ${MAX_SHIELDS}/${MAX_SHIELDS}`
+          );
           return;
         }
 
@@ -3735,9 +3789,10 @@ ${mood}`,
 
       await safeSendMessage(
         msg.chat.id,
-        `🛡 Щит игрока ${getUserLink(msg.from)}
+        `🛡 Щиты игрока ${getUserLink(msg.from)}
 
-Количество: ${Number(shield?.count || 0)}
+Количество: ${Number(shield?.count || 0)}/${MAX_SHIELDS}
+💸 Цена одного щита: ${SHIELD_COST} монет
 💡 Один щит блокирует одно успешное ограбление.`,
         {
           parse_mode: "HTML",
@@ -5210,7 +5265,7 @@ ${lines.join("\n")}`,
           `🛡 ${getUserLink(target)} защитился(ась) щитом!
 
 🕵️ ${getUserLink(msg.from)} не смог(ла) ограбить цель.
-🛡 Осталось щитов у цели: ${shieldUse.count}`,
+🛡 Осталось щитов у цели: ${shieldUse.count}/${MAX_SHIELDS}`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
