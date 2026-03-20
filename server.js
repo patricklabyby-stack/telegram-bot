@@ -11,14 +11,14 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!token) throw new Error("BOT_TOKEN не найден");
 if (!databaseUrl) throw new Error("DATABASE_URL не найден");
 
-const OWNER_ID = 7837011810;
-
 const bot = new TelegramBot(token, { polling: true });
 
 const pool = new Pool({
   connectionString: databaseUrl,
   ssl: { rejectUnauthorized: false }
 });
+
+const ADMIN_ID = 7837011810;
 
 const chatMembers = {};
 const recentActiveUsers = {};
@@ -40,6 +40,7 @@ const CUSTOM_COMMAND_COST = 20;
 const MAX_CHILDREN_PER_FAMILY = 3;
 const MAX_PUNISHMENT_DAYS = 7;
 const MAX_GOOD_DEED_LENGTH = 120;
+const MAX_DREAM_LENGTH = 120;
 
 const ROBBERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const POLICE_JAIL_MS = 60 * 60 * 1000;
@@ -181,34 +182,6 @@ function getRandomGift() {
   return gifts[Math.floor(Math.random() * gifts.length)];
 }
 
-function getRandomCompliment() {
-  const compliments = [
-    "сегодня очень красиво выглядит ✨",
-    "самый милый человек в этом чате 🥰",
-    "очень классный собеседник 😎",
-    "заряжает всех хорошим настроением 🌟",
-    "просто топчик сегодня 🔥",
-    "очень приятный человек 💖",
-    "выглядит как звезда ⭐",
-    "очень добрый человек 🤍"
-  ];
-  return compliments[Math.floor(Math.random() * compliments.length)];
-}
-
-function getRandomDatePlace() {
-  const places = [
-    "в кино 🎬",
-    "в парк 🌳",
-    "в кафе ☕",
-    "на прогулку 🌆",
-    "на пиццу 🍕",
-    "к морю 🌊",
-    "в ресторан 🍽️",
-    "смотреть закат 🌇"
-  ];
-  return places[Math.floor(Math.random() * places.length)];
-}
-
 function getRandomRating() {
   return Math.floor(Math.random() * 10) + 1;
 }
@@ -227,6 +200,20 @@ function getRandomPrediction() {
     "Не рискуй сегодня ⚠️"
   ];
   return predictions[Math.floor(Math.random() * predictions.length)];
+}
+
+function getRandomCompliment() {
+  const compliments = [
+    "ты очень красивый(ая) 😍",
+    "у тебя классный стиль 😎",
+    "ты очень милый(ая) 😊",
+    "ты лучший человек в этом чате 🔥",
+    "с тобой приятно общаться 💫",
+    "ты сегодня вообще топ 😌",
+    "ты очень классный(ая) 🌟",
+    "у тебя крутая энергия ⚡"
+  ];
+  return compliments[Math.floor(Math.random() * compliments.length)];
 }
 
 function getRandomCoins() {
@@ -295,19 +282,23 @@ function getShopKeyboard() {
 
 function getMarriageDecisionKeyboard(requestId) {
   return {
-    inline_keyboard: [[
-      { text: "✅ Да", callback_data: `marriage_yes:${requestId}` },
-      { text: "❌ Нет", callback_data: `marriage_no:${requestId}` }
-    ]]
+    inline_keyboard: [
+      [
+        { text: "✅ Да", callback_data: `marriage_yes:${requestId}` },
+        { text: "❌ Нет", callback_data: `marriage_no:${requestId}` }
+      ]
+    ]
   };
 }
 
 function getAdoptionDecisionKeyboard(requestId) {
   return {
-    inline_keyboard: [[
-      { text: "✅ Да", callback_data: `adoption_yes:${requestId}` },
-      { text: "❌ Нет", callback_data: `adoption_no:${requestId}` }
-    ]]
+    inline_keyboard: [
+      [
+        { text: "✅ Да", callback_data: `adoption_yes:${requestId}` },
+        { text: "❌ Нет", callback_data: `adoption_no:${requestId}` }
+      ]
+    ]
   };
 }
 
@@ -397,7 +388,7 @@ function getRecentActiveCandidates(chatId, excludeUserIds = []) {
 
   return users.filter((user) => {
     if (!user || !user.id) return false;
-    if (excludeUserIds.includes(Number(user.id))) return false;
+    if (excludeUserIds.includes(user.id)) return false;
     return now - (user.last_seen_at || 0) <= ACTIVE_WINDOW_MS;
   });
 }
@@ -419,7 +410,10 @@ async function explodeBomb(chatId) {
   await safeSendMessage(
     chatId,
     `💥 Бомба взорвалась!\n${getUserLink(holder)} не успел передать бомбу.`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 }
 
@@ -444,18 +438,22 @@ async function passBomb(chatId, fromUser) {
   const bomb = activeBombs[key];
   if (!bomb) return false;
 
-  const excludeIds = [Number(fromUser.id)];
-  if (bomb.previousHolderId) excludeIds.push(Number(bomb.previousHolderId));
+  const excludeIds = [fromUser.id];
+  if (bomb.previousHolderId) excludeIds.push(bomb.previousHolderId);
 
   let candidates = getRecentActiveCandidates(chatId, excludeIds);
-  if (!candidates.length) candidates = getRecentActiveCandidates(chatId, [Number(fromUser.id)]);
+  if (!candidates.length) candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
 
   if (!candidates.length) {
     clearBomb(chatId);
+
     await safeSendMessage(
       chatId,
       `💣 ${getUserLink(fromUser)} попытался передать бомбу, но рядом никого не оказалось.\n\nБомба исчезла.`,
-      { parse_mode: "HTML", disable_web_page_preview: true }
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
     );
     return true;
   }
@@ -464,14 +462,17 @@ async function passBomb(chatId, fromUser) {
 
   activeBombs[key] = {
     holder: nextHolder,
-    previousHolderId: Number(fromUser.id),
+    previousHolderId: fromUser.id,
     timer: null
   };
 
   await safeSendMessage(
     chatId,
     `💣 ${getUserLink(fromUser)} передал бомбу!\n\n🔥 Теперь бомба у: ${getUserLink(nextHolder)}\n⏳ У него 5 секунд, чтобы написать: передать`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 
   await startBombTimer(chatId);
@@ -800,12 +801,14 @@ async function transferCoins(fromUserId, toUserId, amount) {
   }
 }
 
-async function addCoinsByAdmin(targetUserId, amount) {
+async function addCoinsToUser(targetUserId, amount) {
   const result = await pool.query(
     `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
     [targetUserId, amount]
   );
-  return Number(result.rows[0]?.balance || 0);
+
+  if (!result.rows[0]) throw new Error("USER_NOT_FOUND");
+  return Number(result.rows[0].balance || 0);
 }
 
 async function processStarPurchase(userId, successfulPayment) {
@@ -1415,10 +1418,21 @@ async function clearGoodDeeds(childUserId) {
 function getRandomRobberyResult() {
   const roll = Math.random();
 
-  if (roll < 0.60) return { type: "fail", amount: 0 };
-  if (roll < 0.90) return { type: "small", amount: Math.floor(Math.random() * 10) + 1 };
+  if (roll < 0.60) {
+    return { type: "fail", amount: 0 };
+  }
 
-  return { type: "big", amount: Math.floor(Math.random() * 16) + 15 };
+  if (roll < 0.90) {
+    return {
+      type: "small",
+      amount: Math.floor(Math.random() * 10) + 1
+    };
+  }
+
+  return {
+    type: "big",
+    amount: Math.floor(Math.random() * 16) + 15
+  };
 }
 
 function getRandomPoliceOutcome() {
@@ -1431,7 +1445,10 @@ function getRandomPoliceOutcome() {
 }
 
 async function cleanupExpiredJail() {
-  await pool.query(`DELETE FROM police_jail WHERE until_at <= NOW()`);
+  await pool.query(`
+    DELETE FROM police_jail
+    WHERE until_at <= NOW()
+  `);
 }
 
 async function getJailStatus(userId) {
@@ -1470,7 +1487,11 @@ async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
 
 async function removeUserFromJail(userId) {
   const result = await pool.query(
-    `DELETE FROM police_jail WHERE user_id = $1 RETURNING *`,
+    `
+    DELETE FROM police_jail
+    WHERE user_id = $1
+    RETURNING *
+    `,
     [userId]
   );
 
@@ -1486,7 +1507,10 @@ async function getJailBlockText(userId) {
 }
 
 async function updateLastRobberyAt(userId) {
-  await pool.query(`UPDATE users SET last_robbery_at = NOW() WHERE user_id = $1`, [userId]);
+  await pool.query(
+    `UPDATE users SET last_robbery_at = NOW() WHERE user_id = $1`,
+    [userId]
+  );
 }
 
 async function getRobberyCooldown(userId) {
@@ -1561,7 +1585,9 @@ async function robberyTransfer(thiefId, victimId, requestedAmount) {
     const victimBalance = Number(victimRow.rows[0].balance || 0);
     const actualAmount = Math.min(victimBalance, requestedAmount);
 
-    if (actualAmount <= 0) throw new Error("VICTIM_NO_MONEY");
+    if (actualAmount <= 0) {
+      throw new Error("VICTIM_NO_MONEY");
+    }
 
     const updatedVictim = await client.query(
       `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
@@ -1738,6 +1764,13 @@ async function takeFromFamilyBudget(userId, amount) {
       `,
       [familyKey, amount]
     );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const updatedUser = await client.query(
       `
@@ -1939,16 +1972,53 @@ async function setChildDream(childUserId, dreamText) {
   return result.rows[0] || null;
 }
 
-async function deleteChildDream(childUserId) {
-  const result = await pool.query(
-    `
-    DELETE FROM child_dreams
-    WHERE child_user_id = $1
-    RETURNING child_user_id, dream_balance
-    `,
-    [childUserId]
-  );
-  return result.rows[0] || null;
+async function deleteChildDreamAndReturnMoney(childUserId) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const dreamRow = await client.query(
+      `SELECT dream_balance FROM child_dreams WHERE child_user_id = $1 FOR UPDATE`,
+      [childUserId]
+    );
+
+    if (!dreamRow.rows[0]) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const dreamBalance = Number(dreamRow.rows[0].dream_balance || 0);
+
+    if (dreamBalance > 0) {
+      await client.query(
+        `UPDATE users SET balance = balance + $2 WHERE user_id = $1`,
+        [childUserId, dreamBalance]
+      );
+    }
+
+    await client.query(
+      `DELETE FROM child_dreams WHERE child_user_id = $1`,
+      [childUserId]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      returned: dreamBalance,
+      userBalance: Number(userRow.rows[0]?.balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function addSelfMoneyToDream(childUserId, amount) {
@@ -2007,7 +2077,7 @@ async function addSelfMoneyToDream(childUserId, amount) {
   }
 }
 
-async function takeSelfMoneyFromDream(childUserId, amount) {
+async function takeMoneyFromDream(childUserId, amount) {
   const dream = await getChildDream(childUserId);
   if (!dream) throw new Error("NO_DREAM");
 
@@ -2023,22 +2093,28 @@ async function takeSelfMoneyFromDream(childUserId, amount) {
 
     if (!dreamRow.rows[0]) throw new Error("NO_DREAM");
 
-    const dreamBalance = Number(dreamRow.rows[0].dream_balance || 0);
-    if (dreamBalance < amount) throw new Error("NOT_ENOUGH_DREAM_MONEY");
+    const currentDreamBalance = Number(dreamRow.rows[0].dream_balance || 0);
+    if (currentDreamBalance < amount) throw new Error("NOT_ENOUGH_DREAM_MONEY");
 
-    await client.query(
-      `UPDATE child_dreams SET dream_balance = dream_balance - $2, updated_at = NOW() WHERE child_user_id = $1`,
+    const updatedDream = await client.query(
+      `
+      UPDATE child_dreams
+      SET dream_balance = dream_balance - $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING dream_text, dream_balance, updated_at
+      `,
       [childUserId, amount]
     );
 
     const updatedUser = await client.query(
-      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
+      `
+      UPDATE users
+      SET balance = balance + $2
+      WHERE user_id = $1
+      RETURNING balance
+      `,
       [childUserId, amount]
-    );
-
-    const updatedDream = await client.query(
-      `SELECT dream_text, dream_balance, updated_at FROM child_dreams WHERE child_user_id = $1`,
-      [childUserId]
     );
 
     await client.query("COMMIT");
@@ -2106,59 +2182,6 @@ async function addParentMoneyToDream(parentUserId, childUserId, amount) {
       dreamText: dreamRow.rows[0].dream_text,
       dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
       updatedAt: dreamRow.rows[0].updated_at,
-      parentBalance: Number(updatedParent.rows[0].balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function takeParentMoneyFromDream(parentUserId, childUserId, amount) {
-  const dream = await getChildDream(childUserId);
-  if (!dream) throw new Error("NO_DREAM");
-
-  const isChild = await isChildInMyFamily(parentUserId, childUserId);
-  if (!isChild) throw new Error("NOT_MY_CHILD");
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const dreamRow = await client.query(
-      `SELECT dream_balance, dream_text FROM child_dreams WHERE child_user_id = $1 FOR UPDATE`,
-      [childUserId]
-    );
-
-    if (!dreamRow.rows[0]) throw new Error("NO_DREAM");
-
-    const dreamBalance = Number(dreamRow.rows[0].dream_balance || 0);
-    if (dreamBalance < amount) throw new Error("NOT_ENOUGH_DREAM_MONEY");
-
-    await client.query(
-      `UPDATE child_dreams SET dream_balance = dream_balance - $2, updated_at = NOW() WHERE child_user_id = $1`,
-      [childUserId, amount]
-    );
-
-    const updatedParent = await client.query(
-      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
-      [parentUserId, amount]
-    );
-
-    const updatedDream = await client.query(
-      `SELECT dream_text, dream_balance, updated_at FROM child_dreams WHERE child_user_id = $1`,
-      [childUserId]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      dreamText: updatedDream.rows[0].dream_text,
-      dreamBalance: Number(updatedDream.rows[0].dream_balance || 0),
-      updatedAt: updatedDream.rows[0].updated_at,
       parentBalance: Number(updatedParent.rows[0].balance || 0)
     };
   } catch (error) {
@@ -2520,7 +2543,10 @@ ${getUserLink(request.fromUser)} + ${getUserLink(request.targetUser)}
 
 📅 Дата: ${formatDate(marriage.created_at)}
 🏡 Теперь вы семья!`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 }
 
@@ -2532,7 +2558,10 @@ async function finalizeMarriageDecline(request, chatId, messageId = null) {
   await safeSendMessage(
     chatId,
     `💔 ${getUserLink(request.targetUser)} отказал(а) ${getUserLink(request.fromUser)} в браке.`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 
   deleteMarriageRequest(request);
@@ -2608,7 +2637,10 @@ async function finalizeAdoptionDecline(request, chatId, messageId = null) {
   await safeSendMessage(
     chatId,
     `❌ ${getUserLink(request.childUser)} отказал(а) ${getUserLink(request.parentUser)} в усыновлении.`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 
   deleteAdoptionRequest(request);
@@ -2670,8 +2702,8 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • моя мечта
 • удалить мечту
 • пополнить баланс на мечту 5
-• снять с мечты 5
 • на мечту 5
+• снять с мечты 5
 • наказать ребенка 1
 • наказание
 • снять наказание
@@ -2688,19 +2720,19 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • охота
 • снайпер
 • ограбить
-• тюрьма
 • магазин
 • /balance
 • /cooldowns
+
+<b>🚔 Тюрьма</b>
+• тюрьма
+• после неудачного ограбления полиция может посадить в тюрьму
+• в тюрьме нельзя нормально пользоваться частью денежных команд
 
 <b>👤 Профиль</b>
 • /profile
 • /profile ответом
 • респект
-
-<b>💖 Романтика</b>
-• позвать на свидание
-• сделать комплимент
 
 <b>🎭 RP команды</b>
 • убить
@@ -2720,6 +2752,8 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • заморозить
 • спасти
 • подарок
+• позвать на свидание
+• сделать комплимент
 
 <b>🛠 Свои команды</b>
 • /createcommand
@@ -2738,7 +2772,10 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 });
 
@@ -2770,7 +2807,10 @@ bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
     await safeSendMessage(
       msg.chat.id,
       `💰 ${getUserLink(msg.from)}, ваш баланс: ${stats.balance || 0} монет`,
-      { parse_mode: "HTML", disable_web_page_preview: true }
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
     );
   } catch (error) {
     console.error("Ошибка /balance:", error);
@@ -2807,7 +2847,10 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
 
     const stats = await getUserStats(msg.from.id);
     if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
-      await safeSendMessage(msg.chat.id, `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`);
+      await safeSendMessage(
+        msg.chat.id,
+        `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`
+      );
       return;
     }
 
@@ -2892,40 +2935,37 @@ bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) 
   }
 });
 
-// скрытая админ команда
-bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
+// скрытая команда только владельцу
+bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?\s+(\d+)$/, async (msg, match) => {
   try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
-
-    await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
+    if (Number(msg.from?.id) !== ADMIN_ID) return;
 
     const target = await resolveTargetUserFromReply(msg);
-    const amount = Number(match?.[2] || 0);
-
     if (!target) {
       await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: /givemoney 100");
       return;
     }
 
+    const amount = Number(match?.[2] || 0);
     if (!Number.isInteger(amount) || amount <= 0) {
-      await safeSendMessage(msg.chat.id, "❌ Укажи сумму больше 0.");
+      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
       return;
     }
 
     await initUser(target);
-    await saveSeenUser(msg.chat.id, target);
-
-    const balance = await addCoinsByAdmin(target.id, amount);
+    const newBalance = await addCoinsToUser(target.id, amount);
 
     await safeSendMessage(
       msg.chat.id,
-      `✅ ${getUserLink(target)} выдано ${amount} монет\n💰 Новый баланс: ${balance}`,
-      { parse_mode: "HTML", disable_web_page_preview: true }
+      `✅ ${getUserLink(target)} выдано ${amount} монет.\n💰 Новый баланс: ${newBalance}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
     );
   } catch (error) {
     console.error("Ошибка /givemoney:", error);
-    if (Number(msg.from.id) === OWNER_ID) {
+    if (Number(msg.from?.id) === ADMIN_ID) {
       await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
     }
   }
@@ -3139,12 +3179,22 @@ bot.on("message", async (msg) => {
       const parsed = parseCreateCommandInput(text);
 
       if (!parsed) {
-        await safeSendMessage(msg.chat.id, `❌ Напиши в формате:\nкоманда действие\n\nПример:\nоблил облил водой`);
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Напиши в формате:
+команда действие
+
+Пример:
+облил облил водой`
+        );
         return;
       }
 
       if (!isValidTrigger(parsed.trigger)) {
-        await safeSendMessage(msg.chat.id, "❌ Команда должна быть одним словом от 2 до 20 символов.\nМожно буквы, цифры, _ и -");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Команда должна быть одним словом от 2 до 20 символов.\nМожно буквы, цифры, _ и -"
+        );
         return;
       }
 
@@ -3158,6 +3208,26 @@ bot.on("message", async (msg) => {
         return;
       }
 
+      const reserved = [
+        "позвать на свидание",
+        "сделать комплимент",
+        "магазин",
+        "семья",
+        "деньги",
+        "охота",
+        "снайпер",
+        "ограбить",
+        "бомба",
+        "передать",
+        "пара",
+        "респект",
+        "подарок"
+      ];
+      if (reserved.includes(parsed.trigger)) {
+        await safeSendMessage(msg.chat.id, "❌ Такая команда уже занята.");
+        return;
+      }
+
       const existing = await getCustomCommandByTrigger(parsed.trigger);
       if (existing) {
         await safeSendMessage(msg.chat.id, "❌ Такая команда уже существует. Напиши другую.");
@@ -3166,7 +3236,10 @@ bot.on("message", async (msg) => {
 
       const count = await getUserCustomCommandCount(msg.from.id);
       if (count >= MAX_CUSTOM_COMMANDS) {
-        await safeSendMessage(msg.chat.id, `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`);
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`
+        );
         return;
       }
 
@@ -3219,51 +3292,18 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // романтика
-    if (isExactCommand(lowerText, "позвать на свидание")) {
-      const target = await resolveTargetUserFromReply(msg);
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение человека и напиши: позвать на свидание");
-        return;
-      }
-
-      if (Number(target.id) === Number(msg.from.id)) {
-        await safeSendMessage(msg.chat.id, "😅 Самого себя на свидание звать нельзя.");
-        return;
-      }
-
-      const place = getRandomDatePlace();
-      await safeSendMessage(
-        msg.chat.id,
-        `💖 ${getUserLink(msg.from)} позвал(а) ${getUserLink(target)} на свидание ${escapeHtml(place)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "сделать комплимент")) {
-      const target = await resolveTargetUserFromReply(msg);
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение человека и напиши: сделать комплимент");
-        return;
-      }
-
-      const compliment = getRandomCompliment();
-      await safeSendMessage(
-        msg.chat.id,
-        `💌 ${getUserLink(msg.from)} сделал(а) комплимент ${getUserLink(target)}\n\n${getUserLink(target)} ${escapeHtml(compliment)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
-      );
-      return;
-    }
-
-    // наказания
+    // =========================
+    // PUNISHMENT COMMANDS
+    // =========================
     if (lowerText.startsWith("наказать ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1"
+        );
         return;
       }
 
@@ -3271,7 +3311,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const days = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
-        await safeSendMessage(msg.chat.id, `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.\nПример: наказать ребенка 3`);
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.\nПример: наказать ребенка 3`
+        );
         return;
       }
 
@@ -3292,9 +3335,13 @@ ${escapeHtml(parsed.actionText)} — текст бота
 • нельзя просить деньги
 • нельзя получать карманные деньги
 • нельзя брать из семейного бюджета
+• нельзя грабить
 
 🕒 До: ${formatDateTime(punishment.until_at)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3304,7 +3351,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: снять наказание");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: снять наказание"
+        );
         return;
       }
 
@@ -3325,7 +3375,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
       await safeSendMessage(
         msg.chat.id,
         `✅ ${getUserLink(parent)} снял(а) наказание с ${getUserLink(child)}.`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3359,19 +3412,28 @@ ${escapeHtml(parsed.actionText)} — текст бота
 📌 Ограничения:
 • нельзя просить деньги
 • нельзя получать карманные деньги
-• нельзя брать из семейного бюджета`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+• нельзя брать из семейного бюджета
+• нельзя грабить`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
 
-    // добрые дела
+    // =========================
+    // GOOD DEEDS / OBEDIENCE
+    // =========================
     if (isExactCommand(lowerText, "похвалить ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка"
+        );
         return;
       }
 
@@ -3388,7 +3450,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
         `🌟 ${getUserLink(parent)} похвалил(а) ${getUserLink(child)}!
 
 📈 Послушание: ${Number(obedience.value || 0)}/100`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3398,7 +3463,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20"
+        );
         return;
       }
 
@@ -3406,7 +3474,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20"
+        );
         return;
       }
 
@@ -3427,7 +3498,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
 👛 Баланс ${escapeHtml(getUserName(parent))}: ${transferResult.fromBalance}
 👛 Баланс ${escapeHtml(getUserName(child))}: ${transferResult.toBalance}
 📈 Послушание: ${Number(obedience.value || 0)}/100`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NOT_ENOUGH_MONEY") {
@@ -3447,7 +3521,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому"
+        );
         return;
       }
 
@@ -3459,12 +3536,18 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
       const deedText = text.slice("добавить доброе дело".length).trim();
       if (!deedText || deedText.length < 2) {
-        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nдобавить доброе дело помог по дому");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Напиши так:\nдобавить доброе дело помог по дому"
+        );
         return;
       }
 
       if (deedText.length > MAX_GOOD_DEED_LENGTH) {
-        await safeSendMessage(msg.chat.id, `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`);
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`
+        );
         return;
       }
 
@@ -3477,7 +3560,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
 📔 Дело: ${escapeHtml(deedText)}
 📈 Послушание: ${Number(obedience.value || 0)}/100`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3513,7 +3599,10 @@ ${escapeHtml(parsed.actionText)} — текст бота
         `📔 Добрые дела ${getUserLink(targetUser)}
 
 ${lines.join("\n")}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3523,7 +3612,10 @@ ${lines.join("\n")}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1"
+        );
         return;
       }
 
@@ -3537,7 +3629,10 @@ ${lines.join("\n")}`,
       const index = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(index) || index <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи номер.\nПример: удалить доброе дело 1");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи номер.\nПример: удалить доброе дело 1"
+        );
         return;
       }
 
@@ -3552,7 +3647,10 @@ ${lines.join("\n")}`,
         `🗑 ${getUserLink(parent)} удалил(а) доброе дело у ${getUserLink(child)}
 
 Удалено: ${escapeHtml(deleted.deed_text)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3562,7 +3660,10 @@ ${lines.join("\n")}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела"
+        );
         return;
       }
 
@@ -3579,7 +3680,10 @@ ${lines.join("\n")}`,
         `🧹 ${getUserLink(parent)} очистил(а) список добрых дел ${getUserLink(child)}
 
 Удалено записей: ${deletedCount}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3605,12 +3709,17 @@ ${lines.join("\n")}`,
 
 Уровень: ${Number(obedience?.value || 0)}/100
 🕒 Обновлено: ${formatDateTime(obedience.updated_at)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
 
-    // тюрьма
+    // =========================
+    // JAIL
+    // =========================
     if (isExactCommand(lowerText, "тюрьма")) {
       let targetUser = msg.from;
 
@@ -3624,7 +3733,10 @@ ${lines.join("\n")}`,
         await safeSendMessage(
           msg.chat.id,
           `✅ ${getUserLink(targetUser)} не в тюрьме.`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
@@ -3638,17 +3750,25 @@ ${lines.join("\n")}`,
 Игрок: ${getUserLink(targetUser)}
 🕒 До: ${formatDateTime(jail.until_at)}
 ⏳ Осталось: ${formatRemainingTime(remainingMs)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
 
-    // семейный бюджет
+    // =========================
+    // FAMILY BUDGET
+    // =========================
     if (isExactCommand(lowerText, "семейный бюджет")) {
       const budget = await getFamilyBudget(msg.from.id);
 
       if (!budget) {
-        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Семейный бюджет доступен только семье.");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ты не состоишь в семье. Семейный бюджет доступен только семье."
+        );
         return;
       }
 
@@ -3659,7 +3779,10 @@ ${lines.join("\n")}`,
 👤 Игрок: ${getUserLink(msg.from)}
 💰 В бюджете семьи: ${Number(budget.balance || 0)} монет
 🕒 Обновлён: ${formatDateTime(budget.updated_at)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3669,7 +3792,10 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5"
+        );
         return;
       }
 
@@ -3683,11 +3809,17 @@ ${lines.join("\n")}`,
 💰 Бюджет семьи: ${result.familyBalance}
 👛 Твой баланс: ${result.userBalance}
 🕒 Обновлён: ${formatDateTime(result.updatedAt)}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя.");
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя."
+          );
           return;
         }
 
@@ -3708,7 +3840,10 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5"
+        );
         return;
       }
 
@@ -3716,7 +3851,10 @@ ${lines.join("\n")}`,
       if (childInfo) {
         const punishmentText = await getPunishedBlockText(msg.from.id);
         if (punishmentText) {
-          await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания нельзя брать деньги из семейного бюджета.`);
+          await safeSendMessage(
+            msg.chat.id,
+            `${punishmentText}\nВо время наказания нельзя брать деньги из семейного бюджета.`
+          );
           return;
         }
       }
@@ -3731,11 +3869,17 @@ ${lines.join("\n")}`,
 💰 Бюджет семьи: ${result.familyBalance}
 👛 Твой баланс: ${result.userBalance}
 🕒 Обновлён: ${formatDateTime(result.updatedAt)}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя.");
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя."
+          );
           return;
         }
 
@@ -3751,7 +3895,9 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // копилка
+    // =========================
+    // PIGGY BANK
+    // =========================
     if (isExactCommand(lowerText, "создать копилку")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -3762,7 +3908,10 @@ ${lines.join("\n")}`,
 
       const existing = await getPiggyBank(msg.from.id);
       if (existing) {
-        await safeSendMessage(msg.chat.id, `🐷 У тебя уже есть копилка.\n💰 В копилке: ${Number(existing.balance || 0)} монет`);
+        await safeSendMessage(
+          msg.chat.id,
+          `🐷 У тебя уже есть копилка.\n💰 В копилке: ${Number(existing.balance || 0)} монет`
+        );
         return;
       }
 
@@ -3773,7 +3922,10 @@ ${lines.join("\n")}`,
         `🐷 ${getUserLink(msg.from)} создал(а) копилку!
 
 💰 В копилке: ${Number(piggy.balance || 0)} монет`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3788,7 +3940,10 @@ ${lines.join("\n")}`,
 
       const piggy = await getPiggyBank(msg.from.id);
       if (!piggy) {
-        await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ У тебя нет копилки.\nНапиши: создать копилку"
+        );
         return;
       }
 
@@ -3798,7 +3953,10 @@ ${lines.join("\n")}`,
 
 💰 В копилке: ${Number(piggy.balance || 0)} монет
 🕒 Обновлена: ${formatDateTime(piggy.updated_at)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3815,7 +3973,10 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5"
+        );
         return;
       }
 
@@ -3829,11 +3990,17 @@ ${lines.join("\n")}`,
 💰 В копилке: ${result.piggyBalance}
 👛 Твой баланс: ${result.userBalance}
 🕒 Обновлена: ${formatDateTime(result.updatedAt)}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NO_PIGGY_BANK") {
-          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ У тебя нет копилки.\nНапиши: создать копилку"
+          );
           return;
         }
 
@@ -3866,11 +4033,17 @@ ${lines.join("\n")}`,
 
 🐷 В копилке: ${result.piggyBalance}
 👛 Твой баланс: ${result.userBalance}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NO_PIGGY_BANK") {
-          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ У тебя нет копилки.\nНапиши: создать копилку"
+          );
           return;
         }
 
@@ -3881,7 +4054,9 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // мечты
+    // =========================
+    // DREAMS
+    // =========================
     if (lowerText.startsWith("загадать мечту")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -3892,12 +4067,15 @@ ${lines.join("\n")}`,
 
       const dreamText = text.slice("загадать мечту".length).trim();
       if (!dreamText || dreamText.length < 2) {
-        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nзагадать мечту айфон");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Напиши так:\nзагадать мечту айфон"
+        );
         return;
       }
 
-      if (dreamText.length > 120) {
-        await safeSendMessage(msg.chat.id, "❌ Мечта слишком длинная. Максимум 120 символов.");
+      if (dreamText.length > MAX_DREAM_LENGTH) {
+        await safeSendMessage(msg.chat.id, `❌ Мечта слишком длинная. Максимум ${MAX_DREAM_LENGTH} символов.`);
         return;
       }
 
@@ -3909,7 +4087,10 @@ ${lines.join("\n")}`,
 
 🎯 Мечта: ${escapeHtml(dream.dream_text)}
 💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3924,7 +4105,10 @@ ${lines.join("\n")}`,
 
       const dream = await getChildDream(msg.from.id);
       if (!dream) {
-        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон"
+        );
         return;
       }
 
@@ -3935,7 +4119,10 @@ ${lines.join("\n")}`,
 🎯 Мечта: ${escapeHtml(dream.dream_text)}
 💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}
 🕒 Обновлена: ${formatDateTime(dream.updated_at)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3948,23 +4135,22 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const deleted = await deleteChildDream(msg.from.id);
+      const deleted = await deleteChildDreamAndReturnMoney(msg.from.id);
       if (!deleted) {
         await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.");
         return;
       }
 
-      let extra = "";
-      const money = Number(deleted.dream_balance || 0);
-      if (money > 0) {
-        await pool.query(`UPDATE users SET balance = balance + $2 WHERE user_id = $1`, [msg.from.id, money]);
-        extra = `\n💰 ${money} монет с мечты возвращены на баланс.`;
-      }
-
       await safeSendMessage(
         msg.chat.id,
-        `🗑 ${getUserLink(msg.from)} удалил(а) свою мечту.${extra}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        `🗑 ${getUserLink(msg.from)} удалил(а) свою мечту.
+
+💰 Возвращено на баланс: ${deleted.returned}
+👛 Твой баланс: ${deleted.userBalance}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -3981,7 +4167,10 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5"
+        );
         return;
       }
 
@@ -3995,11 +4184,17 @@ ${lines.join("\n")}`,
 🎯 Мечта: ${escapeHtml(result.dreamText)}
 💰 Баланс мечты: ${result.dreamBalance}
 👛 Твой баланс: ${result.userBalance}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NO_DREAM") {
-          await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон");
+          await safeSendMessage(
+            msg.chat.id,
+            "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон"
+          );
           return;
         }
 
@@ -4016,64 +4211,52 @@ ${lines.join("\n")}`,
     }
 
     if (lowerText.startsWith("снять с мечты")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Снимать деньги с мечты может только ребёнок в семье.");
+        return;
+      }
+
       const match = lowerText.match(/^снять с мечты\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи сумму.\nПример: снять с мечты 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: снять с мечты 10"
+        );
         return;
       }
 
-      const target = await resolveTargetUserFromReply(msg);
-
       try {
-        if (target) {
-          const result = await takeParentMoneyFromDream(msg.from.id, target.id, amount);
+        const result = await takeMoneyFromDream(msg.from.id, amount);
 
-          await safeSendMessage(
-            msg.chat.id,
-            `💸 ${getUserLink(msg.from)} снял(а) с мечты ${getUserLink(target)} ${amount} монет
-
-🎯 Мечта: ${escapeHtml(result.dreamText)}
-💰 Осталось на мечте: ${result.dreamBalance}
-👛 Твой баланс: ${result.parentBalance}`,
-            { parse_mode: "HTML", disable_web_page_preview: true }
-          );
-        } else {
-          const childInfo = await getActiveAdoptionByChildId(msg.from.id);
-          if (!childInfo) {
-            await safeSendMessage(msg.chat.id, "❌ Команда доступна ребёнку для своей мечты или родителю по реплаю.");
-            return;
-          }
-
-          const result = await takeSelfMoneyFromDream(msg.from.id, amount);
-
-          await safeSendMessage(
-            msg.chat.id,
-            `💸 ${getUserLink(msg.from)} снял(а) с мечты ${amount} монет
+        await safeSendMessage(
+          msg.chat.id,
+          `💸 ${getUserLink(msg.from)} снял(а) с мечты ${amount} монет
 
 🎯 Мечта: ${escapeHtml(result.dreamText)}
-💰 Осталось на мечте: ${result.dreamBalance}
+💰 Баланс мечты: ${result.dreamBalance}
 👛 Твой баланс: ${result.userBalance}`,
-            { parse_mode: "HTML", disable_web_page_preview: true }
-          );
-        }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
       } catch (error) {
         if (error.message === "NO_DREAM") {
-          await safeSendMessage(msg.chat.id, "❌ Мечты нет.");
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.");
           return;
         }
-        if (error.message === "NOT_MY_CHILD") {
-          await safeSendMessage(msg.chat.id, "❌ Ты можешь снимать только с мечты своего ребёнка.");
-          return;
-        }
+
         if (error.message === "NOT_ENOUGH_DREAM_MONEY") {
           await safeSendMessage(msg.chat.id, "❌ На мечте недостаточно монет.");
           return;
         }
 
         console.error("Ошибка снятия с мечты:", error);
-        await safeSendMessage(msg.chat.id, "❌ Ошибка снятия с мечты.");
+        await safeSendMessage(msg.chat.id, "❌ Ошибка снятия денег с мечты.");
       }
 
       return;
@@ -4083,7 +4266,10 @@ ${lines.join("\n")}`,
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: на мечту 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: на мечту 5"
+        );
         return;
       }
 
@@ -4091,7 +4277,10 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: на мечту 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: на мечту 5"
+        );
         return;
       }
 
@@ -4105,7 +4294,10 @@ ${lines.join("\n")}`,
 🎯 Мечта: ${escapeHtml(result.dreamText)}
 💰 Баланс мечты: ${result.dreamBalance}
 👛 Твой баланс: ${result.parentBalance}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NO_DREAM") {
@@ -4130,7 +4322,9 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // семейные деньги
+    // =========================
+    // FAMILY MONEY
+    // =========================
     if (lowerText.startsWith("попросить денег")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -4141,7 +4335,10 @@ ${lines.join("\n")}`,
 
       const punishmentText = await getPunishedBlockText(msg.from.id);
       if (punishmentText) {
-        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания нельзя просить деньги.`);
+        await safeSendMessage(
+          msg.chat.id,
+          `${punishmentText}\nВо время наказания нельзя просить деньги.`
+        );
         return;
       }
 
@@ -4149,13 +4346,18 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: попросить денег 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: попросить денег 5"
+        );
         return;
       }
 
       const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
       const parentPartnerInfo = parentUser ? await getMarriagePartner(parentUser.id) : null;
-      const secondParent = parentPartnerInfo ? await getStoredUser(Number(parentPartnerInfo.partnerId)) : null;
+      const secondParent = parentPartnerInfo
+        ? await getStoredUser(Number(parentPartnerInfo.partnerId))
+        : null;
 
       let parentsText = "";
       if (parentUser) parentsText += `${getUserLink(parentUser)}`;
@@ -4168,7 +4370,10 @@ ${lines.join("\n")}`,
 👨‍👩‍👧 Родители: ${parentsText || "не найдены"}
 💬 Родитель может ответить на сообщение ребёнка командой:
 дать ребенку ${amount}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4183,7 +4388,10 @@ ${lines.join("\n")}`,
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5"
+        );
         return;
       }
 
@@ -4191,19 +4399,28 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: дать ребенку 5");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Укажи нормальную сумму.\nПример: дать ребенку 5"
+        );
         return;
       }
 
       const isChild = await isChildInMyFamily(msg.from.id, target.id);
       if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь давать деньги только своему ребёнку.");
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ты можешь давать деньги только своему ребёнку."
+        );
         return;
       }
 
       const punishmentText = await getPunishedBlockText(target.id);
       if (punishmentText) {
-        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`);
+        await safeSendMessage(
+          msg.chat.id,
+          `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`
+        );
         return;
       }
 
@@ -4216,7 +4433,10 @@ ${lines.join("\n")}`,
 
 Баланс ${escapeHtml(getUserName(msg.from))}: ${transferResult.fromBalance}
 Баланс ${escapeHtml(getUserName(target))}: ${transferResult.toBalance}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NOT_ENOUGH_MONEY") {
@@ -4262,7 +4482,10 @@ ${lines.join("\n")}`,
 
       const punishmentText = await getPunishedBlockText(target.id);
       if (punishmentText) {
-        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`);
+        await safeSendMessage(
+          msg.chat.id,
+          `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`
+        );
         return;
       }
 
@@ -4275,7 +4498,10 @@ ${lines.join("\n")}`,
 
 Баланс ${escapeHtml(getUserName(sender))}: ${transferResult.fromBalance}
 Баланс ${escapeHtml(getUserName(target))}: ${transferResult.toBalance}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
       } catch (error) {
         if (error.message === "NOT_ENOUGH_MONEY") {
@@ -4290,7 +4516,9 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // ограбление
+    // =========================
+    // ROBBERY
+    // =========================
     if (isExactCommand(lowerText, "ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -4300,7 +4528,10 @@ ${lines.join("\n")}`,
 
       const childPunishment = await getPunishedBlockText(msg.from.id);
       if (childPunishment) {
-        await safeSendMessage(msg.chat.id, `${childPunishment}\nВо время наказания нельзя грабить других.`);
+        await safeSendMessage(
+          msg.chat.id,
+          `${childPunishment}\nВо время наказания нельзя грабить других.`
+        );
         return;
       }
 
@@ -4323,7 +4554,10 @@ ${lines.join("\n")}`,
 
       const robberyCooldown = await getRobberyCooldown(msg.from.id);
       if (robberyCooldown > 0) {
-        await safeSendMessage(msg.chat.id, `⏳ Ограбление снова будет доступно через ${formatRemainingTime(robberyCooldown)}`);
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ Ограбление снова будет доступно через ${formatRemainingTime(robberyCooldown)}`
+        );
         return;
       }
 
@@ -4428,7 +4662,9 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // прочее
+    // =========================
+    // OTHER / RP
+    // =========================
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
@@ -4457,7 +4693,10 @@ ${lines.join("\n")}`,
 
 🔥 Бомба у: ${getUserLink(holder)}
 ⏳ У него 5 секунд, чтобы написать: передать`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
 
       await startBombTimer(msg.chat.id);
@@ -4470,7 +4709,7 @@ ${lines.join("\n")}`,
 
       if (!bomb) return;
 
-      if (!bomb.holder || Number(bomb.holder.id) !== Number(msg.from.id)) {
+      if (!bomb.holder || bomb.holder.id !== msg.from.id) {
         await safeSendMessage(msg.chat.id, "❌ Сейчас бомба не у тебя.");
         return;
       }
@@ -4574,7 +4813,10 @@ ${getUserLink(target)}, выбери ниже:
         }
       );
 
-      if (sent) request.requestMessageId = sent.message_id;
+      if (sent) {
+        request.requestMessageId = sent.message_id;
+      }
+
       return;
     }
 
@@ -4587,12 +4829,16 @@ ${getUserLink(target)}, выбери ниже:
       }
 
       const partnerUser = await getStoredUser(marriagePartner.partnerId);
+
       await divorceMarriageByUserId(msg.from.id);
 
       await safeSendMessage(
         msg.chat.id,
         `💔 ${getUserLink(msg.from)} развёлся(ась) с ${getUserLink(partnerUser)}.`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4661,7 +4907,10 @@ ${getUserLink(child)}, выбери ниже:
         reply_markup: getAdoptionDecisionKeyboard(requestId)
       });
 
-      if (sent) request.requestMessageId = sent.message_id;
+      if (sent) {
+        request.requestMessageId = sent.message_id;
+      }
+
       return;
     }
 
@@ -4684,7 +4933,10 @@ ${getUserLink(child)}, выбери ниже:
       await safeSendMessage(
         msg.chat.id,
         `💔 ${getUserLink(parent)} отказался(ась) от ребёнка ${getUserLink(child)}.`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4704,7 +4956,10 @@ ${getUserLink(child)}, выбери ниже:
       await safeSendMessage(
         msg.chat.id,
         `🏃 ${getUserLink(child)} сбежал(а) из семьи ${getUserLink(parentUser)}.`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4729,7 +4984,10 @@ ${getUserLink(child)}, выбери ниже:
       await safeSendMessage(
         msg.chat.id,
         `⭐ ${getUserLink(parent)} выбрал(а) ${getUserLink(child)} любимым ребёнком!`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4745,7 +5003,10 @@ ${getUserLink(child)}, выбери ниже:
       await safeSendMessage(
         msg.chat.id,
         `⭐ ${getUserLink(msg.from)} убрал(а) любимого ребёнка.`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4764,7 +5025,9 @@ ${getUserLink(child)}, выбери ниже:
       if (childInfo) {
         const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
         const parentPartnerInfo = await getMarriagePartner(parentUser.id);
-        const secondParent = parentPartnerInfo ? await getStoredUser(Number(parentPartnerInfo.partnerId)) : null;
+        const secondParent = parentPartnerInfo
+          ? await getStoredUser(Number(parentPartnerInfo.partnerId))
+          : null;
         const punishment = await getActivePunishment(targetUser.id);
         const obedience = await getChildObedience(targetUser.id);
 
@@ -4773,7 +5036,9 @@ ${getUserLink(child)}, выбери ниже:
 👶 Ребёнок: ${getUserLink(targetUser)}
 👨 Родитель: ${getUserLink(parentUser)}`;
 
-        if (secondParent) textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
+        if (secondParent) {
+          textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
+        }
 
         textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
         textFamily += `\n📈 Послушание: ${Number(obedience?.value || 0)}/100`;
@@ -4801,7 +5066,10 @@ ${getUserLink(child)}, выбери ниже:
         await safeSendMessage(
           msg.chat.id,
           `${getUserLink(targetUser)} пока не состоит в семье.`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
@@ -4878,7 +5146,10 @@ ${getUserLink(child)}, выбери ниже:
 
 Вероятность лжи: ${result.percent}%
 ${escapeHtml(result.text)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4912,7 +5183,10 @@ ${escapeHtml(result.text)}`,
         `🤝 ${getUserLink(sender)} выразил респект ${getUserLink(target)}
 
 Респект: ${respectCount}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4934,7 +5208,10 @@ ${escapeHtml(result.text)}`,
 ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
 
 ❤️ Совместимость: ${percent}%`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4957,7 +5234,10 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
         await safeSendMessage(
           msg.chat.id,
           `⏳ ${getUserLink(msg.from)}, получить монеты снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
@@ -4967,7 +5247,10 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
         `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!
 
 Баланс: ${result.balance} монет`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -4990,7 +5273,10 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
         await safeSendMessage(
           msg.chat.id,
           `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
@@ -5007,7 +5293,10 @@ ${escapeHtml(result.hunt.text)}
 ${coinsLine}
 
 Баланс: ${result.balance} монет`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5030,7 +5319,10 @@ ${coinsLine}
         await safeSendMessage(
           msg.chat.id,
           `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
@@ -5046,7 +5338,10 @@ ${escapeHtml(result.sniper.text)}
 ${coinsLine}
 
 Баланс: ${result.balance} монет`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5058,7 +5353,10 @@ ${coinsLine}
         msg.chat.id,
         `🔮 ${getUserLink(msg.from)}
 ${escapeHtml(prediction)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5082,7 +5380,10 @@ ${escapeHtml(prediction)}`,
       await safeSendMessage(
         msg.chat.id,
         `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5105,7 +5406,10 @@ ${escapeHtml(prediction)}`,
       await safeSendMessage(
         msg.chat.id,
         `🤔 ${escapeHtml(subject)}? Думаю это ${getUserLink(randomUser)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5126,7 +5430,10 @@ ${escapeHtml(prediction)}`,
         await safeSendMessage(
           msg.chat.id,
           `🎁 ${getUserLink(sender)} подарил(а) подарок самому себе`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
@@ -5136,7 +5443,59 @@ ${escapeHtml(prediction)}`,
       await safeSendMessage(
         msg.chat.id,
         `🎁 ${getUserLink(sender)} подарил(а) ${getUserLink(target)} ${escapeHtml(gift)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "позвать на свидание")) {
+      const sender = msg.from;
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: позвать на свидание");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🌹 ${getUserLink(sender)} позвал(а) на свидание ${getUserLink(target)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "сделать комплимент")) {
+      const sender = msg.from;
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: сделать комплимент");
+        return;
+      }
+
+      const compliment = getRandomCompliment();
+
+      await pool.query(
+        `UPDATE users SET respect = COALESCE(respect, 0) + 1 WHERE user_id = $1`,
+        [target.id]
+      );
+
+      await safeSendMessage(
+        msg.chat.id,
+        `✨ ${getUserLink(sender)} сделал(а) комплимент ${getUserLink(target)}
+
+💬 ${escapeHtml(compliment)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5158,7 +5517,10 @@ ${escapeHtml(prediction)}`,
         await safeSendMessage(
           msg.chat.id,
           `😅 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} самого себя`,
-          { parse_mode: "HTML", disable_web_page_preview: true }
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
@@ -5166,7 +5528,10 @@ ${escapeHtml(prediction)}`,
       await safeSendMessage(
         msg.chat.id,
         `💬 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} ${getUserLink(target)}`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5189,7 +5554,10 @@ ${escapeHtml(prediction)}`,
       await safeSendMessage(
         msg.chat.id,
         `😅 ${getUserLink(sender)} ${command.text} самого себя`,
-        { parse_mode: "HTML", disable_web_page_preview: true }
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -5199,7 +5567,10 @@ ${escapeHtml(prediction)}`,
     await safeSendMessage(
       msg.chat.id,
       `${command.emoji} ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`,
-      { parse_mode: "HTML", disable_web_page_preview: true }
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
     );
   } catch (error) {
     console.error("Ошибка обработки сообщения:", error);
