@@ -44,6 +44,13 @@ const MAX_GOOD_DEED_LENGTH = 120;
 const ROBBERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const POLICE_JAIL_MS = 60 * 60 * 1000;
 
+const SHIELD_COST = 250;
+const JAIL_ESCAPE_COOLDOWN_MS = 20 * 60 * 1000;
+const JAIL_LAWYER_COOLDOWN_MS = 20 * 60 * 1000;
+const JAIL_BRIBE_COOLDOWN_MS = 20 * 60 * 1000;
+const JAIL_LAWYER_COST = 250;
+const JAIL_BRIBE_COST = 400;
+
 // =========================
 // SERVER
 // =========================
@@ -348,6 +355,11 @@ function parseGiftPayload(payload) {
     amount: Number(match[1]),
     targetUserId: Number(match[2])
   };
+}
+
+function getCoupleKeyByUserIds(user1Id, user2Id) {
+  const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
+  return `${ids[0]}:${ids[1]}`;
 }
 
 // =========================
@@ -659,6 +671,34 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_shields (
+      user_id BIGINT PRIMARY KEY,
+      count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS jail_actions (
+      user_id BIGINT PRIMARY KEY,
+      last_escape_at TIMESTAMPTZ,
+      last_lawyer_at TIMESTAMPTZ,
+      last_bribe_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS couple_states (
+      couple_key TEXT PRIMARY KEY,
+      user1_id BIGINT NOT NULL,
+      user2_id BIGINT NOT NULL,
+      jealousy INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_robbery_at TIMESTAMPTZ`);
 
@@ -941,6 +981,143 @@ async function getRandomPairMembersFromDb(chatId) {
 }
 
 // =========================
+// SHIELDS
+// =========================
+async function ensureShieldRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO user_shields (user_id, count, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getShieldRow(userId) {
+  await ensureShieldRow(userId);
+
+  const result = await pool.query(
+    `SELECT user_id, count, updated_at FROM user_shields WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function buyShield(userId) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO user_shields (user_id, count, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (user_id) DO NOTHING
+      `,
+      [userId]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const currentBalance = Number(userRow.rows[0].balance || 0);
+    if (currentBalance < SHIELD_COST) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, SHIELD_COST]
+    );
+
+    const shieldRow = await client.query(
+      `
+      UPDATE user_shields
+      SET count = count + 1,
+          updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING count, updated_at
+      `,
+      [userId]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      shieldCount: Number(shieldRow.rows[0].count || 0),
+      updatedAt: shieldRow.rows[0].updated_at,
+      userBalance: Number(updatedUser.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function useShieldOnce(userId) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO user_shields (user_id, count, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (user_id) DO NOTHING
+      `,
+      [userId]
+    );
+
+    const row = await client.query(
+      `SELECT count FROM user_shields WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    const current = Number(row.rows[0]?.count || 0);
+    if (current <= 0) {
+      await client.query("ROLLBACK");
+      return { used: false, count: 0 };
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE user_shields
+      SET count = count - 1,
+          updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING count
+      `,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      used: true,
+      count: Number(updated.rows[0]?.count || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// =========================
 // MARRIAGE
 // =========================
 async function getActiveMarriageByUserId(userId) {
@@ -1013,6 +1190,61 @@ async function isSpouse(userId, targetUserId) {
     Number(marriage.user1_id) === Number(targetUserId) ||
     Number(marriage.user2_id) === Number(targetUserId)
   );
+}
+
+// =========================
+// COUPLE STATE
+// =========================
+async function ensureCoupleState(user1Id, user2Id) {
+  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
+  const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
+
+  await pool.query(
+    `
+    INSERT INTO couple_states (couple_key, user1_id, user2_id, jealousy, updated_at)
+    VALUES ($1, $2, $3, 0, NOW())
+    ON CONFLICT (couple_key) DO NOTHING
+    `,
+    [coupleKey, ids[0], ids[1]]
+  );
+
+  return coupleKey;
+}
+
+async function getCoupleState(user1Id, user2Id) {
+  const coupleKey = await ensureCoupleState(user1Id, user2Id);
+
+  const result = await pool.query(
+    `
+    SELECT couple_key, user1_id, user2_id, jealousy, updated_at
+    FROM couple_states
+    WHERE couple_key = $1
+    LIMIT 1
+    `,
+    [coupleKey]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function changeCoupleJealousy(user1Id, user2Id, diff) {
+  const state = await getCoupleState(user1Id, user2Id);
+  const current = Number(state?.jealousy || 0);
+  const updatedValue = clamp(current + Number(diff || 0), 0, 100);
+  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
+
+  const result = await pool.query(
+    `
+    UPDATE couple_states
+    SET jealousy = $2,
+        updated_at = NOW()
+    WHERE couple_key = $1
+    RETURNING couple_key, user1_id, user2_id, jealousy, updated_at
+    `,
+    [coupleKey, updatedValue]
+  );
+
+  return result.rows[0] || null;
 }
 
 // =========================
@@ -1484,6 +1716,27 @@ function getRandomPoliceOutcome() {
   return { type: "jail" };
 }
 
+function getRandomEscapeOutcome() {
+  const roll = Math.random();
+  if (roll < 0.35) return { type: "success" };
+  if (roll < 0.70) return { type: "fail" };
+  return { type: "caught_more_time", extraMs: 30 * 60 * 1000 };
+}
+
+function getRandomLawyerOutcome() {
+  const roll = Math.random();
+  if (roll < 0.15) return { type: "free" };
+  if (roll < 0.70) return { type: "reduce", reduceMs: (20 + Math.floor(Math.random() * 21)) * 60 * 1000 };
+  return { type: "fail" };
+}
+
+function getRandomBribeOutcome() {
+  const roll = Math.random();
+  if (roll < 0.40) return { type: "free" };
+  if (roll < 0.75) return { type: "fail" };
+  return { type: "caught_more_time", extraMs: 45 * 60 * 1000 };
+}
+
 async function cleanupExpiredJail() {
   await pool.query(`
     DELETE FROM police_jail
@@ -1525,6 +1778,42 @@ async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
   return result.rows[0] || null;
 }
 
+async function extendJailTime(userId, ms) {
+  const result = await pool.query(
+    `
+    UPDATE police_jail
+    SET until_at = until_at + ($2 || ' milliseconds')::interval,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING *
+    `,
+    [userId, String(ms)]
+  );
+  return result.rows[0] || null;
+}
+
+async function reduceJailTime(userId, ms) {
+  const jail = await getJailStatus(userId);
+  if (!jail) return null;
+
+  const currentUntil = new Date(jail.until_at).getTime();
+  const now = Date.now();
+  const newUntil = new Date(Math.max(now + 1000, currentUntil - ms));
+
+  const result = await pool.query(
+    `
+    UPDATE police_jail
+    SET until_at = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING *
+    `,
+    [userId, newUntil.toISOString()]
+  );
+
+  return result.rows[0] || null;
+}
+
 async function removeUserFromJail(userId) {
   const result = await pool.query(
     `
@@ -1544,6 +1833,54 @@ async function getJailBlockText(userId) {
 
   const remainingMs = new Date(jail.until_at).getTime() - Date.now();
   return `🚔 Ты сейчас в тюрьме.\n⏳ До освобождения: ${formatRemainingTime(remainingMs)}`;
+}
+
+async function ensureJailActionRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO jail_actions (user_id, updated_at)
+    VALUES ($1, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getJailActionRow(userId) {
+  await ensureJailActionRow(userId);
+  const result = await pool.query(
+    `
+    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, updated_at
+    FROM jail_actions
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function setJailActionUsed(userId, actionField) {
+  const allowed = ["last_escape_at", "last_lawyer_at", "last_bribe_at"];
+  if (!allowed.includes(actionField)) return;
+
+  await ensureJailActionRow(userId);
+  await pool.query(
+    `
+    UPDATE jail_actions
+    SET ${actionField} = NOW(),
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId]
+  );
+}
+
+function getActionRemaining(lastAt, cooldownMs) {
+  if (!lastAt) return 0;
+  const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+  const diff = nextTime.getTime() - Date.now();
+  return diff > 0 ? diff : 0;
 }
 
 async function updateLastRobberyAt(userId) {
@@ -2341,6 +2678,7 @@ async function getCooldownText(userId) {
 async function getProfileText(user) {
   await initUser(user);
   const stats = await getUserStats(user.id);
+  const shield = await getShieldRow(user.id);
 
   return `👤 Профиль пользователя
 
@@ -2349,6 +2687,7 @@ ID: ${user.id}
 
 💰 Монеты: ${stats.balance || 0}
 🤝 Респект: ${stats.respect || 0}
+🛡 Щиты: ${Number(shield?.count || 0)}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
@@ -2478,6 +2817,7 @@ async function finalizeMarriageAccept(request, chatId, messageId = null) {
   }
 
   const marriage = await createMarriage(request.fromUser.id, request.targetUser.id);
+  await ensureCoupleState(request.fromUser.id, request.targetUser.id);
 
   if (messageId) await removeInlineKeyboard(chatId, messageId);
   deleteMarriageRequest(request);
@@ -2660,6 +3000,9 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • удалить доброе дело 1
 • очистить добрые дела
 • послушание
+• ревновать
+• ревность
+• помириться
 
 <b>💰 Деньги</b>
 • деньги
@@ -2667,8 +3010,14 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • снайпер
 • ограбить
 • тюрьма
+• сбежать из тюрьмы
+• адвокат
+• подкупить охрану
+• отсидеть
 • купить монеты
 • купить монеты другу
+• купить щит
+• мой щит
 • /balance
 • /cooldowns
 
@@ -3248,6 +3597,157 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     // =========================
+    // RELATIONSHIP COMMANDS
+    // =========================
+    if (isExactCommand(lowerText, "ревновать")) {
+      const target = await resolveTargetUserFromReply(msg);
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) и напиши: ревновать");
+        return;
+      }
+
+      const isTargetSpouse = await isSpouse(msg.from.id, target.id);
+      if (!isTargetSpouse) {
+        await safeSendMessage(msg.chat.id, "❌ Ревновать можно только своего супруга(у).");
+        return;
+      }
+
+      const added = Math.floor(Math.random() * 11) + 5;
+      const state = await changeCoupleJealousy(msg.from.id, target.id, added);
+
+      let mood = "😶 Всё пока спокойно.";
+      if (Number(state.jealousy) >= 70) mood = "🔥 В семье уже сильная ревность.";
+      else if (Number(state.jealousy) >= 40) mood = "😬 Напряжение в семье растёт.";
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💚 ${getUserLink(msg.from)} приревновал(а) ${getUserLink(target)}.
+
+📈 Ревность семьи: ${Number(state.jealousy || 0)}/100
+${mood}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "ревность")) {
+      let targetUser = msg.from;
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const partnerInfo = await getMarriagePartner(targetUser.id);
+      if (!partnerInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Команда доступна только игроку в браке.");
+        return;
+      }
+
+      const state = await getCoupleState(targetUser.id, partnerInfo.partnerId);
+      const partnerUser = await getStoredUser(partnerInfo.partnerId);
+
+      let mood = "😌 Всё спокойно";
+      if (Number(state.jealousy) >= 70) mood = "🔥 Очень высокая";
+      else if (Number(state.jealousy) >= 40) mood = "😬 Средняя";
+      else if (Number(state.jealousy) >= 15) mood = "🙂 Небольшая";
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💞 Ревность в паре
+
+👤 Игрок: ${getUserLink(targetUser)}
+💍 Пара: ${getUserLink(partnerUser)}
+📈 Уровень ревности: ${Number(state.jealousy || 0)}/100
+📝 Состояние: ${mood}
+🕒 Обновлено: ${formatDateTime(state.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "помириться")) {
+      const target = await resolveTargetUserFromReply(msg);
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) и напиши: помириться");
+        return;
+      }
+
+      const isTargetSpouse = await isSpouse(msg.from.id, target.id);
+      if (!isTargetSpouse) {
+        await safeSendMessage(msg.chat.id, "❌ Мириться можно только со своим супругом(ой).");
+        return;
+      }
+
+      const reduced = Math.floor(Math.random() * 16) + 10;
+      const state = await changeCoupleJealousy(msg.from.id, target.id, -reduced);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🕊 ${getUserLink(msg.from)} помирился(ась) с ${getUserLink(target)}.
+
+📉 Ревность семьи: ${Number(state.jealousy || 0)}/100`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // SHIELD COMMANDS
+    // =========================
+    if (isExactCommand(lowerText, "купить щит")) {
+      try {
+        const result = await buyShield(msg.from.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🛡 ${getUserLink(msg.from)} купил(а) щит за ${SHIELD_COST} монет.
+
+🛡 Щитов: ${result.shieldCount}
+👛 Твой баланс: ${result.userBalance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, `❌ Для покупки щита нужно ${SHIELD_COST} монет.`);
+          return;
+        }
+
+        console.error("Ошибка покупки щита:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка покупки щита.");
+      }
+      return;
+    }
+
+    if (isExactCommand(lowerText, "мой щит")) {
+      const shield = await getShieldRow(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🛡 Щит игрока ${getUserLink(msg.from)}
+
+Количество: ${Number(shield?.count || 0)}
+💡 Один щит блокирует одно успешное ограбление.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
     // PUNISHMENT COMMANDS
     // =========================
     if (lowerText.startsWith("наказать ребенка")) {
@@ -3702,7 +4202,250 @@ ${lines.join("\n")}`,
 
 Игрок: ${getUserLink(targetUser)}
 🕒 До: ${formatDateTime(jail.until_at)}
-⏳ Осталось: ${formatRemainingTime(remainingMs)}`,
+⏳ Осталось: ${formatRemainingTime(remainingMs)}
+
+Доступно:
+• сбежать из тюрьмы
+• адвокат
+• подкупить охрану
+• отсидеть`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "отсидеть")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
+      }
+
+      const remainingMs = new Date(jail.until_at).getTime() - Date.now();
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🪑 ${getUserLink(msg.from)} решил(а) спокойно отсидеть срок.
+
+⏳ До освобождения: ${formatRemainingTime(remainingMs)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "сбежать из тюрьмы")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
+      }
+
+      const row = await getJailActionRow(msg.from.id);
+      const remainingCd = getActionRemaining(row?.last_escape_at, JAIL_ESCAPE_COOLDOWN_MS);
+      if (remainingCd > 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ Снова попробовать сбежать можно через ${formatRemainingTime(remainingCd)}`
+        );
+        return;
+      }
+
+      await setJailActionUsed(msg.from.id, "last_escape_at");
+
+      const outcome = getRandomEscapeOutcome();
+
+      if (outcome.type === "success") {
+        await removeUserFromJail(msg.from.id);
+        await safeSendMessage(
+          msg.chat.id,
+          `🏃 ${getUserLink(msg.from)} совершил(а) побег из тюрьмы!
+
+🔓 Ему удалось скрыться.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (outcome.type === "fail") {
+        await safeSendMessage(
+          msg.chat.id,
+          `🚫 Побег не удался.
+
+👮 Охрана заметила попытку, но срок не изменился.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
+      await safeSendMessage(
+        msg.chat.id,
+        `⛓ ${getUserLink(msg.from)} попытался(ась) сбежать, но был(а) пойман(а).
+
+➕ Срок увеличен на 30 минут.
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "адвокат")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
+      }
+
+      const row = await getJailActionRow(msg.from.id);
+      const remainingCd = getActionRemaining(row?.last_lawyer_at, JAIL_LAWYER_COOLDOWN_MS);
+      if (remainingCd > 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ Снова вызвать адвоката можно через ${formatRemainingTime(remainingCd)}`
+        );
+        return;
+      }
+
+      const stats = await getUserStats(msg.from.id);
+      if (Number(stats?.balance || 0) < JAIL_LAWYER_COST) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Для адвоката нужно ${JAIL_LAWYER_COST} монет.`
+        );
+        return;
+      }
+
+      await deductCoinsSafe(msg.from.id, JAIL_LAWYER_COST);
+      await setJailActionUsed(msg.from.id, "last_lawyer_at");
+
+      const outcome = getRandomLawyerOutcome();
+
+      if (outcome.type === "free") {
+        await removeUserFromJail(msg.from.id);
+        await safeSendMessage(
+          msg.chat.id,
+          `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
+
+✅ Адвокат добился освобождения!`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (outcome.type === "reduce") {
+        const updatedJail = await reduceJailTime(msg.from.id, outcome.reduceMs);
+        await safeSendMessage(
+          msg.chat.id,
+          `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
+
+📉 Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
+
+❌ Адвокат ничего не смог сделать.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "подкупить охрану")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
+      }
+
+      const row = await getJailActionRow(msg.from.id);
+      const remainingCd = getActionRemaining(row?.last_bribe_at, JAIL_BRIBE_COOLDOWN_MS);
+      if (remainingCd > 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ Снова пробовать подкуп можно через ${formatRemainingTime(remainingCd)}`
+        );
+        return;
+      }
+
+      const stats = await getUserStats(msg.from.id);
+      if (Number(stats?.balance || 0) < JAIL_BRIBE_COST) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Для подкупа охраны нужно ${JAIL_BRIBE_COST} монет.`
+        );
+        return;
+      }
+
+      await deductCoinsSafe(msg.from.id, JAIL_BRIBE_COST);
+      await setJailActionUsed(msg.from.id, "last_bribe_at");
+
+      const outcome = getRandomBribeOutcome();
+
+      if (outcome.type === "free") {
+        await removeUserFromJail(msg.from.id);
+        await safeSendMessage(
+          msg.chat.id,
+          `💸 ${getUserLink(msg.from)} подкупил(а) охрану за ${JAIL_BRIBE_COST} монет.
+
+🔓 Его тихо выпустили из тюрьмы.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (outcome.type === "fail") {
+        await safeSendMessage(
+          msg.chat.id,
+          `💸 ${getUserLink(msg.from)} попытался(ась) подкупить охрану.
+
+❌ Деньги взяли, но выпускать не стали.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
+      await safeSendMessage(
+        msg.chat.id,
+        `🚨 Попытка подкупа раскрыта.
+
+⛓ Срок увеличен на 45 минут.
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -4447,12 +5190,6 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const targetStats = await getUserStats(target.id);
-      if (!targetStats || Number(targetStats.balance || 0) <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ У этого игрока нет монет. Грабить нечего.");
-        return;
-      }
-
       const robberyCooldown = await getRobberyCooldown(msg.from.id);
       if (robberyCooldown > 0) {
         await safeSendMessage(
@@ -4463,6 +5200,30 @@ ${lines.join("\n")}`,
       }
 
       await updateLastRobberyAt(msg.from.id);
+
+      const targetShield = await getShieldRow(target.id);
+      if (Number(targetShield?.count || 0) > 0) {
+        const shieldUse = await useShieldOnce(target.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🛡 ${getUserLink(target)} защитился(ась) щитом!
+
+🕵️ ${getUserLink(msg.from)} не смог(ла) ограбить цель.
+🛡 Осталось щитов у цели: ${shieldUse.count}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const targetStats = await getUserStats(target.id);
+      if (!targetStats || Number(targetStats.balance || 0) <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ У этого игрока нет монет. Грабить нечего.");
+        return;
+      }
 
       const robbery = getRandomRobberyResult();
 
@@ -5020,8 +5781,10 @@ ${getUserLink(child)}, выбери ниже:
 
       if (partnerInfo) {
         const partnerUser = await getStoredUser(partnerInfo.partnerId);
+        const coupleState = await getCoupleState(targetUser.id, partnerInfo.partnerId);
         familyText += `\n💍 Супруг(а): ${getUserLink(partnerUser)}`;
         familyText += `\n📅 Брак с: ${formatDate(partnerInfo.marriage.created_at)}`;
+        familyText += `\n💚 Ревность: ${Number(coupleState?.jealousy || 0)}/100`;
       }
 
       if (children.length) {
