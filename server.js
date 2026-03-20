@@ -53,6 +53,8 @@ const JAIL_BRIBE_COOLDOWN_MS = 20 * 60 * 1000;
 const JAIL_LAWYER_COST = 250;
 const JAIL_BRIBE_COST = 400;
 
+const TIME_EDIT_MAX_HOURS = 168; // максимум 7 дней за раз
+
 // =========================
 // SERVER
 // =========================
@@ -362,6 +364,28 @@ function parseGiftPayload(payload) {
 function getCoupleKeyByUserIds(user1Id, user2Id) {
   const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
   return `${ids[0]}:${ids[1]}`;
+}
+
+function getCooldownColumnAndMsByName(rawName) {
+  const name = normalizeText(rawName);
+
+  if (["деньги", "монеты", "money", "daily"].includes(name)) {
+    return { column: "last_daily_at", cooldownMs: DAILY_COOLDOWN_MS, title: "деньги" };
+  }
+
+  if (["охота", "hunt"].includes(name)) {
+    return { column: "last_hunt_at", cooldownMs: DAILY_COOLDOWN_MS, title: "охота" };
+  }
+
+  if (["снайпер", "sniper"].includes(name)) {
+    return { column: "last_sniper_at", cooldownMs: DAILY_COOLDOWN_MS, title: "снайпер" };
+  }
+
+  if (["ограбление", "ограбить", "robbery"].includes(name)) {
+    return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
+  }
+
+  return null;
 }
 
 // =========================
@@ -1128,6 +1152,13 @@ async function useShieldOnce(userId) {
   } finally {
     client.release();
   }
+}
+
+async function clampAllShieldsToMax() {
+  await pool.query(
+    `UPDATE user_shields SET count = $1, updated_at = NOW() WHERE count > $1`,
+    [MAX_SHIELDS]
+  );
 }
 
 // =========================
@@ -2002,6 +2033,40 @@ async function robberyTransfer(thiefId, victimId, requestedAmount) {
   } finally {
     client.release();
   }
+}
+
+async function adjustUserCooldown(userId, cooldownName, hoursDelta) {
+  const info = getCooldownColumnAndMsByName(cooldownName);
+  if (!info) throw new Error("UNKNOWN_COOLDOWN_TYPE");
+
+  const result = await pool.query(
+    `SELECT ${info.column} AS value FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) throw new Error("USER_NOT_FOUND");
+
+  const currentValue = result.rows[0].value;
+  if (!currentValue) throw new Error("COOLDOWN_NOT_USED_YET");
+
+  const currentDate = new Date(currentValue);
+  const newDate = new Date(currentDate.getTime() + hoursDelta * 60 * 60 * 1000);
+
+  await pool.query(
+    `UPDATE users SET ${info.column} = $2 WHERE user_id = $1`,
+    [userId, newDate.toISOString()]
+  );
+
+  const remainingMs = Math.max(
+    0,
+    new Date(newDate.getTime() + info.cooldownMs).getTime() - Date.now()
+  );
+
+  return {
+    title: info.title,
+    newDate,
+    remainingMs
+  };
 }
 
 // =========================
@@ -3036,13 +3101,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • подкупить охрану
 • отсидеть
 
-<b>Что есть в тюрьме:</b>
-• можно попасть после неудачного или палёного ограбления
-• можно попробовать сбежать
-• можно нанять адвоката
-• можно подкупить охрану
-• можно просто ждать конца срока
-
 <b>👤 Профиль</b>
 • /profile
 • /profile ответом
@@ -3081,6 +3139,13 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • прогноз
 • он врет?
 • врет?
+
+<b>👑 Для владельца</b>
+• /givemoney 1000
+• /timeedit деньги -4
+• /timeedit охота -2
+• /timeedit снайпер -6
+• /timeedit ограбление -1
 
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
@@ -3282,6 +3347,78 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
   } catch (error) {
     console.error("Ошибка /givemoney:", error);
     await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
+  }
+});
+
+bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)$/, async (msg, match) => {
+  try {
+    if (Number(msg.from.id) !== OWNER_ID) return;
+
+    const cooldownName = String(match?.[2] || "").trim();
+    const hoursDelta = Number(match?.[3] || 0);
+
+    if (!Number.isInteger(hoursDelta) || hoursDelta === 0) {
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ Пример:\n/timeedit деньги -4\n/timeedit охота -2\n/timeedit снайпер -6\n/timeedit ограбление -1"
+      );
+      return;
+    }
+
+    if (Math.abs(hoursDelta) > TIME_EDIT_MAX_HOURS) {
+      await safeSendMessage(
+        msg.chat.id,
+        `❌ Можно менять максимум на ${TIME_EDIT_MAX_HOURS} часов за раз.`
+      );
+      return;
+    }
+
+    let targetUser = null;
+
+    if (msg.reply_to_message) {
+      targetUser = await resolveTargetUserFromReply(msg);
+    }
+
+    if (!targetUser) {
+      targetUser = msg.from;
+    }
+
+    await initUser(targetUser);
+    await saveSeenUser(msg.chat.id, targetUser);
+
+    const result = await adjustUserCooldown(targetUser.id, cooldownName, hoursDelta);
+    const signText = hoursDelta > 0 ? `+${hoursDelta}` : `${hoursDelta}`;
+
+    await safeSendMessage(
+      msg.chat.id,
+      `🕒 Время кулдауна изменено
+
+👤 Игрок: ${getUserLink(targetUser)}
+⏱ Кулдаун: ${escapeHtml(result.title)}
+🔧 Изменение: ${signText} ч
+📅 Новое время отсчёта: ${formatDateTime(result.newDate)}
+⌛ Осталось до готовности: ${formatRemainingTime(result.remainingMs)}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
+      await safeSendMessage(msg.chat.id, "❌ Доступно только: деньги, охота, снайпер, ограбление");
+      return;
+    }
+
+    if (error.message === "COOLDOWN_NOT_USED_YET") {
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ У игрока этот кулдаун ещё не запускался. Сначала он должен использовать команду хотя бы 1 раз."
+      );
+      return;
+    }
+
+    console.error("Ошибка /timeedit:", error);
+    await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
   }
 });
 
@@ -6299,8 +6436,11 @@ bot.on("polling_error", (error) => {
     console.log("✅ DB connected:", test.rows[0]);
 
     await initDb();
+    await clampAllShieldsToMax();
     await cleanupExpiredPunishments();
     await cleanupExpiredJail();
+
+    console.log("✅ Shields clamped to max =", MAX_SHIELDS);
     console.log("✅ Bot started");
   } catch (error) {
     console.error("❌ Ошибка запуска:", error);
