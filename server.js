@@ -269,27 +269,27 @@ function getLieResult() {
 function getBankGameResult() {
   const roll = Math.random();
 
-  if (roll < 0.15) {
+  if (roll < 0.10) {
     return {
       type: "jackpot",
       text: "🏦 Банк сорвал куш!",
-      coins: Math.floor(Math.random() * 151) + 150
+      coins: Math.floor(Math.random() * 121) + 120
     };
   }
 
-  if (roll < 0.65) {
+  if (roll < 0.45) {
     return {
       type: "win",
       text: "💰 Вклад удачно сработал!",
-      coins: Math.floor(Math.random() * 71) + 30
+      coins: Math.floor(Math.random() * 51) + 25
     };
   }
 
-  if (roll < 0.90) {
+  if (roll < 0.75) {
     return {
       type: "small",
       text: "🙂 Банк дал небольшой бонус.",
-      coins: Math.floor(Math.random() * 21) + 5
+      coins: Math.floor(Math.random() * 16) + 5
     };
   }
 
@@ -315,6 +315,43 @@ function parseTimeEditAmount(rawValue, rawUnit = "") {
   }
 
   return null;
+}
+
+function getRpsEmoji(choice) {
+  if (choice === "камень") return "🪨";
+  if (choice === "ножницы") return "✂️";
+  if (choice === "бумага") return "📄";
+  return "❓";
+}
+
+function getRandomRpsChoice() {
+  const choices = ["камень", "ножницы", "бумага"];
+  return choices[Math.floor(Math.random() * choices.length)];
+}
+
+function getRpsResult(playerChoice, botChoice) {
+  if (playerChoice === botChoice) {
+    return { result: "draw", coins: 5, text: "Ничья" };
+  }
+
+  const win =
+    (playerChoice === "камень" && botChoice === "ножницы") ||
+    (playerChoice === "ножницы" && botChoice === "бумага") ||
+    (playerChoice === "бумага" && botChoice === "камень");
+
+  if (win) {
+    return {
+      result: "win",
+      coins: Math.floor(Math.random() * 16) + 10,
+      text: "Ты победил"
+    };
+  }
+
+  return {
+    result: "lose",
+    coins: -(Math.floor(Math.random() * 8) + 3),
+    text: "Ты проиграл"
+  };
 }
 
 function getShopKeyboard() {
@@ -2133,6 +2170,40 @@ async function runBank(userId) {
   };
 }
 
+async function playRps(userId, playerChoice) {
+  const result = await pool.query(
+    `SELECT balance FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const botChoice = getRandomRpsChoice();
+  const game = getRpsResult(playerChoice, botChoice);
+
+  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return {
+    ok: true,
+    playerChoice,
+    botChoice,
+    game,
+    balance: Number(updateResult.rows[0].balance || 0)
+  };
+}
+
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
   const info = getCooldownColumnAndMsByName(cooldownName);
   if (!info) throw new Error("UNKNOWN_COOLDOWN_TYPE");
@@ -3239,6 +3310,9 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • прогноз
 • он врет?
 • врет?
+• кнб камень
+• кнб ножницы
+• кнб бумага
 
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
@@ -3483,10 +3557,10 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)(?:\s+([^\s]+))?
     await saveSeenUser(msg.chat.id, targetUser);
 
     const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
-    const signText =
-      Math.abs(deltaMs) % (60 * 60 * 1000) === 0
-        ? `${Number(rawValue)} ч`
-        : `${Number(rawValue)} мин`;
+
+    const signText = rawUnit && ["м", "мин", "минута", "минуты", "минут", "m"].includes(normalizeText(rawUnit))
+      ? `${Number(rawValue)} мин`
+      : `${Number(rawValue)} ч`;
 
     await safeSendMessage(
       msg.chat.id,
@@ -5650,6 +5724,51 @@ ${lines.join("\n")}`,
 
 ${escapeHtml(result.bank.text)}
 💰 Получено: ${result.bank.coins} монет
+
+Баланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // KNB
+    // =========================
+    if (
+      lowerText === "кнб камень" ||
+      lowerText === "кнб ножницы" ||
+      lowerText === "кнб бумага"
+    ) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const playerChoice = lowerText.replace("кнб ", "").trim();
+      const result = await playRps(msg.from.id, playerChoice);
+
+      if (!result.ok) {
+        await safeSendMessage(msg.chat.id, "Ошибка игры. Попробуй ещё раз.");
+        return;
+      }
+
+      let coinsLine = "😐 Без изменений";
+      if (result.game.coins > 0) coinsLine = `💰 +${result.game.coins} монет`;
+      if (result.game.coins < 0) coinsLine = `💸 ${result.game.coins} монет`;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎮 ${getUserLink(msg.from)} сыграл(а) в КНБ с ботом
+
+Ты: ${getRpsEmoji(result.playerChoice)} ${escapeHtml(result.playerChoice)}
+Бот: ${getRpsEmoji(result.botChoice)} ${escapeHtml(result.botChoice)}
+
+🏁 ${escapeHtml(result.game.text)}
+${coinsLine}
 
 Баланс: ${result.balance} монет`,
         {
