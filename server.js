@@ -11,6 +11,8 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!token) throw new Error("BOT_TOKEN не найден");
 if (!databaseUrl) throw new Error("DATABASE_URL не найден");
 
+const ADMIN_ID = 7837011810;
+
 const bot = new TelegramBot(token, { polling: true });
 
 const pool = new Pool({
@@ -39,8 +41,8 @@ const MAX_CHILDREN_PER_FAMILY = 3;
 const MAX_PUNISHMENT_DAYS = 7;
 const MAX_GOOD_DEED_LENGTH = 120;
 
-const ROBBERY_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 часов
-const POLICE_JAIL_MS = 60 * 60 * 1000; // 1 час
+const ROBBERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const POLICE_JAIL_MS = 60 * 60 * 1000;
 
 // =========================
 // SERVER
@@ -95,6 +97,10 @@ function getUserName(user) {
 function getUserLink(user) {
   if (!user || !user.id) return escapeHtml(getUserName(user));
   return `<a href="tg://user?id=${user.id}">${escapeHtml(getUserName(user))}</a>`;
+}
+
+function isAdmin(userId) {
+  return Number(userId) === Number(ADMIN_ID);
 }
 
 async function safeSendMessage(chatId, text, options = {}) {
@@ -371,9 +377,15 @@ function getRecentActiveCandidates(chatId, excludeUserIds = []) {
 
   return users.filter((user) => {
     if (!user || !user.id) return false;
-    if (excludeUserIds.includes(user.id)) return false;
+    if (excludeUserIds.includes(Number(user.id))) return false;
     return now - (user.last_seen_at || 0) <= ACTIVE_WINDOW_MS;
   });
+}
+
+function getFallbackBombCandidates(chatId, excludeUserIds = []) {
+  const key = String(chatId);
+  const seen = Object.values(chatMembers[key] || {});
+  return seen.filter((user) => user && user.id && !excludeUserIds.includes(Number(user.id)));
 }
 
 function clearBomb(chatId) {
@@ -421,11 +433,22 @@ async function passBomb(chatId, fromUser) {
   const bomb = activeBombs[key];
   if (!bomb) return false;
 
-  const excludeIds = [fromUser.id];
-  if (bomb.previousHolderId) excludeIds.push(bomb.previousHolderId);
+  const excludeIds = [Number(fromUser.id)];
+  if (bomb.previousHolderId) excludeIds.push(Number(bomb.previousHolderId));
 
   let candidates = getRecentActiveCandidates(chatId, excludeIds);
-  if (!candidates.length) candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
+
+  if (!candidates.length) {
+    candidates = getRecentActiveCandidates(chatId, [Number(fromUser.id)]);
+  }
+
+  if (!candidates.length) {
+    candidates = getFallbackBombCandidates(chatId, excludeIds);
+  }
+
+  if (!candidates.length) {
+    candidates = getFallbackBombCandidates(chatId, [Number(fromUser.id)]);
+  }
 
   if (!candidates.length) {
     clearBomb(chatId);
@@ -782,6 +805,16 @@ async function transferCoins(fromUserId, toUserId, amount) {
   } finally {
     client.release();
   }
+}
+
+async function addCoinsToUser(targetUserId, amount) {
+  const result = await pool.query(
+    `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
+    [targetUserId, amount]
+  );
+
+  if (!result.rows[0]) throw new Error("USER_NOT_FOUND");
+  return Number(result.rows[0].balance || 0);
 }
 
 async function processStarPurchase(userId, successfulPayment) {
@@ -1412,7 +1445,7 @@ function getRandomPoliceOutcome() {
   const roll = Math.random();
 
   if (roll < 0.50) return { type: "none" };
-  if (roll < 0.80) return { type: "fine", amount: Math.floor(Math.random() * 8) + 3 }; // 3-10
+  if (roll < 0.80) return { type: "fine", amount: Math.floor(Math.random() * 8) + 3 };
   if (roll < 0.90) return { type: "return" };
   return { type: "jail" };
 }
@@ -1453,19 +1486,6 @@ async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
     RETURNING *
     `,
     [userId, String(ms)]
-  );
-
-  return result.rows[0] || null;
-}
-
-async function removeUserFromJail(userId) {
-  const result = await pool.query(
-    `
-    DELETE FROM police_jail
-    WHERE user_id = $1
-    RETURNING *
-    `,
-    [userId]
   );
 
   return result.rows[0] || null;
@@ -2604,6 +2624,10 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • /balance
 • /cooldowns
 
+<b>👑 Админ</b>
+• /addcoins ответом 100
+• /addcoins 123456789 100
+
 <b>👤 Профиль</b>
 • /profile
 • /profile ответом
@@ -2673,8 +2697,6 @@ bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
 bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
-
     const stats = await getUserStats(msg.from.id);
 
     await safeSendMessage(
@@ -2694,8 +2716,6 @@ bot.onText(/^\/balance(@[A-Za-z0-9_]+)?$/, async (msg) => {
 bot.onText(/^\/cooldowns(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
-
     const text = await getCooldownText(msg.from.id);
     await safeSendMessage(msg.chat.id, text);
   } catch (error) {
@@ -2704,10 +2724,63 @@ bot.onText(/^\/cooldowns(@[A-Za-z0-9_]+)?$/, async (msg) => {
   }
 });
 
+// =========================
+// ADMIN COINS
+// =========================
+bot.onText(/^\/addcoins(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
+  try {
+    if (!isAdmin(msg.from.id)) return;
+
+    await initUser(msg.from);
+
+    const argsRaw = (match?.[2] || "").trim();
+
+    let targetUser = null;
+    let amount = null;
+
+    if (msg.reply_to_message) {
+      targetUser = await resolveTargetUserFromReply(msg);
+      const m = argsRaw.match(/^(\d+)$/);
+      if (m) amount = Number(m[1]);
+    } else {
+      const m = argsRaw.match(/^(\d+)\s+(\d+)$/);
+      if (m) {
+        targetUser = { id: Number(m[1]) };
+        amount = Number(m[2]);
+      }
+    }
+
+    if (!targetUser || !targetUser.id || !Number.isInteger(amount) || amount <= 0) {
+      await safeSendMessage(
+        msg.chat.id,
+        `❌ Используй так:
+1) /addcoins ответом 100
+2) /addcoins 123456789 100`
+      );
+      return;
+    }
+
+    await initUser(targetUser);
+    const newBalance = await addCoinsToUser(targetUser.id, amount);
+    const stored = await getStoredUser(targetUser.id);
+
+    await safeSendMessage(
+      msg.chat.id,
+      `👑 Админ выдал ${amount} монет игроку ${getUserLink(stored || targetUser)}\n💰 Новый баланс: ${newBalance}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка /addcoins:", error);
+    await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
+  }
+});
+
 bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
 
     const count = await getUserCustomCommandCount(msg.from.id);
     if (count >= MAX_CUSTOM_COMMANDS) {
@@ -2752,7 +2825,6 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
 bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
 
     const commands = await getUserCustomCommands(msg.from.id);
 
@@ -2779,7 +2851,6 @@ bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
 bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
   try {
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
 
     const trigger = normalizeText(match?.[2] || "");
     if (!trigger) {
@@ -2843,7 +2914,6 @@ bot.on("message", async (msg) => {
     if (!msg.successful_payment || !msg.from) return;
 
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
 
     const purchase = await processStarPurchase(msg.from.id, msg.successful_payment);
 
@@ -2886,7 +2956,6 @@ bot.on("callback_query", async (query) => {
     ) {
       await safeAnswerCallback(query);
       await initUser(query.from);
-      await saveSeenUser(chatId, query.from);
 
       let title = "50 монет";
       let description = "Покупка 50 монет за 5 Telegram Stars";
@@ -3117,10 +3186,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1");
         return;
       }
 
@@ -3167,10 +3233,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: снять наказание"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: снять наказание");
         return;
       }
 
@@ -3245,10 +3308,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка");
         return;
       }
 
@@ -3278,10 +3338,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20");
         return;
       }
 
@@ -3289,10 +3346,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20");
         return;
       }
 
@@ -3336,10 +3390,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому");
         return;
       }
 
@@ -3351,10 +3402,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
       const deedText = text.slice("добавить доброе дело".length).trim();
       if (!deedText || deedText.length < 2) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Напиши так:\nдобавить доброе дело помог по дому"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nдобавить доброе дело помог по дому");
         return;
       }
 
@@ -3427,10 +3475,7 @@ ${lines.join("\n")}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1");
         return;
       }
 
@@ -3444,10 +3489,7 @@ ${lines.join("\n")}`,
       const index = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(index) || index <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи номер.\nПример: удалить доброе дело 1"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи номер.\nПример: удалить доброе дело 1");
         return;
       }
 
@@ -3475,10 +3517,7 @@ ${lines.join("\n")}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела");
         return;
       }
 
@@ -3607,10 +3646,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5");
         return;
       }
 
@@ -3631,10 +3667,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя."
-          );
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя.");
           return;
         }
 
@@ -3655,10 +3688,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5");
         return;
       }
 
@@ -3691,10 +3721,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя."
-          );
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя.");
           return;
         }
 
@@ -3755,10 +3782,7 @@ ${lines.join("\n")}`,
 
       const piggy = await getPiggyBank(msg.from.id);
       if (!piggy) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ У тебя нет копилки.\nНапиши: создать копилку"
-        );
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
         return;
       }
 
@@ -3788,10 +3812,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5");
         return;
       }
 
@@ -3812,10 +3833,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_PIGGY_BANK") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ У тебя нет копилки.\nНапиши: создать копилку"
-          );
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
           return;
         }
 
@@ -3855,10 +3873,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_PIGGY_BANK") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ У тебя нет копилки.\nНапиши: создать копилку"
-          );
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
           return;
         }
 
@@ -3882,10 +3897,7 @@ ${lines.join("\n")}`,
 
       const dreamText = text.slice("загадать мечту".length).trim();
       if (!dreamText || dreamText.length < 2) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Напиши так:\nзагадать мечту айфон"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nзагадать мечту айфон");
         return;
       }
 
@@ -3920,10 +3932,7 @@ ${lines.join("\n")}`,
 
       const dream = await getChildDream(msg.from.id);
       if (!dream) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон"
-        );
+        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон");
         return;
       }
 
@@ -3979,10 +3988,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5");
         return;
       }
 
@@ -4003,10 +4009,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_DREAM") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон"
-          );
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон");
           return;
         }
 
@@ -4026,10 +4029,7 @@ ${lines.join("\n")}`,
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: на мечту 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: на мечту 5");
         return;
       }
 
@@ -4037,10 +4037,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: на мечту 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: на мечту 5");
         return;
       }
 
@@ -4106,10 +4103,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: попросить денег 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: попросить денег 5");
         return;
       }
 
@@ -4148,10 +4142,7 @@ ${lines.join("\n")}`,
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5");
         return;
       }
 
@@ -4159,19 +4150,13 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: дать ребенку 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: дать ребенку 5");
         return;
       }
 
       const isChild = await isChildInMyFamily(msg.from.id, target.id);
       if (!isChild) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ты можешь давать деньги только своему ребёнку."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь давать деньги только своему ребёнку.");
         return;
       }
 
@@ -4328,8 +4313,7 @@ ${lines.join("\n")}`,
       if (robbery.type === "fail") {
         let resultText = `🚨 ${getUserLink(msg.from)} попытался ограбить ${getUserLink(target)}, но его спалили!`;
 
-        // мягкий штраф при провале
-        const failFine = Math.floor(Math.random() * 4) + 2; // 2-5
+        const failFine = Math.floor(Math.random() * 4) + 2;
         try {
           const fineResult = await deductCoinsSafe(msg.from.id, failFine);
           if (fineResult.deducted > 0) {
@@ -4381,9 +4365,10 @@ ${lines.join("\n")}`,
         return;
       }
 
-      let resultText = robbery.type === "small"
-        ? `🕵️ ${getUserLink(msg.from)} ограбил(а) ${getUserLink(target)} и украл(а) ${transfer.stolen} монет`
-        : `💰 ${getUserLink(msg.from)} удачно ограбил(а) ${getUserLink(target)} и вынес(ла) ${transfer.stolen} монет!`;
+      let resultText =
+        robbery.type === "small"
+          ? `🕵️ ${getUserLink(msg.from)} ограбил(а) ${getUserLink(target)} и украл(а) ${transfer.stolen} монет`
+          : `💰 ${getUserLink(msg.from)} удачно ограбил(а) ${getUserLink(target)} и вынес(ла) ${transfer.stolen} монет!`;
 
       const police = getRandomPoliceOutcome();
 
@@ -4391,7 +4376,7 @@ ${lines.join("\n")}`,
         try {
           const fine = await deductCoinsSafe(msg.from.id, police.amount);
           if (fine.deducted > 0) {
-            resultText += `\n🚓 Но полиция вычислила вора.`
+            resultText += `\n🚓 Но полиция вычислила вора.`;
             resultText += `\n💸 Штраф: ${fine.deducted} монет`;
           } else {
             resultText += `\n🚓 Полиция пришла, но денег на штраф уже не осталось.`;
@@ -4434,9 +4419,13 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const candidates = getRecentActiveCandidates(msg.chat.id);
+      let candidates = getRecentActiveCandidates(msg.chat.id);
       if (candidates.length < 2) {
-        await safeSendMessage(msg.chat.id, "❌ Нужно хотя бы 2 активных человека в чате.");
+        candidates = getFallbackBombCandidates(msg.chat.id);
+      }
+
+      if (candidates.length < 2) {
+        await safeSendMessage(msg.chat.id, "❌ Нужно хотя бы 2 человека в чате, которых бот видел.");
         return;
       }
 
@@ -4504,7 +4493,6 @@ ${lines.join("\n")}`,
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await safeSendMessage(msg.chat.id, "❌ Нельзя зарегистрироваться в брак с самим собой.");
@@ -4574,10 +4562,7 @@ ${getUserLink(target)}, выбери ниже:
         }
       );
 
-      if (sent) {
-        request.requestMessageId = sent.message_id;
-      }
-
+      if (sent) request.requestMessageId = sent.message_id;
       return;
     }
 
@@ -4614,7 +4599,6 @@ ${getUserLink(target)}, выбери ниже:
       }
 
       await initUser(child);
-      await saveSeenUser(msg.chat.id, child);
 
       const validation = await canAdoptUser(parent.id, child.id);
       if (!validation.ok) {
@@ -4668,10 +4652,7 @@ ${getUserLink(child)}, выбери ниже:
         reply_markup: getAdoptionDecisionKeyboard(requestId)
       });
 
-      if (sent) {
-        request.requestMessageId = sent.message_id;
-      }
-
+      if (sent) request.requestMessageId = sent.message_id;
       return;
     }
 
@@ -4925,7 +4906,6 @@ ${escapeHtml(result.text)}`,
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await safeSendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
@@ -5185,7 +5165,6 @@ ${escapeHtml(prediction)}`,
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await safeSendMessage(
@@ -5223,7 +5202,6 @@ ${escapeHtml(prediction)}`,
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await safeSendMessage(
@@ -5260,7 +5238,6 @@ ${escapeHtml(prediction)}`,
     }
 
     await initUser(target);
-    await saveSeenUser(msg.chat.id, target);
 
     if (sender.id === target.id) {
       await safeSendMessage(
