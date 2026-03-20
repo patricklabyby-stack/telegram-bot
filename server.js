@@ -18,7 +18,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const ADMIN_ID = 7837011810;
+const OWNER_ID = 7837011810;
 
 const chatMembers = {};
 const recentActiveUsers = {};
@@ -40,7 +40,6 @@ const CUSTOM_COMMAND_COST = 20;
 const MAX_CHILDREN_PER_FAMILY = 3;
 const MAX_PUNISHMENT_DAYS = 7;
 const MAX_GOOD_DEED_LENGTH = 120;
-const MAX_DREAM_LENGTH = 120;
 
 const ROBBERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const POLICE_JAIL_MS = 60 * 60 * 1000;
@@ -202,20 +201,6 @@ function getRandomPrediction() {
   return predictions[Math.floor(Math.random() * predictions.length)];
 }
 
-function getRandomCompliment() {
-  const compliments = [
-    "ты очень красивый(ая) 😍",
-    "у тебя классный стиль 😎",
-    "ты очень милый(ая) 😊",
-    "ты лучший человек в этом чате 🔥",
-    "с тобой приятно общаться 💫",
-    "ты сегодня вообще топ 😌",
-    "ты очень классный(ая) 🌟",
-    "у тебя крутая энергия ⚡"
-  ];
-  return compliments[Math.floor(Math.random() * compliments.length)];
-}
-
 function getRandomCoins() {
   return Math.floor(Math.random() * 101);
 }
@@ -272,10 +257,21 @@ function getLieResult() {
 function getShopKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "💰 50 монет — 5 ⭐", callback_data: "buy_50_coins" }],
-      [{ text: "💰 100 монет — 10 ⭐", callback_data: "buy_100_coins" }],
-      [{ text: "💰 200 монет — 20 ⭐", callback_data: "buy_200_coins" }],
-      [{ text: "💰 300 монет — 30 ⭐", callback_data: "buy_300_coins" }]
+      [{ text: "💰 50 монет — 5 ⭐", callback_data: "buy_self_50" }],
+      [{ text: "💰 100 монет — 10 ⭐", callback_data: "buy_self_100" }],
+      [{ text: "💰 200 монет — 20 ⭐", callback_data: "buy_self_200" }],
+      [{ text: "💰 300 монет — 30 ⭐", callback_data: "buy_self_300" }]
+    ]
+  };
+}
+
+function getGiftShopKeyboard(targetUserId) {
+  return {
+    inline_keyboard: [
+      [{ text: "🎁 50 монет другу — 5 ⭐", callback_data: `buy_gift_50_${targetUserId}` }],
+      [{ text: "🎁 100 монет другу — 10 ⭐", callback_data: `buy_gift_100_${targetUserId}` }],
+      [{ text: "🎁 200 монет другу — 20 ⭐", callback_data: `buy_gift_200_${targetUserId}` }],
+      [{ text: "🎁 300 монет другу — 30 ⭐", callback_data: `buy_gift_300_${targetUserId}` }]
     ]
   };
 }
@@ -334,6 +330,24 @@ function getRandomFromArray(arr) {
 
 function isRequestExpired(createdAt, ttlMs) {
   return Date.now() - createdAt > ttlMs;
+}
+
+function parseGiftPayload(payload) {
+  const str = String(payload || "");
+
+  if (str === "coins_50") return { type: "self", amount: 50 };
+  if (str === "coins_100") return { type: "self", amount: 100 };
+  if (str === "coins_200") return { type: "self", amount: 200 };
+  if (str === "coins_300") return { type: "self", amount: 300 };
+
+  const match = str.match(/^giftcoins_(50|100|200|300)_(\d+)$/);
+  if (!match) return null;
+
+  return {
+    type: "gift",
+    amount: Number(match[1]),
+    targetUserId: Number(match[2])
+  };
 }
 
 // =========================
@@ -801,17 +815,15 @@ async function transferCoins(fromUserId, toUserId, amount) {
   }
 }
 
-async function addCoinsToUser(targetUserId, amount) {
+async function addCoinsToUser(userId, amount) {
   const result = await pool.query(
-    `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
-    [targetUserId, amount]
+    `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
+    [userId, amount]
   );
-
-  if (!result.rows[0]) throw new Error("USER_NOT_FOUND");
-  return Number(result.rows[0].balance || 0);
+  return Number(result.rows[0]?.balance || 0);
 }
 
-async function processStarPurchase(userId, successfulPayment) {
+async function processStarPurchase(buyerUserId, successfulPayment) {
   const client = await pool.connect();
 
   try {
@@ -823,21 +835,21 @@ async function processStarPurchase(userId, successfulPayment) {
     );
 
     if (existing.rows.length > 0) {
-      const balanceRow = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [userId]);
+      const balanceRow = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [buyerUserId]);
       await client.query("COMMIT");
 
       return {
         alreadyProcessed: true,
-        balance: Number(balanceRow.rows[0]?.balance || 0),
+        gift: false,
+        buyerBalance: Number(balanceRow.rows[0]?.balance || 0),
         coinsAdded: 0
       };
     }
 
-    let coinsToAdd = 0;
-    if (successfulPayment.invoice_payload === "coins_50") coinsToAdd = 50;
-    if (successfulPayment.invoice_payload === "coins_100") coinsToAdd = 100;
-    if (successfulPayment.invoice_payload === "coins_200") coinsToAdd = 200;
-    if (successfulPayment.invoice_payload === "coins_300") coinsToAdd = 300;
+    const parsed = parseGiftPayload(successfulPayment.invoice_payload);
+    if (!parsed) {
+      throw new Error("BAD_PAYMENT_PAYLOAD");
+    }
 
     await client.query(
       `
@@ -851,24 +863,52 @@ async function processStarPurchase(userId, successfulPayment) {
       `,
       [
         successfulPayment.telegram_payment_charge_id,
-        userId,
+        buyerUserId,
         successfulPayment.invoice_payload,
         successfulPayment.total_amount,
         successfulPayment.currency
       ]
     );
 
-    const balanceResult = await client.query(
-      `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
-      [userId, coinsToAdd]
+    if (parsed.type === "self") {
+      const balanceResult = await client.query(
+        `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
+        [buyerUserId, parsed.amount]
+      );
+
+      await client.query("COMMIT");
+
+      return {
+        alreadyProcessed: false,
+        gift: false,
+        buyerBalance: Number(balanceResult.rows[0]?.balance || 0),
+        coinsAdded: parsed.amount
+      };
+    }
+
+    await client.query(
+      `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1`,
+      [parsed.targetUserId, parsed.amount]
+    );
+
+    const buyerBalanceRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [buyerUserId]
+    );
+    const targetBalanceRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [parsed.targetUserId]
     );
 
     await client.query("COMMIT");
 
     return {
       alreadyProcessed: false,
-      balance: Number(balanceResult.rows[0]?.balance || 0),
-      coinsAdded: coinsToAdd
+      gift: true,
+      targetUserId: parsed.targetUserId,
+      coinsAdded: parsed.amount,
+      buyerBalance: Number(buyerBalanceRow.rows[0]?.balance || 0),
+      targetBalance: Number(targetBalanceRow.rows[0]?.balance || 0)
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1972,53 +2012,16 @@ async function setChildDream(childUserId, dreamText) {
   return result.rows[0] || null;
 }
 
-async function deleteChildDreamAndReturnMoney(childUserId) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const dreamRow = await client.query(
-      `SELECT dream_balance FROM child_dreams WHERE child_user_id = $1 FOR UPDATE`,
-      [childUserId]
-    );
-
-    if (!dreamRow.rows[0]) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const dreamBalance = Number(dreamRow.rows[0].dream_balance || 0);
-
-    if (dreamBalance > 0) {
-      await client.query(
-        `UPDATE users SET balance = balance + $2 WHERE user_id = $1`,
-        [childUserId, dreamBalance]
-      );
-    }
-
-    await client.query(
-      `DELETE FROM child_dreams WHERE child_user_id = $1`,
-      [childUserId]
-    );
-
-    const userRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [childUserId]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      returned: dreamBalance,
-      userBalance: Number(userRow.rows[0]?.balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+async function deleteChildDream(childUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM child_dreams
+    WHERE child_user_id = $1
+    RETURNING child_user_id, dream_balance
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
 }
 
 async function addSelfMoneyToDream(childUserId, amount) {
@@ -2067,62 +2070,6 @@ async function addSelfMoneyToDream(childUserId, amount) {
       dreamText: dreamRow.rows[0].dream_text,
       dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
       updatedAt: dreamRow.rows[0].updated_at,
-      userBalance: Number(updatedUser.rows[0].balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function takeMoneyFromDream(childUserId, amount) {
-  const dream = await getChildDream(childUserId);
-  if (!dream) throw new Error("NO_DREAM");
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const dreamRow = await client.query(
-      `SELECT dream_balance, dream_text FROM child_dreams WHERE child_user_id = $1 FOR UPDATE`,
-      [childUserId]
-    );
-
-    if (!dreamRow.rows[0]) throw new Error("NO_DREAM");
-
-    const currentDreamBalance = Number(dreamRow.rows[0].dream_balance || 0);
-    if (currentDreamBalance < amount) throw new Error("NOT_ENOUGH_DREAM_MONEY");
-
-    const updatedDream = await client.query(
-      `
-      UPDATE child_dreams
-      SET dream_balance = dream_balance - $2,
-          updated_at = NOW()
-      WHERE child_user_id = $1
-      RETURNING dream_text, dream_balance, updated_at
-      `,
-      [childUserId, amount]
-    );
-
-    const updatedUser = await client.query(
-      `
-      UPDATE users
-      SET balance = balance + $2
-      WHERE user_id = $1
-      RETURNING balance
-      `,
-      [childUserId, amount]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      dreamText: updatedDream.rows[0].dream_text,
-      dreamBalance: Number(updatedDream.rows[0].dream_balance || 0),
-      updatedAt: updatedDream.rows[0].updated_at,
       userBalance: Number(updatedUser.rows[0].balance || 0)
     };
   } catch (error) {
@@ -2703,7 +2650,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • удалить мечту
 • пополнить баланс на мечту 5
 • на мечту 5
-• снять с мечты 5
 • наказать ребенка 1
 • наказание
 • снять наказание
@@ -2720,14 +2666,11 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • охота
 • снайпер
 • ограбить
-• магазин
+• тюрьма
+• купить монеты
+• купить монеты другу
 • /balance
 • /cooldowns
-
-<b>🚔 Тюрьма</b>
-• тюрьма
-• после неудачного ограбления полиция может посадить в тюрьму
-• в тюрьме нельзя нормально пользоваться частью денежных команд
 
 <b>👤 Профиль</b>
 • /profile
@@ -2752,8 +2695,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • заморозить
 • спасти
 • подарок
-• позвать на свидание
-• сделать комплимент
 
 <b>🛠 Свои команды</b>
 • /createcommand
@@ -2935,29 +2876,33 @@ bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) 
   }
 });
 
-// скрытая команда только владельцу
-bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?\s+(\d+)$/, async (msg, match) => {
+bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
   try {
-    if (Number(msg.from?.id) !== ADMIN_ID) return;
+    if (Number(msg.from.id) !== OWNER_ID) return;
 
     const target = await resolveTargetUserFromReply(msg);
+    const amount = Number(match?.[2] || 0);
+
     if (!target) {
-      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: /givemoney 100");
+      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: /givemoney 1000");
       return;
     }
 
-    const amount = Number(match?.[2] || 0);
     if (!Number.isInteger(amount) || amount <= 0) {
-      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /givemoney 1000");
       return;
     }
 
     await initUser(target);
+    await saveSeenUser(msg.chat.id, target);
+
     const newBalance = await addCoinsToUser(target.id, amount);
 
     await safeSendMessage(
       msg.chat.id,
-      `✅ ${getUserLink(target)} выдано ${amount} монет.\n💰 Новый баланс: ${newBalance}`,
+      `💸 ${getUserLink(target)} получил(а) ${amount} монет.
+
+Новый баланс: ${newBalance}`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
@@ -2965,9 +2910,7 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?\s+(\d+)$/, async (msg, match) => {
     );
   } catch (error) {
     console.error("Ошибка /givemoney:", error);
-    if (Number(msg.from?.id) === ADMIN_ID) {
-      await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
-    }
+    await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
   }
 });
 
@@ -3013,17 +2956,34 @@ bot.on("message", async (msg) => {
     if (purchase.alreadyProcessed) {
       await safeSendMessage(
         msg.chat.id,
-        `ℹ️ Оплата уже обработана.\n\nБаланс: ${purchase.balance} монет`
+        `ℹ️ Оплата уже обработана.\n\nБаланс: ${purchase.buyerBalance} монет`
       );
       return;
     }
 
-    await safeSendMessage(
-      msg.chat.id,
-      `✅ Оплата прошла успешно!
+    if (!purchase.gift) {
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ Оплата прошла успешно!
 
 💰 Вам начислено ${purchase.coinsAdded} монет
-Баланс: ${purchase.balance} монет`
+Баланс: ${purchase.buyerBalance} монет`
+      );
+      return;
+    }
+
+    const targetUser = await getStoredUser(purchase.targetUserId);
+
+    await safeSendMessage(
+      msg.chat.id,
+      `✅ Подарок куплен успешно!
+
+🎁 ${getUserLink(targetUser)} получил(а) ${purchase.coinsAdded} монет
+💰 Баланс получателя: ${purchase.targetBalance} монет`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
     );
   } catch (error) {
     console.error("Ошибка successful_payment:", error);
@@ -3041,39 +3001,21 @@ bot.on("callback_query", async (query) => {
     const messageId = query.message.message_id;
     const data = String(query.data);
 
-    if (
-      data === "buy_50_coins" ||
-      data === "buy_100_coins" ||
-      data === "buy_200_coins" ||
-      data === "buy_300_coins"
-    ) {
+    if (data.startsWith("buy_self_")) {
       await safeAnswerCallback(query);
       await initUser(query.from);
       await saveSeenUser(chatId, query.from);
 
-      let title = "50 монет";
-      let description = "Покупка 50 монет за 5 Telegram Stars";
-      let payload = "coins_50";
-      let amount = 5;
+      const amountCoins = Number(data.split("_")[2]);
 
-      if (data === "buy_100_coins") {
-        title = "100 монет";
-        description = "Покупка 100 монет за 10 Telegram Stars";
-        payload = "coins_100";
-        amount = 10;
-      }
-      if (data === "buy_200_coins") {
-        title = "200 монет";
-        description = "Покупка 200 монет за 20 Telegram Stars";
-        payload = "coins_200";
-        amount = 20;
-      }
-      if (data === "buy_300_coins") {
-        title = "300 монет";
-        description = "Покупка 300 монет за 30 Telegram Stars";
-        payload = "coins_300";
-        amount = 30;
-      }
+      let title = `${amountCoins} монет`;
+      let description = `Покупка ${amountCoins} монет за Telegram Stars`;
+      let payload = `coins_${amountCoins}`;
+      let amountStars = 5;
+
+      if (amountCoins === 100) amountStars = 10;
+      if (amountCoins === 200) amountStars = 20;
+      if (amountCoins === 300) amountStars = 30;
 
       await bot.sendInvoice(
         chatId,
@@ -3082,7 +3024,40 @@ bot.on("callback_query", async (query) => {
         payload,
         "",
         "XTR",
-        [{ label: title, amount }]
+        [{ label: title, amount: amountStars }]
+      );
+      return;
+    }
+
+    if (data.startsWith("buy_gift_")) {
+      await safeAnswerCallback(query);
+      await initUser(query.from);
+      await saveSeenUser(chatId, query.from);
+
+      const match = data.match(/^buy_gift_(50|100|200|300)_(\d+)$/);
+      if (!match) return;
+
+      const coins = Number(match[1]);
+      const targetUserId = Number(match[2]);
+      const targetUser = await getStoredUser(targetUserId);
+
+      let amountStars = 5;
+      if (coins === 100) amountStars = 10;
+      if (coins === 200) amountStars = 20;
+      if (coins === 300) amountStars = 30;
+
+      const title = `Подарок: ${coins} монет`;
+      const description = `Подарить ${coins} монет игроку ${getUserName(targetUser)}`;
+      const payload = `giftcoins_${coins}_${targetUserId}`;
+
+      await bot.sendInvoice(
+        chatId,
+        title,
+        description,
+        payload,
+        "",
+        "XTR",
+        [{ label: title, amount: amountStars }]
       );
       return;
     }
@@ -3208,26 +3183,6 @@ bot.on("message", async (msg) => {
         return;
       }
 
-      const reserved = [
-        "позвать на свидание",
-        "сделать комплимент",
-        "магазин",
-        "семья",
-        "деньги",
-        "охота",
-        "снайпер",
-        "ограбить",
-        "бомба",
-        "передать",
-        "пара",
-        "респект",
-        "подарок"
-      ];
-      if (reserved.includes(parsed.trigger)) {
-        await safeSendMessage(msg.chat.id, "❌ Такая команда уже занята.");
-        return;
-      }
-
       const existing = await getCustomCommandByTrigger(parsed.trigger);
       if (existing) {
         await safeSendMessage(msg.chat.id, "❌ Такая команда уже существует. Напиши другую.");
@@ -3335,7 +3290,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
 • нельзя просить деньги
 • нельзя получать карманные деньги
 • нельзя брать из семейного бюджета
-• нельзя грабить
 
 🕒 До: ${formatDateTime(punishment.until_at)}`,
         {
@@ -3412,8 +3366,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
 📌 Ограничения:
 • нельзя просить деньги
 • нельзя получать карманные деньги
-• нельзя брать из семейного бюджета
-• нельзя грабить`,
+• нельзя брать из семейного бюджета`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -4074,8 +4027,8 @@ ${lines.join("\n")}`,
         return;
       }
 
-      if (dreamText.length > MAX_DREAM_LENGTH) {
-        await safeSendMessage(msg.chat.id, `❌ Мечта слишком длинная. Максимум ${MAX_DREAM_LENGTH} символов.`);
+      if (dreamText.length > 120) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта слишком длинная. Максимум 120 символов.");
         return;
       }
 
@@ -4135,7 +4088,7 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const deleted = await deleteChildDreamAndReturnMoney(msg.from.id);
+      const deleted = await deleteChildDream(msg.from.id);
       if (!deleted) {
         await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.");
         return;
@@ -4145,8 +4098,8 @@ ${lines.join("\n")}`,
         msg.chat.id,
         `🗑 ${getUserLink(msg.from)} удалил(а) свою мечту.
 
-💰 Возвращено на баланс: ${deleted.returned}
-👛 Твой баланс: ${deleted.userBalance}`,
+💰 Монеты, которые были на мечте: ${Number(deleted.dream_balance || 0)}
+ℹ️ Они удалены вместе с мечтой.`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -4205,58 +4158,6 @@ ${lines.join("\n")}`,
 
         console.error("Ошибка пополнения баланса мечты:", error);
         await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения баланса на мечту.");
-      }
-
-      return;
-    }
-
-    if (lowerText.startsWith("снять с мечты")) {
-      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
-
-      if (!childInfo) {
-        await safeSendMessage(msg.chat.id, "❌ Снимать деньги с мечты может только ребёнок в семье.");
-        return;
-      }
-
-      const match = lowerText.match(/^снять с мечты\s+(\d+)$/);
-      const amount = match ? Number(match[1]) : NaN;
-
-      if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: снять с мечты 10"
-        );
-        return;
-      }
-
-      try {
-        const result = await takeMoneyFromDream(msg.from.id, amount);
-
-        await safeSendMessage(
-          msg.chat.id,
-          `💸 ${getUserLink(msg.from)} снял(а) с мечты ${amount} монет
-
-🎯 Мечта: ${escapeHtml(result.dreamText)}
-💰 Баланс мечты: ${result.dreamBalance}
-👛 Твой баланс: ${result.userBalance}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-      } catch (error) {
-        if (error.message === "NO_DREAM") {
-          await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.");
-          return;
-        }
-
-        if (error.message === "NOT_ENOUGH_DREAM_MONEY") {
-          await safeSendMessage(msg.chat.id, "❌ На мечте недостаточно монет.");
-          return;
-        }
-
-        console.error("Ошибка снятия с мечты:", error);
-        await safeSendMessage(msg.chat.id, "❌ Ошибка снятия денег с мечты.");
       }
 
       return;
@@ -4663,7 +4564,61 @@ ${lines.join("\n")}`,
     }
 
     // =========================
-    // OTHER / RP
+    // SHOP
+    // =========================
+    if (isExactCommand(lowerText, "купить монеты")) {
+      await safeSendMessage(
+        msg.chat.id,
+        `🛒 Покупка монет
+
+Товар:
+💰 50 монет — 5 ⭐
+💰 100 монет — 10 ⭐
+💰 200 монет — 20 ⭐
+💰 300 монет — 30 ⭐`,
+        { reply_markup: getShopKeyboard() }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "купить монеты другу")) {
+      const target = await resolveTargetUserFromReply(msg);
+
+      if (!target) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Ответь на сообщение игрока и напиши: купить монеты другу"
+        );
+        return;
+      }
+
+      if (Number(target.id) === Number(msg.from.id)) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Себе через эту команду покупать нельзя.\nИспользуй: купить монеты"
+        );
+        return;
+      }
+
+      await initUser(target);
+      await saveSeenUser(msg.chat.id, target);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎁 Покупка монет для ${getUserLink(target)}
+
+Выбери пакет ниже:`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+          reply_markup: getGiftShopKeyboard(target.id)
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // OTHER
     // =========================
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
@@ -4715,21 +4670,6 @@ ${lines.join("\n")}`,
       }
 
       await passBomb(msg.chat.id, msg.from);
-      return;
-    }
-
-    if (isExactCommand(lowerText, "магазин")) {
-      await safeSendMessage(
-        msg.chat.id,
-        `🛒 Магазин
-
-Товар:
-💰 50 монет — 5 ⭐
-💰 100 монет — 10 ⭐
-💰 200 монет — 20 ⭐
-💰 300 монет — 30 ⭐`,
-        { reply_markup: getShopKeyboard() }
-      );
       return;
     }
 
@@ -5443,55 +5383,6 @@ ${escapeHtml(prediction)}`,
       await safeSendMessage(
         msg.chat.id,
         `🎁 ${getUserLink(sender)} подарил(а) ${getUserLink(target)} ${escapeHtml(gift)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "позвать на свидание")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: позвать на свидание");
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🌹 ${getUserLink(sender)} позвал(а) на свидание ${getUserLink(target)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "сделать комплимент")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: сделать комплимент");
-        return;
-      }
-
-      const compliment = getRandomCompliment();
-
-      await pool.query(
-        `UPDATE users SET respect = COALESCE(respect, 0) + 1 WHERE user_id = $1`,
-        [target.id]
-      );
-
-      await safeSendMessage(
-        msg.chat.id,
-        `✨ ${getUserLink(sender)} сделал(а) комплимент ${getUserLink(target)}
-
-💬 ${escapeHtml(compliment)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
