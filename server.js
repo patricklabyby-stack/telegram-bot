@@ -269,27 +269,27 @@ function getLieResult() {
 function getBankGameResult() {
   const roll = Math.random();
 
-  if (roll < 0.05) {
+  if (roll < 0.15) {
     return {
       type: "jackpot",
       text: "🏦 Банк сорвал куш!",
-      coins: Math.floor(Math.random() * 81) + 120 // 120-200
+      coins: Math.floor(Math.random() * 151) + 150
     };
   }
 
-  if (roll < 0.20) {
+  if (roll < 0.65) {
     return {
       type: "win",
       text: "💰 Вклад удачно сработал!",
-      coins: Math.floor(Math.random() * 21) + 20 // 20-40
+      coins: Math.floor(Math.random() * 71) + 30
     };
   }
 
-  if (roll < 0.40) {
+  if (roll < 0.90) {
     return {
       type: "small",
       text: "🙂 Банк дал небольшой бонус.",
-      coins: Math.floor(Math.random() * 8) + 3 // 3-10
+      coins: Math.floor(Math.random() * 21) + 5
     };
   }
 
