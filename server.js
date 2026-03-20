@@ -53,7 +53,7 @@ const JAIL_BRIBE_COOLDOWN_MS = 20 * 60 * 1000;
 const JAIL_LAWYER_COST = 250;
 const JAIL_BRIBE_COST = 400;
 
-const TIME_EDIT_MAX_HOURS = 168; // максимум 7 дней за раз
+const TIME_EDIT_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 
 // =========================
 // SERVER
@@ -140,12 +140,26 @@ async function removeInlineKeyboard(chatId, messageId) {
 
 function formatRemainingTime(ms) {
   const totalSeconds = Math.max(1, Math.ceil((Number(ms) || 0) / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
-  if (hours > 0) return minutes > 0 ? `${hours} ч ${minutes} мин` : `${hours} ч`;
-  if (minutes > 0) return seconds > 0 ? `${minutes} мин ${seconds} сек` : `${minutes} мин`;
+  if (days > 0) {
+    if (hours > 0) return `${days} д ${hours} ч`;
+    return `${days} д`;
+  }
+
+  if (hours > 0) {
+    if (minutes > 0) return `${hours} ч ${minutes} мин`;
+    return `${hours} ч`;
+  }
+
+  if (minutes > 0) {
+    if (seconds > 0) return `${minutes} мин ${seconds} сек`;
+    return `${minutes} мин`;
+  }
+
   return `${seconds} сек`;
 }
 
@@ -167,8 +181,32 @@ function formatDateTime(dateValue) {
   return `${day}.${month}.${year} ${hours}:${mins}`;
 }
 
+function formatOnlyTime(dateValue) {
+  const date = new Date(dateValue);
+  const hours = String(date.getHours()).padStart(2, "0");
+  const mins = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${mins}`;
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function parseTimeEditAmount(valueRaw, unitRaw) {
+  const value = Number(valueRaw);
+  const unit = normalizeText(unitRaw);
+
+  if (!Number.isInteger(value) || value === 0) return null;
+
+  if (["м", "мин", "минута", "минуты", "минут", "minute", "minutes", "min", "m"].includes(unit)) {
+    return value * 60 * 1000;
+  }
+
+  if (["ч", "час", "часа", "часов", "hour", "hours", "h"].includes(unit)) {
+    return value * 60 * 60 * 1000;
+  }
+
+  return null;
 }
 
 function getRandomGift() {
@@ -289,23 +327,19 @@ function getGiftShopKeyboard(targetUserId) {
 
 function getMarriageDecisionKeyboard(requestId) {
   return {
-    inline_keyboard: [
-      [
-        { text: "✅ Да", callback_data: `marriage_yes:${requestId}` },
-        { text: "❌ Нет", callback_data: `marriage_no:${requestId}` }
-      ]
-    ]
+    inline_keyboard: [[
+      { text: "✅ Да", callback_data: `marriage_yes:${requestId}` },
+      { text: "❌ Нет", callback_data: `marriage_no:${requestId}` }
+    ]]
   };
 }
 
 function getAdoptionDecisionKeyboard(requestId) {
   return {
-    inline_keyboard: [
-      [
-        { text: "✅ Да", callback_data: `adoption_yes:${requestId}` },
-        { text: "❌ Нет", callback_data: `adoption_no:${requestId}` }
-      ]
-    ]
+    inline_keyboard: [[
+      { text: "✅ Да", callback_data: `adoption_yes:${requestId}` },
+      { text: "❌ Нет", callback_data: `adoption_no:${requestId}` }
+    ]]
   };
 }
 
@@ -383,6 +417,53 @@ function getCooldownColumnAndMsByName(rawName) {
 
   if (["ограбление", "ограбить", "robbery"].includes(name)) {
     return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
+  }
+
+  return null;
+}
+
+function getTimeEditTargetInfo(rawName) {
+  const name = normalizeText(rawName);
+
+  const userCooldown = getCooldownColumnAndMsByName(name);
+  if (userCooldown) {
+    return {
+      type: "user_cooldown",
+      title: userCooldown.title,
+      column: userCooldown.column,
+      cooldownMs: userCooldown.cooldownMs
+    };
+  }
+
+  if (["тюрьма", "jail"].includes(name)) {
+    return { type: "jail", title: "тюрьма" };
+  }
+
+  if (["побег", "escape"].includes(name)) {
+    return {
+      type: "jail_action",
+      title: "побег из тюрьмы",
+      column: "last_escape_at",
+      cooldownMs: JAIL_ESCAPE_COOLDOWN_MS
+    };
+  }
+
+  if (["адвокат", "lawyer"].includes(name)) {
+    return {
+      type: "jail_action",
+      title: "адвокат",
+      column: "last_lawyer_at",
+      cooldownMs: JAIL_LAWYER_COOLDOWN_MS
+    };
+  }
+
+  if (["подкуп", "охрана", "взятка", "bribe"].includes(name)) {
+    return {
+      type: "jail_action",
+      title: "подкуп охраны",
+      column: "last_bribe_at",
+      cooldownMs: JAIL_BRIBE_COOLDOWN_MS
+    };
   }
 
   return null;
@@ -1061,10 +1142,7 @@ async function buyShield(userId) {
     const currentBalance = Number(userRow.rows[0].balance || 0);
     const currentShields = Number(shieldRow.rows[0]?.count || 0);
 
-    if (currentShields >= MAX_SHIELDS) {
-      throw new Error("MAX_SHIELDS_REACHED");
-    }
-
+    if (currentShields >= MAX_SHIELDS) throw new Error("MAX_SHIELDS_REACHED");
     if (currentBalance < SHIELD_COST) throw new Error("NOT_ENOUGH_MONEY");
 
     await client.query(
@@ -1734,21 +1812,9 @@ async function clearGoodDeeds(childUserId) {
 function getRandomRobberyResult() {
   const roll = Math.random();
 
-  if (roll < 0.60) {
-    return { type: "fail", amount: 0 };
-  }
-
-  if (roll < 0.90) {
-    return {
-      type: "small",
-      amount: Math.floor(Math.random() * 10) + 1
-    };
-  }
-
-  return {
-    type: "big",
-    amount: Math.floor(Math.random() * 16) + 15
-  };
+  if (roll < 0.60) return { type: "fail", amount: 0 };
+  if (roll < 0.90) return { type: "small", amount: Math.floor(Math.random() * 10) + 1 };
+  return { type: "big", amount: Math.floor(Math.random() * 16) + 15 };
 }
 
 function getRandomPoliceOutcome() {
@@ -1782,10 +1848,7 @@ function getRandomBribeOutcome() {
 }
 
 async function cleanupExpiredJail() {
-  await pool.query(`
-    DELETE FROM police_jail
-    WHERE until_at <= NOW()
-  `);
+  await pool.query(`DELETE FROM police_jail WHERE until_at <= NOW()`);
 }
 
 async function getJailStatus(userId) {
@@ -1876,7 +1939,7 @@ async function getJailBlockText(userId) {
   if (!jail) return null;
 
   const remainingMs = new Date(jail.until_at).getTime() - Date.now();
-  return `🚔 Ты сейчас в тюрьме.\n⏳ До освобождения: ${formatRemainingTime(remainingMs)}`;
+  return `🚔 Ты сейчас в тюрьме.\n⏳ До освобождения: ${formatRemainingTime(remainingMs)}\n🕒 Освобождение: ${formatDateTime(jail.until_at)}`;
 }
 
 async function ensureJailActionRow(userId) {
@@ -1928,18 +1991,11 @@ function getActionRemaining(lastAt, cooldownMs) {
 }
 
 async function updateLastRobberyAt(userId) {
-  await pool.query(
-    `UPDATE users SET last_robbery_at = NOW() WHERE user_id = $1`,
-    [userId]
-  );
+  await pool.query(`UPDATE users SET last_robbery_at = NOW() WHERE user_id = $1`, [userId]);
 }
 
 async function getRobberyCooldown(userId) {
-  const result = await pool.query(
-    `SELECT last_robbery_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
+  const result = await pool.query(`SELECT last_robbery_at FROM users WHERE user_id = $1`, [userId]);
   const row = result.rows[0];
   if (!row || !row.last_robbery_at) return 0;
 
@@ -1999,16 +2055,12 @@ async function robberyTransfer(thiefId, victimId, requestedAmount) {
       [victimId]
     );
 
-    if (!thiefRow.rows[0] || !victimRow.rows[0]) {
-      throw new Error("USER_NOT_FOUND");
-    }
+    if (!thiefRow.rows[0] || !victimRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const victimBalance = Number(victimRow.rows[0].balance || 0);
     const actualAmount = Math.min(victimBalance, requestedAmount);
 
-    if (actualAmount <= 0) {
-      throw new Error("VICTIM_NO_MONEY");
-    }
+    if (actualAmount <= 0) throw new Error("VICTIM_NO_MONEY");
 
     const updatedVictim = await client.query(
       `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
@@ -2035,38 +2087,105 @@ async function robberyTransfer(thiefId, victimId, requestedAmount) {
   }
 }
 
-async function adjustUserCooldown(userId, cooldownName, hoursDelta) {
-  const info = getCooldownColumnAndMsByName(cooldownName);
-  if (!info) throw new Error("UNKNOWN_COOLDOWN_TYPE");
+async function adjustEditableTime(targetUserId, rawType, deltaMs) {
+  const info = getTimeEditTargetInfo(rawType);
+  if (!info) throw new Error("UNKNOWN_TIMEEDIT_TYPE");
 
-  const result = await pool.query(
-    `SELECT ${info.column} AS value FROM users WHERE user_id = $1`,
-    [userId]
-  );
+  if (Math.abs(deltaMs) > TIME_EDIT_MAX_MS) {
+    throw new Error("TIME_EDIT_TOO_BIG");
+  }
 
-  if (!result.rows[0]) throw new Error("USER_NOT_FOUND");
+  if (info.type === "user_cooldown") {
+    const rowResult = await pool.query(
+      `SELECT ${info.column} AS value FROM users WHERE user_id = $1`,
+      [targetUserId]
+    );
 
-  const currentValue = result.rows[0].value;
-  if (!currentValue) throw new Error("COOLDOWN_NOT_USED_YET");
+    if (!rowResult.rows[0]) throw new Error("USER_NOT_FOUND");
+    if (!rowResult.rows[0].value) throw new Error("COOLDOWN_NOT_USED_YET");
 
-  const currentDate = new Date(currentValue);
-  const newDate = new Date(currentDate.getTime() + hoursDelta * 60 * 60 * 1000);
+    const currentBase = new Date(rowResult.rows[0].value);
+    const newBase = new Date(currentBase.getTime() + deltaMs);
 
-  await pool.query(
-    `UPDATE users SET ${info.column} = $2 WHERE user_id = $1`,
-    [userId, newDate.toISOString()]
-  );
+    await pool.query(
+      `UPDATE users SET ${info.column} = $2 WHERE user_id = $1`,
+      [targetUserId, newBase.toISOString()]
+    );
 
-  const remainingMs = Math.max(
-    0,
-    new Date(newDate.getTime() + info.cooldownMs).getTime() - Date.now()
-  );
+    const endAt = new Date(newBase.getTime() + info.cooldownMs);
+    const remainingMs = Math.max(0, endAt.getTime() - Date.now());
 
-  return {
-    title: info.title,
-    newDate,
-    remainingMs
-  };
+    return {
+      title: info.title,
+      kind: "cooldown",
+      editedAt: newBase,
+      endAt,
+      remainingMs
+    };
+  }
+
+  if (info.type === "jail") {
+    const rowResult = await pool.query(
+      `SELECT until_at FROM police_jail WHERE user_id = $1 LIMIT 1`,
+      [targetUserId]
+    );
+
+    if (!rowResult.rows[0]) throw new Error("JAIL_NOT_ACTIVE");
+
+    const currentUntil = new Date(rowResult.rows[0].until_at);
+    let newUntil = new Date(currentUntil.getTime() + deltaMs);
+
+    if (newUntil.getTime() <= Date.now()) {
+      newUntil = new Date(Date.now() + 1000);
+    }
+
+    await pool.query(
+      `UPDATE police_jail SET until_at = $2, updated_at = NOW() WHERE user_id = $1`,
+      [targetUserId, newUntil.toISOString()]
+    );
+
+    const remainingMs = Math.max(0, newUntil.getTime() - Date.now());
+
+    return {
+      title: info.title,
+      kind: "exact_time",
+      endAt: newUntil,
+      remainingMs
+    };
+  }
+
+  if (info.type === "jail_action") {
+    await ensureJailActionRow(targetUserId);
+
+    const rowResult = await pool.query(
+      `SELECT ${info.column} AS value FROM jail_actions WHERE user_id = $1 LIMIT 1`,
+      [targetUserId]
+    );
+
+    if (!rowResult.rows[0]) throw new Error("USER_NOT_FOUND");
+    if (!rowResult.rows[0].value) throw new Error("COOLDOWN_NOT_USED_YET");
+
+    const currentBase = new Date(rowResult.rows[0].value);
+    const newBase = new Date(currentBase.getTime() + deltaMs);
+
+    await pool.query(
+      `UPDATE jail_actions SET ${info.column} = $2, updated_at = NOW() WHERE user_id = $1`,
+      [targetUserId, newBase.toISOString()]
+    );
+
+    const endAt = new Date(newBase.getTime() + info.cooldownMs);
+    const remainingMs = Math.max(0, endAt.getTime() - Date.now());
+
+    return {
+      title: info.title,
+      kind: "cooldown",
+      editedAt: newBase,
+      endAt,
+      remainingMs
+    };
+  }
+
+  throw new Error("UNKNOWN_TIMEEDIT_TYPE");
 }
 
 // =========================
@@ -2145,10 +2264,7 @@ async function addToFamilyBudget(userId, amount) {
     const currentBalance = Number(userRow.rows[0].balance || 0);
     if (currentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
 
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [userId, amount]
-    );
+    await client.query(`UPDATE users SET balance = balance - $2 WHERE user_id = $1`, [userId, amount]);
 
     const familyBudgetRow = await client.query(
       `
@@ -2161,10 +2277,7 @@ async function addToFamilyBudget(userId, amount) {
       [familyKey, amount]
     );
 
-    const updatedUserRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [userId]
-    );
+    const updatedUserRow = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [userId]);
 
     await client.query("COMMIT");
 
@@ -2228,12 +2341,7 @@ async function takeFromFamilyBudget(userId, amount) {
     if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const updatedUser = await client.query(
-      `
-      UPDATE users
-      SET balance = balance + $2
-      WHERE user_id = $1
-      RETURNING balance
-      `,
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
       [userId, amount]
     );
 
@@ -2302,10 +2410,7 @@ async function addToPiggyBank(childUserId, amount) {
     const userBalance = Number(userRow.rows[0].balance || 0);
     if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
 
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [childUserId, amount]
-    );
+    await client.query(`UPDATE users SET balance = balance - $2 WHERE user_id = $1`, [childUserId, amount]);
 
     const piggy = await client.query(
       `
@@ -2318,10 +2423,7 @@ async function addToPiggyBank(childUserId, amount) {
       [childUserId, amount]
     );
 
-    const updatedUser = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [childUserId]
-    );
+    const updatedUser = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [childUserId]);
 
     await client.query("COMMIT");
 
@@ -2350,10 +2452,7 @@ async function breakPiggyBank(childUserId) {
     await client.query("BEGIN");
 
     if (amount > 0) {
-      await client.query(
-        `UPDATE users SET balance = balance + $2 WHERE user_id = $1`,
-        [childUserId, amount]
-      );
+      await client.query(`UPDATE users SET balance = balance + $2 WHERE user_id = $1`, [childUserId, amount]);
     }
 
     await client.query(
@@ -2366,15 +2465,8 @@ async function breakPiggyBank(childUserId) {
       [childUserId]
     );
 
-    const updatedUser = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [childUserId]
-    );
-
-    const piggy = await client.query(
-      `SELECT balance, updated_at FROM piggy_banks WHERE child_user_id = $1`,
-      [childUserId]
-    );
+    const updatedUser = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [childUserId]);
+    const piggy = await client.query(`SELECT balance, updated_at FROM piggy_banks WHERE child_user_id = $1`, [childUserId]);
 
     await client.query("COMMIT");
 
@@ -2448,20 +2540,13 @@ async function addSelfMoneyToDream(childUserId, amount) {
   try {
     await client.query("BEGIN");
 
-    const userRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [childUserId]
-    );
-
+    const userRow = await client.query(`SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`, [childUserId]);
     if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const userBalance = Number(userRow.rows[0].balance || 0);
     if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
 
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [childUserId, amount]
-    );
+    await client.query(`UPDATE users SET balance = balance - $2 WHERE user_id = $1`, [childUserId, amount]);
 
     const dreamRow = await client.query(
       `
@@ -2474,10 +2559,7 @@ async function addSelfMoneyToDream(childUserId, amount) {
       [childUserId, amount]
     );
 
-    const updatedUser = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [childUserId]
-    );
+    const updatedUser = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [childUserId]);
 
     await client.query("COMMIT");
 
@@ -2507,20 +2589,13 @@ async function addParentMoneyToDream(parentUserId, childUserId, amount) {
   try {
     await client.query("BEGIN");
 
-    const parentRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [parentUserId]
-    );
-
+    const parentRow = await client.query(`SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`, [parentUserId]);
     if (!parentRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const parentBalance = Number(parentRow.rows[0].balance || 0);
     if (parentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
 
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [parentUserId, amount]
-    );
+    await client.query(`UPDATE users SET balance = balance - $2 WHERE user_id = $1`, [parentUserId, amount]);
 
     const dreamRow = await client.query(
       `
@@ -2533,10 +2608,7 @@ async function addParentMoneyToDream(parentUserId, childUserId, amount) {
       [childUserId, amount]
     );
 
-    const updatedParent = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [parentUserId]
-    );
+    const updatedParent = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [parentUserId]);
 
     await client.query("COMMIT");
 
@@ -2558,10 +2630,7 @@ async function addParentMoneyToDream(parentUserId, childUserId, amount) {
 // CUSTOM COMMANDS
 // =========================
 async function getUserCustomCommandCount(userId) {
-  const result = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`,
-    [userId]
-  );
+  const result = await pool.query(`SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`, [userId]);
   return result.rows[0]?.count || 0;
 }
 
@@ -2592,10 +2661,11 @@ async function getCustomCommandByTrigger(trigger) {
 }
 
 async function createCustomCommand(userId, trigger, actionText) {
-  await pool.query(
-    `INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`,
-    [userId, trigger, actionText]
-  );
+  await pool.query(`INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`, [
+    userId,
+    trigger,
+    actionText
+  ]);
 }
 
 async function deleteCustomCommand(userId, trigger) {
@@ -2641,7 +2711,7 @@ async function claimDailyCoins(userId) {
   if (lastDailyAt) {
     const nextTime = new Date(lastDailyAt.getTime() + DAILY_COOLDOWN_MS);
     if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime(), endAt: nextTime };
     }
   }
 
@@ -2672,7 +2742,7 @@ async function runHunt(userId) {
   if (lastHuntAt) {
     const nextTime = new Date(lastHuntAt.getTime() + DAILY_COOLDOWN_MS);
     if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime(), endAt: nextTime };
     }
   }
 
@@ -2705,7 +2775,7 @@ async function runSniper(userId) {
   if (lastSniperAt) {
     const nextTime = new Date(lastSniperAt.getTime() + DAILY_COOLDOWN_MS);
     if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime(), endAt: nextTime };
     }
   }
 
@@ -2739,7 +2809,7 @@ async function getCooldownText(userId) {
     const diff = nextTime.getTime() - now.getTime();
 
     if (diff <= 0) return "✅ Уже доступно";
-    return `⏳ ${formatRemainingTime(diff)}`;
+    return `⏳ ${formatRemainingTime(diff)} (до ${formatOnlyTime(nextTime)})`;
   }
 
   return `⏱ Кулдауны
@@ -3140,13 +3210,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • он врет?
 • врет?
 
-<b>👑 Для владельца</b>
-• /givemoney 1000
-• /timeedit деньги -4
-• /timeedit охота -2
-• /timeedit снайпер -6
-• /timeedit ограбление -1
-
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
     {
@@ -3159,11 +3222,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     let targetUser = null;
-
-    if (msg.reply_to_message) {
-      targetUser = await resolveTargetUserFromReply(msg);
-    }
-
+    if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
     if (!targetUser) targetUser = msg.from;
 
     await initUser(targetUser);
@@ -3350,77 +3409,93 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
   }
 });
 
-bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)$/, async (msg, match) => {
-  try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
+bot.onText(
+  /^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)\s*(минут(?:а|ы)?|мин|м|m|minute|minutes|min|час(?:а|ов)?|ч|h|hour|hours)$/i,
+  async (msg, match) => {
+    try {
+      if (Number(msg.from.id) !== OWNER_ID) return;
 
-    const cooldownName = String(match?.[2] || "").trim();
-    const hoursDelta = Number(match?.[3] || 0);
+      const typeName = String(match?.[2] || "").trim();
+      const valueRaw = String(match?.[3] || "").trim();
+      const unitRaw = String(match?.[4] || "").trim();
 
-    if (!Number.isInteger(hoursDelta) || hoursDelta === 0) {
+      const deltaMs = parseTimeEditAmount(valueRaw, unitRaw);
+
+      if (!deltaMs) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Примеры:
+ /timeedit ограбление -4 ч
+ /timeedit ограбление -30 мин
+ /timeedit деньги -1 ч
+ /timeedit тюрьма -15 мин
+ /timeedit побег -10 мин`
+        );
+        return;
+      }
+
+      let targetUser = null;
+      if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
+      if (!targetUser) targetUser = msg.from;
+
+      await initUser(targetUser);
+      await saveSeenUser(msg.chat.id, targetUser);
+
+      const result = await adjustEditableTime(targetUser.id, typeName, deltaMs);
+
+      const signText = deltaMs > 0 ? "+" : "-";
+      const absMs = Math.abs(deltaMs);
+      const amountText =
+        absMs % (60 * 60 * 1000) === 0
+          ? `${Math.floor(absMs / (60 * 60 * 1000))} ч`
+          : `${Math.floor(absMs / (60 * 1000))} мин`;
+
       await safeSendMessage(
         msg.chat.id,
-        "❌ Пример:\n/timeedit деньги -4\n/timeedit охота -2\n/timeedit снайпер -6\n/timeedit ограбление -1"
-      );
-      return;
-    }
-
-    if (Math.abs(hoursDelta) > TIME_EDIT_MAX_HOURS) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ Можно менять максимум на ${TIME_EDIT_MAX_HOURS} часов за раз.`
-      );
-      return;
-    }
-
-    let targetUser = null;
-
-    if (msg.reply_to_message) {
-      targetUser = await resolveTargetUserFromReply(msg);
-    }
-
-    if (!targetUser) {
-      targetUser = msg.from;
-    }
-
-    await initUser(targetUser);
-    await saveSeenUser(msg.chat.id, targetUser);
-
-    const result = await adjustUserCooldown(targetUser.id, cooldownName, hoursDelta);
-    const signText = hoursDelta > 0 ? `+${hoursDelta}` : `${hoursDelta}`;
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🕒 Время кулдауна изменено
+        `🕒 Время изменено
 
 👤 Игрок: ${getUserLink(targetUser)}
-⏱ Кулдаун: ${escapeHtml(result.title)}
-🔧 Изменение: ${signText} ч
-📅 Новое время отсчёта: ${formatDateTime(result.newDate)}
-⌛ Осталось до готовности: ${formatRemainingTime(result.remainingMs)}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно только: деньги, охота, снайпер, ограбление");
-      return;
-    }
-
-    if (error.message === "COOLDOWN_NOT_USED_YET") {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ У игрока этот кулдаун ещё не запускался. Сначала он должен использовать команду хотя бы 1 раз."
+⏱ Тип: ${escapeHtml(result.title)}
+🔧 Изменение: ${signText}${amountText}
+⌛ Осталось: ${formatRemainingTime(result.remainingMs)}
+🕓 Закончится: ${formatDateTime(result.endAt)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
-      return;
-    }
+    } catch (error) {
+      if (error.message === "UNKNOWN_TIMEEDIT_TYPE") {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Доступно: деньги, охота, снайпер, ограбление, тюрьма, побег, адвокат, подкуп"
+        );
+        return;
+      }
 
-    console.error("Ошибка /timeedit:", error);
-    await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
+      if (error.message === "COOLDOWN_NOT_USED_YET") {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ У игрока это время ещё не запускалось. Сначала он должен использовать команду хотя бы 1 раз."
+        );
+        return;
+      }
+
+      if (error.message === "JAIL_NOT_ACTIVE") {
+        await safeSendMessage(msg.chat.id, "❌ Игрок сейчас не в тюрьме.");
+        return;
+      }
+
+      if (error.message === "TIME_EDIT_TOO_BIG") {
+        await safeSendMessage(msg.chat.id, "❌ Можно менять максимум на 7 дней за раз.");
+        return;
+      }
+
+      console.error("Ошибка /timeedit:", error);
+      await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени.");
+    }
   }
-});
+);
 
 // =========================
 // TRACK USERS
@@ -3525,15 +3600,7 @@ bot.on("callback_query", async (query) => {
       if (amountCoins === 200) amountStars = 20;
       if (amountCoins === 300) amountStars = 30;
 
-      await bot.sendInvoice(
-        chatId,
-        title,
-        description,
-        payload,
-        "",
-        "XTR",
-        [{ label: title, amount: amountStars }]
-      );
+      await bot.sendInvoice(chatId, title, description, payload, "", "XTR", [{ label: title, amount: amountStars }]);
       return;
     }
 
@@ -3558,15 +3625,7 @@ bot.on("callback_query", async (query) => {
       const description = `Подарить ${coins} монет игроку ${getUserName(targetUser)}`;
       const payload = `giftcoins_${coins}_${targetUserId}`;
 
-      await bot.sendInvoice(
-        chatId,
-        title,
-        description,
-        payload,
-        "",
-        "XTR",
-        [{ label: title, amount: amountStars }]
-      );
+      await bot.sendInvoice(chatId, title, description, payload, "", "XTR", [{ label: title, amount: amountStars }]);
       return;
     }
 
@@ -3755,9 +3814,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // =========================
-    // RELATIONSHIP COMMANDS
-    // =========================
     if (isExactCommand(lowerText, "ревновать")) {
       const target = await resolveTargetUserFromReply(msg);
       if (!target) {
@@ -3859,9 +3915,6 @@ ${mood}`,
       return;
     }
 
-    // =========================
-    // SHIELD COMMANDS
-    // =========================
     if (isExactCommand(lowerText, "купить щит")) {
       const shield = await getShieldRow(msg.from.id);
 
@@ -3899,19 +3952,12 @@ ${mood}`,
         );
       } catch (error) {
         if (error.message === "NOT_ENOUGH_MONEY") {
-          await safeSendMessage(
-            msg.chat.id,
-            `❌ Щит стоит ${SHIELD_COST} монет.
-У тебя недостаточно монет.`
-          );
+          await safeSendMessage(msg.chat.id, `❌ Щит стоит ${SHIELD_COST} монет.\nУ тебя недостаточно монет.`);
           return;
         }
 
         if (error.message === "MAX_SHIELDS_REACHED") {
-          await safeSendMessage(
-            msg.chat.id,
-            `❌ У тебя уже максимум щитов: ${MAX_SHIELDS}/${MAX_SHIELDS}`
-          );
+          await safeSendMessage(msg.chat.id, `❌ У тебя уже максимум щитов: ${MAX_SHIELDS}/${MAX_SHIELDS}`);
           return;
         }
 
@@ -3939,18 +3985,12 @@ ${mood}`,
       return;
     }
 
-    // =========================
-    // PUNISHMENT COMMANDS
-    // =========================
     if (lowerText.startsWith("наказать ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1");
         return;
       }
 
@@ -3997,10 +4037,7 @@ ${mood}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: снять наказание"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: снять наказание");
         return;
       }
 
@@ -4067,18 +4104,12 @@ ${mood}`,
       return;
     }
 
-    // =========================
-    // GOOD DEEDS / OBEDIENCE
-    // =========================
     if (isExactCommand(lowerText, "похвалить ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка");
         return;
       }
 
@@ -4108,10 +4139,7 @@ ${mood}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20");
         return;
       }
 
@@ -4119,10 +4147,7 @@ ${mood}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20");
         return;
       }
 
@@ -4166,10 +4191,7 @@ ${mood}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому");
         return;
       }
 
@@ -4181,18 +4203,12 @@ ${mood}`,
 
       const deedText = text.slice("добавить доброе дело".length).trim();
       if (!deedText || deedText.length < 2) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Напиши так:\nдобавить доброе дело помог по дому"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nдобавить доброе дело помог по дому");
         return;
       }
 
       if (deedText.length > MAX_GOOD_DEED_LENGTH) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`
-        );
+        await safeSendMessage(msg.chat.id, `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`);
         return;
       }
 
@@ -4229,11 +4245,9 @@ ${mood}`,
 
       const deeds = await getGoodDeeds(targetUser.id);
       if (!deeds.length) {
-        await safeSendMessage(
-          msg.chat.id,
-          `📔 У ${escapeHtml(getUserName(targetUser))} пока нет добрых дел.`,
-          { parse_mode: "HTML" }
-        );
+        await safeSendMessage(msg.chat.id, `📔 У ${escapeHtml(getUserName(targetUser))} пока нет добрых дел.`, {
+          parse_mode: "HTML"
+        });
         return;
       }
 
@@ -4257,10 +4271,7 @@ ${lines.join("\n")}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1");
         return;
       }
 
@@ -4274,10 +4285,7 @@ ${lines.join("\n")}`,
       const index = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(index) || index <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи номер.\nПример: удалить доброе дело 1"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи номер.\nПример: удалить доброе дело 1");
         return;
       }
 
@@ -4305,10 +4313,7 @@ ${lines.join("\n")}`,
       const child = await resolveTargetUserFromReply(msg);
 
       if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела");
         return;
       }
 
@@ -4362,9 +4367,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // JAIL
-    // =========================
     if (isExactCommand(lowerText, "тюрьма")) {
       let targetUser = msg.from;
 
@@ -4393,8 +4395,8 @@ ${lines.join("\n")}`,
         `🚔 Тюрьма
 
 Игрок: ${getUserLink(targetUser)}
-🕒 До: ${formatDateTime(jail.until_at)}
 ⏳ Осталось: ${formatRemainingTime(remainingMs)}
+🕒 Освобождение: ${formatDateTime(jail.until_at)}
 
 Доступно:
 • сбежать из тюрьмы
@@ -4422,7 +4424,8 @@ ${lines.join("\n")}`,
         msg.chat.id,
         `🪑 ${getUserLink(msg.from)} решил(а) спокойно отсидеть срок.
 
-⏳ До освобождения: ${formatRemainingTime(remainingMs)}`,
+⏳ До освобождения: ${formatRemainingTime(remainingMs)}
+🕒 Освобождение: ${formatDateTime(jail.until_at)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -4441,9 +4444,11 @@ ${lines.join("\n")}`,
       const row = await getJailActionRow(msg.from.id);
       const remainingCd = getActionRemaining(row?.last_escape_at, JAIL_ESCAPE_COOLDOWN_MS);
       if (remainingCd > 0) {
+        const endAt = new Date(new Date(row.last_escape_at).getTime() + JAIL_ESCAPE_COOLDOWN_MS);
         await safeSendMessage(
           msg.chat.id,
-          `⏳ Снова попробовать сбежать можно через ${formatRemainingTime(remainingCd)}`
+          `⏳ Снова попробовать сбежать можно через ${formatRemainingTime(remainingCd)}
+🕒 Доступно в: ${formatDateTime(endAt)}`
         );
         return;
       }
@@ -4506,19 +4511,18 @@ ${lines.join("\n")}`,
       const row = await getJailActionRow(msg.from.id);
       const remainingCd = getActionRemaining(row?.last_lawyer_at, JAIL_LAWYER_COOLDOWN_MS);
       if (remainingCd > 0) {
+        const endAt = new Date(new Date(row.last_lawyer_at).getTime() + JAIL_LAWYER_COOLDOWN_MS);
         await safeSendMessage(
           msg.chat.id,
-          `⏳ Снова вызвать адвоката можно через ${formatRemainingTime(remainingCd)}`
+          `⏳ Снова вызвать адвоката можно через ${formatRemainingTime(remainingCd)}
+🕒 Доступно в: ${formatDateTime(endAt)}`
         );
         return;
       }
 
       const stats = await getUserStats(msg.from.id);
       if (Number(stats?.balance || 0) < JAIL_LAWYER_COST) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ Для адвоката нужно ${JAIL_LAWYER_COST} монет.`
-        );
+        await safeSendMessage(msg.chat.id, `❌ Для адвоката нужно ${JAIL_LAWYER_COST} монет.`);
         return;
       }
 
@@ -4581,19 +4585,18 @@ ${lines.join("\n")}`,
       const row = await getJailActionRow(msg.from.id);
       const remainingCd = getActionRemaining(row?.last_bribe_at, JAIL_BRIBE_COOLDOWN_MS);
       if (remainingCd > 0) {
+        const endAt = new Date(new Date(row.last_bribe_at).getTime() + JAIL_BRIBE_COOLDOWN_MS);
         await safeSendMessage(
           msg.chat.id,
-          `⏳ Снова пробовать подкуп можно через ${formatRemainingTime(remainingCd)}`
+          `⏳ Снова пробовать подкуп можно через ${formatRemainingTime(remainingCd)}
+🕒 Доступно в: ${formatDateTime(endAt)}`
         );
         return;
       }
 
       const stats = await getUserStats(msg.from.id);
       if (Number(stats?.balance || 0) < JAIL_BRIBE_COST) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ Для подкупа охраны нужно ${JAIL_BRIBE_COST} монет.`
-        );
+        await safeSendMessage(msg.chat.id, `❌ Для подкупа охраны нужно ${JAIL_BRIBE_COST} монет.`);
         return;
       }
 
@@ -4646,17 +4649,11 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // FAMILY BUDGET
-    // =========================
     if (isExactCommand(lowerText, "семейный бюджет")) {
       const budget = await getFamilyBudget(msg.from.id);
 
       if (!budget) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ты не состоишь в семье. Семейный бюджет доступен только семье."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Семейный бюджет доступен только семье.");
         return;
       }
 
@@ -4680,10 +4677,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5");
         return;
       }
 
@@ -4704,10 +4698,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя."
-          );
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя.");
           return;
         }
 
@@ -4728,10 +4719,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5");
         return;
       }
 
@@ -4764,10 +4752,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя."
-          );
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя.");
           return;
         }
 
@@ -4783,9 +4768,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // PIGGY BANK
-    // =========================
     if (isExactCommand(lowerText, "создать копилку")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -4796,10 +4778,7 @@ ${lines.join("\n")}`,
 
       const existing = await getPiggyBank(msg.from.id);
       if (existing) {
-        await safeSendMessage(
-          msg.chat.id,
-          `🐷 У тебя уже есть копилка.\n💰 В копилке: ${Number(existing.balance || 0)} монет`
-        );
+        await safeSendMessage(msg.chat.id, `🐷 У тебя уже есть копилка.\n💰 В копилке: ${Number(existing.balance || 0)} монет`);
         return;
       }
 
@@ -4828,10 +4807,7 @@ ${lines.join("\n")}`,
 
       const piggy = await getPiggyBank(msg.from.id);
       if (!piggy) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ У тебя нет копилки.\nНапиши: создать копилку"
-        );
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
         return;
       }
 
@@ -4861,10 +4837,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5");
         return;
       }
 
@@ -4885,10 +4858,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_PIGGY_BANK") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ У тебя нет копилки.\nНапиши: создать копилку"
-          );
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
           return;
         }
 
@@ -4928,10 +4898,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_PIGGY_BANK") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ У тебя нет копилки.\nНапиши: создать копилку"
-          );
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
           return;
         }
 
@@ -4942,9 +4909,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // DREAMS
-    // =========================
     if (lowerText.startsWith("загадать мечту")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -4955,10 +4919,7 @@ ${lines.join("\n")}`,
 
       const dreamText = text.slice("загадать мечту".length).trim();
       if (!dreamText || dreamText.length < 2) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Напиши так:\nзагадать мечту айфон"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nзагадать мечту айфон");
         return;
       }
 
@@ -4993,10 +4954,7 @@ ${lines.join("\n")}`,
 
       const dream = await getChildDream(msg.from.id);
       if (!dream) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон"
-        );
+        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон");
         return;
       }
 
@@ -5055,10 +5013,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5");
         return;
       }
 
@@ -5079,10 +5034,7 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_DREAM") {
-          await safeSendMessage(
-            msg.chat.id,
-            "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон"
-          );
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон");
           return;
         }
 
@@ -5102,10 +5054,7 @@ ${lines.join("\n")}`,
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: на мечту 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: на мечту 5");
         return;
       }
 
@@ -5113,10 +5062,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: на мечту 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: на мечту 5");
         return;
       }
 
@@ -5158,9 +5104,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // FAMILY MONEY
-    // =========================
     if (lowerText.startsWith("попросить денег")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -5171,10 +5114,7 @@ ${lines.join("\n")}`,
 
       const punishmentText = await getPunishedBlockText(msg.from.id);
       if (punishmentText) {
-        await safeSendMessage(
-          msg.chat.id,
-          `${punishmentText}\nВо время наказания нельзя просить деньги.`
-        );
+        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания нельзя просить деньги.`);
         return;
       }
 
@@ -5182,18 +5122,13 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: попросить денег 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: попросить денег 5");
         return;
       }
 
       const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
       const parentPartnerInfo = parentUser ? await getMarriagePartner(parentUser.id) : null;
-      const secondParent = parentPartnerInfo
-        ? await getStoredUser(Number(parentPartnerInfo.partnerId))
-        : null;
+      const secondParent = parentPartnerInfo ? await getStoredUser(Number(parentPartnerInfo.partnerId)) : null;
 
       let parentsText = "";
       if (parentUser) parentsText += `${getUserLink(parentUser)}`;
@@ -5224,10 +5159,7 @@ ${lines.join("\n")}`,
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5");
         return;
       }
 
@@ -5235,28 +5167,19 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Укажи нормальную сумму.\nПример: дать ребенку 5"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: дать ребенку 5");
         return;
       }
 
       const isChild = await isChildInMyFamily(msg.from.id, target.id);
       if (!isChild) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ты можешь давать деньги только своему ребёнку."
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ты можешь давать деньги только своему ребёнку.");
         return;
       }
 
       const punishmentText = await getPunishedBlockText(target.id);
       if (punishmentText) {
-        await safeSendMessage(
-          msg.chat.id,
-          `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`
-        );
+        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`);
         return;
       }
 
@@ -5318,10 +5241,7 @@ ${lines.join("\n")}`,
 
       const punishmentText = await getPunishedBlockText(target.id);
       if (punishmentText) {
-        await safeSendMessage(
-          msg.chat.id,
-          `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`
-        );
+        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`);
         return;
       }
 
@@ -5352,9 +5272,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // ROBBERY
-    // =========================
     if (isExactCommand(lowerText, "ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -5364,10 +5281,7 @@ ${lines.join("\n")}`,
 
       const childPunishment = await getPunishedBlockText(msg.from.id);
       if (childPunishment) {
-        await safeSendMessage(
-          msg.chat.id,
-          `${childPunishment}\nВо время наказания нельзя грабить других.`
-        );
+        await safeSendMessage(msg.chat.id, `${childPunishment}\nВо время наказания нельзя грабить других.`);
         return;
       }
 
@@ -5384,9 +5298,14 @@ ${lines.join("\n")}`,
 
       const robberyCooldown = await getRobberyCooldown(msg.from.id);
       if (robberyCooldown > 0) {
+        const stats = await getUserStats(msg.from.id);
+        const endAt = stats?.last_robbery_at
+          ? new Date(new Date(stats.last_robbery_at).getTime() + ROBBERY_COOLDOWN_MS)
+          : null;
+
         await safeSendMessage(
           msg.chat.id,
-          `⏳ Ограбление снова будет доступно через ${formatRemainingTime(robberyCooldown)}`
+          `⏳ Ограбление снова будет доступно через ${formatRemainingTime(robberyCooldown)}${endAt ? `\n🕒 В: ${formatDateTime(endAt)}` : ""}`
         );
         return;
       }
@@ -5425,9 +5344,7 @@ ${lines.join("\n")}`,
         const failFine = Math.floor(Math.random() * 4) + 2;
         try {
           const fineResult = await deductCoinsSafe(msg.from.id, failFine);
-          if (fineResult.deducted > 0) {
-            resultText += `\n💸 Штраф за провал: ${fineResult.deducted} монет`;
-          }
+          if (fineResult.deducted > 0) resultText += `\n💸 Штраф за провал: ${fineResult.deducted} монет`;
         } catch (error) {
           console.error("Ошибка штрафа за провал ограбления:", error);
         }
@@ -5450,7 +5367,7 @@ ${lines.join("\n")}`,
         if (police.type === "jail") {
           const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
           resultText += `\n🚔 ${getUserLink(msg.from)} арестован(а) и отправлен(а) в тюрьму!`;
-          resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+          resultText += `\n🕒 Освобождение: ${formatDateTime(jail.until_at)}`;
         }
 
         await safeSendMessage(msg.chat.id, resultText, {
@@ -5506,7 +5423,7 @@ ${lines.join("\n")}`,
       if (police.type === "jail") {
         const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
         resultText += `\n🚔 Полиция задержала ${getUserLink(msg.from)}!`;
-        resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+        resultText += `\n🕒 Освобождение: ${formatDateTime(jail.until_at)}`;
       }
 
       await safeSendMessage(msg.chat.id, resultText, {
@@ -5516,9 +5433,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // SHOP
-    // =========================
     if (isExactCommand(lowerText, "купить монеты")) {
       await safeSendMessage(
         msg.chat.id,
@@ -5538,18 +5452,12 @@ ${lines.join("\n")}`,
       const target = await resolveTargetUserFromReply(msg);
 
       if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение игрока и напиши: купить монеты другу"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: купить монеты другу");
         return;
       }
 
       if (Number(target.id) === Number(msg.from.id)) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Себе через эту команду покупать нельзя.\nИспользуй: купить монеты"
-        );
+        await safeSendMessage(msg.chat.id, "❌ Себе через эту команду покупать нельзя.\nИспользуй: купить монеты");
         return;
       }
 
@@ -5570,9 +5478,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // OTHER
-    // =========================
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
@@ -5706,10 +5611,7 @@ ${getUserLink(target)}, выбери ниже:
         }
       );
 
-      if (sent) {
-        request.requestMessageId = sent.message_id;
-      }
-
+      if (sent) request.requestMessageId = sent.message_id;
       return;
     }
 
@@ -5800,10 +5702,7 @@ ${getUserLink(child)}, выбери ниже:
         reply_markup: getAdoptionDecisionKeyboard(requestId)
       });
 
-      if (sent) {
-        request.requestMessageId = sent.message_id;
-      }
-
+      if (sent) request.requestMessageId = sent.message_id;
       return;
     }
 
@@ -5918,9 +5817,7 @@ ${getUserLink(child)}, выбери ниже:
       if (childInfo) {
         const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
         const parentPartnerInfo = await getMarriagePartner(parentUser.id);
-        const secondParent = parentPartnerInfo
-          ? await getStoredUser(Number(parentPartnerInfo.partnerId))
-          : null;
+        const secondParent = parentPartnerInfo ? await getStoredUser(Number(parentPartnerInfo.partnerId)) : null;
         const punishment = await getActivePunishment(targetUser.id);
         const obedience = await getChildObedience(targetUser.id);
 
@@ -5929,9 +5826,7 @@ ${getUserLink(child)}, выбери ниже:
 👶 Ребёнок: ${getUserLink(targetUser)}
 👨 Родитель: ${getUserLink(parentUser)}`;
 
-        if (secondParent) {
-          textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
-        }
+        if (secondParent) textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
 
         textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
         textFamily += `\n📈 Послушание: ${Number(obedience?.value || 0)}/100`;
@@ -6128,7 +6023,7 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
 
         await safeSendMessage(
           msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, получить монеты снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          `⏳ ${getUserLink(msg.from)}, получить монеты снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}${result.endAt ? `\n🕒 В: ${formatDateTime(result.endAt)}` : ""}`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
@@ -6167,7 +6062,7 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
 
         await safeSendMessage(
           msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}${result.endAt ? `\n🕒 В: ${formatDateTime(result.endAt)}` : ""}`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
@@ -6213,7 +6108,7 @@ ${coinsLine}
 
         await safeSendMessage(
           msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}${result.endAt ? `\n🕒 В: ${formatDateTime(result.endAt)}` : ""}`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
