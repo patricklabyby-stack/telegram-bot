@@ -54,6 +54,9 @@ const JAIL_LAWYER_COST = 250;
 const JAIL_BRIBE_COST = 400;
 
 const BANK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
+const RPS_COOLDOWN_MS = 45 * 60 * 1000;
+
 const TIME_EDIT_MAX_MINUTES = 10080; // 7 дней
 
 // =========================
@@ -269,35 +272,105 @@ function getLieResult() {
 function getBankGameResult() {
   const roll = Math.random();
 
-  if (roll < 0.10) {
+  if (roll < 0.08) {
     return {
       type: "jackpot",
-      text: "🏦 Банк сорвал куш!",
-      coins: Math.floor(Math.random() * 121) + 120
+      text: "🏦 Банк дал редкий жирный выигрыш!",
+      coins: Math.floor(Math.random() * 101) + 120
     };
   }
 
-  if (roll < 0.45) {
+  if (roll < 0.33) {
     return {
       type: "win",
-      text: "💰 Вклад удачно сработал!",
-      coins: Math.floor(Math.random() * 51) + 25
+      text: "💰 Вклад сработал удачно!",
+      coins: Math.floor(Math.random() * 41) + 25
     };
   }
 
-  if (roll < 0.75) {
+  if (roll < 0.63) {
     return {
       type: "small",
-      text: "🙂 Банк дал небольшой бонус.",
+      text: "🙂 Банк дал маленький доход.",
       coins: Math.floor(Math.random() * 16) + 5
     };
   }
 
   return {
     type: "fail",
-    text: "📉 Банк сегодня без прибыли.",
+    text: "📉 Сегодня банк ничего не дал.",
     coins: 0
   };
+}
+
+function getBasketballGameResult() {
+  const roll = Math.random();
+
+  if (roll < 0.06) {
+    return {
+      type: "perfect",
+      hit: true,
+      text: "🏀 Идеальный бросок! Мяч красиво залетел в кольцо.",
+      coins: Math.floor(Math.random() * 11) + 15
+    };
+  }
+
+  if (roll < 0.22) {
+    return {
+      type: "hit",
+      hit: true,
+      text: "🏀 Попадание! Мяч в кольце.",
+      coins: Math.floor(Math.random() * 7) + 4
+    };
+  }
+
+  return {
+    type: "miss",
+    hit: false,
+    text: "❌ Мимо кольца.",
+    coins: -5
+  };
+}
+
+function getRpsBotChoice() {
+  const choices = ["камень", "ножницы", "бумага"];
+  return choices[Math.floor(Math.random() * choices.length)];
+}
+
+function normalizeRpsChoice(text) {
+  const t = normalizeText(text);
+  if (["камень", "к", "rock"].includes(t)) return "камень";
+  if (["ножницы", "н", "scissors"].includes(t)) return "ножницы";
+  if (["бумага", "б", "paper"].includes(t)) return "бумага";
+  return null;
+}
+
+function decideBiasedRps(userChoice) {
+  const roll = Math.random();
+
+  let result = "lose";
+  if (roll < 0.18) result = "win";
+  else if (roll < 0.43) result = "draw";
+  else result = "lose";
+
+  let botChoice = "камень";
+
+  if (result === "draw") {
+    botChoice = userChoice;
+  } else if (result === "win") {
+    if (userChoice === "камень") botChoice = "ножницы";
+    if (userChoice === "ножницы") botChoice = "бумага";
+    if (userChoice === "бумага") botChoice = "камень";
+  } else {
+    if (userChoice === "камень") botChoice = "бумага";
+    if (userChoice === "ножницы") botChoice = "камень";
+    if (userChoice === "бумага") botChoice = "ножницы";
+  }
+
+  const reward = result === "win" ? Math.floor(Math.random() * 7) + 4 : 0;
+  const penalty = result === "lose" ? 4 : 0;
+
+  return { result, botChoice, reward, penalty };
 }
 
 function parseTimeEditAmount(rawValue, rawUnit = "") {
@@ -315,43 +388,6 @@ function parseTimeEditAmount(rawValue, rawUnit = "") {
   }
 
   return null;
-}
-
-function getRpsEmoji(choice) {
-  if (choice === "камень") return "🪨";
-  if (choice === "ножницы") return "✂️";
-  if (choice === "бумага") return "📄";
-  return "❓";
-}
-
-function getRandomRpsChoice() {
-  const choices = ["камень", "ножницы", "бумага"];
-  return choices[Math.floor(Math.random() * choices.length)];
-}
-
-function getRpsResult(playerChoice, botChoice) {
-  if (playerChoice === botChoice) {
-    return { result: "draw", coins: 5, text: "Ничья" };
-  }
-
-  const win =
-    (playerChoice === "камень" && botChoice === "ножницы") ||
-    (playerChoice === "ножницы" && botChoice === "бумага") ||
-    (playerChoice === "бумага" && botChoice === "камень");
-
-  if (win) {
-    return {
-      result: "win",
-      coins: Math.floor(Math.random() * 16) + 10,
-      text: "Ты победил"
-    };
-  }
-
-  return {
-    result: "lose",
-    coins: -(Math.floor(Math.random() * 8) + 3),
-    text: "Ты проиграл"
-  };
 }
 
 function getShopKeyboard() {
@@ -476,6 +512,14 @@ function getCooldownColumnAndMsByName(rawName) {
 
   if (["банк", "bank"].includes(name)) {
     return { column: "last_bank_at", cooldownMs: BANK_COOLDOWN_MS, title: "банк" };
+  }
+
+  if (["баскетбол", "basketball"].includes(name)) {
+    return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
+  }
+
+  if (["кнб", "каменьножницыбумага", "камень-ножницы-бумага", "rps"].includes(name)) {
+    return { column: "last_rps_at", cooldownMs: RPS_COOLDOWN_MS, title: "кнб" };
   }
 
   return null;
@@ -657,6 +701,8 @@ async function initDb() {
       last_sniper_at TIMESTAMPTZ,
       last_robbery_at TIMESTAMPTZ,
       last_bank_at TIMESTAMPTZ,
+      last_basketball_at TIMESTAMPTZ,
+      last_rps_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
   `);
@@ -822,6 +868,8 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_robbery_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bank_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_rps_at TIMESTAMPTZ`);
 
   console.log("✅ Database ready");
 }
@@ -2130,6 +2178,9 @@ async function robberyTransfer(thiefId, victimId, requestedAmount) {
   }
 }
 
+// =========================
+// EXTRA GAMES
+// =========================
 async function runBank(userId) {
   const result = await pool.query(
     `SELECT balance, last_bank_at FROM users WHERE user_id = $1`,
@@ -2170,25 +2221,34 @@ async function runBank(userId) {
   };
 }
 
-async function playRps(userId, playerChoice) {
+async function runBasketball(userId) {
   const result = await pool.query(
-    `SELECT balance FROM users WHERE user_id = $1`,
+    `SELECT balance, last_basketball_at FROM users WHERE user_id = $1`,
     [userId]
   );
 
   if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
-  const botChoice = getRandomRpsChoice();
-  const game = getRpsResult(playerChoice, botChoice);
+  const now = new Date();
+  const lastAt = row.last_basketball_at ? new Date(row.last_basketball_at) : null;
 
+  if (lastAt) {
+    const nextTime = new Date(lastAt.getTime() + BASKETBALL_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const game = getBasketballGameResult();
   let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
   if (newBalance < 0) newBalance = 0;
 
   const updateResult = await pool.query(
     `
     UPDATE users
-    SET balance = $2
+    SET balance = $2,
+        last_basketball_at = NOW()
     WHERE user_id = $1
     RETURNING balance
     `,
@@ -2197,11 +2257,50 @@ async function playRps(userId, playerChoice) {
 
   return {
     ok: true,
-    playerChoice,
-    botChoice,
     game,
     balance: Number(updateResult.rows[0].balance || 0)
   };
+}
+
+async function getRpsCooldown(userId) {
+  const result = await pool.query(
+    `SELECT last_rps_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+  const row = result.rows[0];
+  if (!row || !row.last_rps_at) return 0;
+
+  const nextTime = new Date(new Date(row.last_rps_at).getTime() + RPS_COOLDOWN_MS);
+  const diff = nextTime.getTime() - Date.now();
+  return diff > 0 ? diff : 0;
+}
+
+async function updateLastRpsAt(userId) {
+  await pool.query(
+    `UPDATE users SET last_rps_at = NOW() WHERE user_id = $1`,
+    [userId]
+  );
+}
+
+async function applyRpsResult(userId, outcome) {
+  const current = await getUserStats(userId);
+  if (!current) throw new Error("USER_NOT_FOUND");
+
+  let newBalance = Number(current.balance || 0);
+
+  if (outcome.result === "win") {
+    newBalance += outcome.reward;
+  } else if (outcome.result === "lose") {
+    newBalance -= outcome.penalty;
+    if (newBalance < 0) newBalance = 0;
+  }
+
+  const result = await pool.query(
+    `UPDATE users SET balance = $2, last_rps_at = NOW() WHERE user_id = $1 RETURNING balance`,
+    [userId, newBalance]
+  );
+
+  return Number(result.rows[0]?.balance || 0);
 }
 
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
@@ -2388,13 +2487,6 @@ async function takeFromFamilyBudget(userId, amount) {
       `,
       [familyKey, amount]
     );
-
-    const userRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [userId]
-    );
-
-    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const updatedUser = await client.query(
       `
@@ -2917,7 +3009,9 @@ async function getCooldownText(userId) {
 🏹 Охота: ${getRemaining(stats.last_hunt_at)}
 🎯 Снайпер: ${getRemaining(stats.last_sniper_at)}
 🕵️ Ограбление: ${getRemaining(stats.last_robbery_at, ROBBERY_COOLDOWN_MS)}
-🏦 Банк: ${getRemaining(stats.last_bank_at, BANK_COOLDOWN_MS)}`;
+🏦 Банк: ${getRemaining(stats.last_bank_at, BANK_COOLDOWN_MS)}
+🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
+✂️ КНБ: ${getRemaining(stats.last_rps_at, RPS_COOLDOWN_MS)}`;
 }
 
 // =========================
@@ -3258,6 +3352,10 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • снайпер
 • ограбить
 • банк
+• баскетбол
+• кнб камень
+• кнб ножницы
+• кнб бумага
 • купить монеты
 • купить монеты другу
 • купить щит
@@ -3310,9 +3408,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • прогноз
 • он врет?
 • врет?
-• кнб камень
-• кнб ножницы
-• кнб бумага
 
 <b>ℹ️ Подсказка</b>
 Многие команды работают <b>ответом на сообщение</b> игрока.`,
@@ -3529,7 +3624,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)(?:\s+([^\s]+))?
     if (deltaMs === null) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин"
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit баскетбол -20 мин\n/timeedit кнб -10 мин"
       );
       return;
     }
@@ -3557,10 +3652,10 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)(?:\s+([^\s]+))?
     await saveSeenUser(msg.chat.id, targetUser);
 
     const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
-
-    const signText = rawUnit && ["м", "мин", "минута", "минуты", "минут", "m"].includes(normalizeText(rawUnit))
-      ? `${Number(rawValue)} мин`
-      : `${Number(rawValue)} ч`;
+    const signText =
+      Math.abs(deltaMs) % (60 * 60 * 1000) === 0
+        ? `${Number(rawValue)} ч`
+        : `${Number(rawValue)} мин`;
 
     await safeSendMessage(
       msg.chat.id,
@@ -3578,7 +3673,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)(?:\s+([^\s]+))?
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно только: деньги, охота, снайпер, ограбление, банк");
+      await safeSendMessage(msg.chat.id, "❌ Доступно только: деньги, охота, снайпер, ограбление, банк, баскетбол, кнб");
       return;
     }
 
@@ -5735,42 +5830,108 @@ ${escapeHtml(result.bank.text)}
     }
 
     // =========================
-    // KNB
+    // BASKETBALL
     // =========================
-    if (
-      lowerText === "кнб камень" ||
-      lowerText === "кнб ножницы" ||
-      lowerText === "кнб бумага"
-    ) {
+    if (isExactCommand(lowerText, "баскетбол")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
         await safeSendMessage(msg.chat.id, jailText);
         return;
       }
 
-      const playerChoice = lowerText.replace("кнб ", "").trim();
-      const result = await playRps(msg.from.id, playerChoice);
+      const result = await runBasketball(msg.from.id);
 
       if (!result.ok) {
-        await safeSendMessage(msg.chat.id, "Ошибка игры. Попробуй ещё раз.");
+        if (result.reason === "not_found") {
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, баскетбол снова будет доступен через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
         return;
       }
 
-      let coinsLine = "😐 Без изменений";
-      if (result.game.coins > 0) coinsLine = `💰 +${result.game.coins} монет`;
-      if (result.game.coins < 0) coinsLine = `💸 ${result.game.coins} монет`;
+      let moneyText = "";
+      if (result.game.coins >= 0) {
+        moneyText = `💰 Выигрыш: +${result.game.coins} монет`;
+      } else {
+        moneyText = `💸 Проигрыш: ${result.game.coins} монет`;
+      }
 
       await safeSendMessage(
         msg.chat.id,
-        `🎮 ${getUserLink(msg.from)} сыграл(а) в КНБ с ботом
+        `🏀 ${getUserLink(msg.from)} бросает мяч...
 
-Ты: ${getRpsEmoji(result.playerChoice)} ${escapeHtml(result.playerChoice)}
-Бот: ${getRpsEmoji(result.botChoice)} ${escapeHtml(result.botChoice)}
-
-🏁 ${escapeHtml(result.game.text)}
-${coinsLine}
+${escapeHtml(result.game.text)}
+${moneyText}
 
 Баланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // RPS
+    // =========================
+    if (lowerText.startsWith("кнб ")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const choiceText = text.slice(4).trim();
+      const userChoice = normalizeRpsChoice(choiceText);
+
+      if (!userChoice) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Напиши так:\nкнб камень\nкнб ножницы\nкнб бумага"
+        );
+        return;
+      }
+
+      const cd = await getRpsCooldown(msg.from.id);
+      if (cd > 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ КНБ снова будет доступно через ${formatRemainingTime(cd)}`
+        );
+        return;
+      }
+
+      const outcome = decideBiasedRps(userChoice);
+      const newBalance = await applyRpsResult(msg.from.id, outcome);
+
+      let resultText = "";
+      if (outcome.result === "win") {
+        resultText = `🎉 Ты победил бота и получил ${outcome.reward} монет!`;
+      } else if (outcome.result === "draw") {
+        resultText = `😐 Ничья. Никто ничего не получил.`;
+      } else {
+        resultText = `💀 Бот победил. Ты потерял ${outcome.penalty} монет.`;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `✂️ КНБ
+
+👤 Ты: ${escapeHtml(userChoice)}
+🤖 Бот: ${escapeHtml(outcome.botChoice)}
+
+${resultText}
+💰 Баланс: ${newBalance} монет`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
