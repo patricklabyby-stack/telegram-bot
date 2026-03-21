@@ -30,13 +30,13 @@ const pendingMarriagesByUserKey = {};
 const pendingAdoptionsByRequestId = {};
 const pendingAdoptionsByUserKey = {};
 
-const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;       // 24 ч
-const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;        // 24 ч
-const SNIPER_COOLDOWN_MS = 12 * 60 * 60 * 1000;      // 12 ч
-const ROBBERY_COOLDOWN_MS = 2 * 60 * 60 * 1000;      // 2 ч
-const BANK_COOLDOWN_MS = 24 * 60 * 60 * 1000;        // 24 ч
-const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;       // 1 ч
-const KNB_COOLDOWN_MS = 30 * 60 * 1000;              // 30 мин
+const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const SNIPER_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const ROBBERY_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const BANK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
+const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 
 const BOMB_TIMER_MS = 5000;
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
@@ -59,7 +59,7 @@ const JAIL_BRIBE_COOLDOWN_MS = 20 * 60 * 1000;
 const JAIL_LAWYER_COST = 250;
 const JAIL_BRIBE_COST = 400;
 
-const TIME_EDIT_MAX_MINUTES = 10080; // 7 дней
+const TIME_EDIT_MAX_MINUTES = 10080;
 
 // =========================
 // SERVER
@@ -327,12 +327,11 @@ function getBasketballResult() {
   return {
     type: "fail",
     text: "❌ Промах. Мяч отскочил от кольца.",
-    coins: -(Math.floor(Math.random() * 6) + 5) // -5..-10
+    coins: -(Math.floor(Math.random() * 6) + 5)
   };
 }
 
 function getKnbBotChoiceRareWin(playerChoice) {
-  const choices = ["камень", "ножницы", "бумага"];
   const beats = {
     камень: "ножницы",
     ножницы: "бумага",
@@ -346,15 +345,9 @@ function getKnbBotChoiceRareWin(playerChoice) {
 
   const roll = Math.random();
 
-  if (roll < 0.15) {
-    return beats[playerChoice]; // игрок выигрывает редко
-  }
-
-  if (roll < 0.45) {
-    return playerChoice; // ничья
-  }
-
-  return losesTo[playerChoice]; // бот чаще выигрывает
+  if (roll < 0.15) return beats[playerChoice];
+  if (roll < 0.45) return playerChoice;
+  return losesTo[playerChoice];
 }
 
 function resolveKnb(playerChoice, botChoice) {
@@ -1448,6 +1441,11 @@ async function changeCoupleJealousy(user1Id, user2Id, diff) {
   return result.rows[0] || null;
 }
 
+async function deleteCoupleStateByUsers(user1Id, user2Id) {
+  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
+  await pool.query(`DELETE FROM couple_states WHERE couple_key = $1`, [coupleKey]);
+}
+
 // =========================
 // ADOPTIONS / FAMILY
 // =========================
@@ -1679,12 +1677,17 @@ async function canAdoptUser(parentUserId, targetUserId) {
     return { ok: false, reason: "target_married", text: "❌ Нельзя усыновить игрока, который состоит в браке." };
   }
 
-  const activeAdoption = await getActiveAdoptionByChildId(targetUserId);
-  if (activeAdoption) {
+  const actorParents = await getActiveAdoptionByChildId(parentUserId);
+  if (actorParents) {
+    return { ok: false, reason: "actor_is_child", text: "❌ Игрок в роли ребёнка не может усыновлять других." };
+  }
+
+  const targetParentInfo = await getActiveAdoptionByChildId(targetUserId);
+  if (targetParentInfo) {
     return {
       ok: false,
       reason: "already_adopted",
-      text: "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка."
+      text: "❌ Этот игрок уже ребёнок в другой семье. Выбери другого ребёнка."
     };
   }
 
@@ -2552,6 +2555,157 @@ async function resolveTargetUserFromReply(msg) {
   }
 
   return null;
+}
+
+// =========================
+// EXTRA FAMILY HELPERS
+// =========================
+async function getFamilyRoleInfo(userId) {
+  const marriage = await getMarriagePartner(userId);
+  const childInfo = await getActiveAdoptionByChildId(userId);
+
+  return {
+    isMarried: !!marriage,
+    marriage,
+    isChild: !!childInfo,
+    childInfo
+  };
+}
+
+async function getFamilyTargetCheck(actorUserId, targetUserId) {
+  const actorRole = await getFamilyRoleInfo(actorUserId);
+  const targetRole = await getFamilyRoleInfo(targetUserId);
+
+  const isMyChild = await isChildInMyFamily(actorUserId, targetUserId);
+  const isMySpouse = await isSpouse(actorUserId, targetUserId);
+
+  return {
+    actorRole,
+    targetRole,
+    isMyChild,
+    isMySpouse
+  };
+}
+
+async function requireReplyTarget(msg, exampleText) {
+  const target = await resolveTargetUserFromReply(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      `❌ Ответь на сообщение игрока и напиши: ${exampleText}`
+    );
+    return null;
+  }
+
+  await initUser(target);
+  await saveSeenUser(msg.chat.id, target);
+
+  return target;
+}
+
+async function requireMyChild(msg, exampleText) {
+  const target = await requireReplyTarget(msg, exampleText);
+  if (!target) return null;
+
+  if (Number(target.id) === Number(msg.from.id)) {
+    await safeSendMessage(msg.chat.id, "❌ Нельзя использовать эту команду на себе.");
+    return null;
+  }
+
+  const check = await getFamilyTargetCheck(msg.from.id, target.id);
+
+  if (check.isMyChild) return target;
+
+  if (!check.actorRole.isMarried && !check.actorRole.isChild) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ У тебя нет семьи. Эта команда работает только для своего ребёнка."
+    );
+    return null;
+  }
+
+  if (check.targetRole.isChild && !check.isMyChild) {
+    await safeSendMessage(
+      msg.chat.id,
+      `❌ ${getUserLink(target)} — ребёнок из другой семьи.\nОтветь на сообщение своего ребёнка.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return null;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `❌ ${getUserLink(target)} не является твоим ребёнком.\nОтветь на сообщение своего ребёнка и напиши: ${escapeHtml(exampleText)}`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  return null;
+}
+
+async function requireMySpouse(msg, exampleText) {
+  const target = await requireReplyTarget(msg, exampleText);
+  if (!target) return null;
+
+  if (Number(target.id) === Number(msg.from.id)) {
+    await safeSendMessage(msg.chat.id, "❌ Нельзя использовать эту команду на себе.");
+    return null;
+  }
+
+  const check = await getFamilyTargetCheck(msg.from.id, target.id);
+
+  if (check.isMySpouse) return target;
+
+  if (!check.actorRole.isMarried) {
+    await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в браке.");
+    return null;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `❌ ${getUserLink(target)} не является твоим супругом(ой).\nОтветь на сообщение своего супруга(и) и напиши: ${escapeHtml(exampleText)}`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  return null;
+}
+
+async function requireChildWithDreamFromReply(msg, exampleText) {
+  const target = await requireMyChild(msg, exampleText);
+  if (!target) return null;
+
+  const dream = await getChildDream(target.id);
+  if (!dream) {
+    await safeSendMessage(
+      msg.chat.id,
+      `❌ У ${getUserLink(target)} нет мечты.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return null;
+  }
+
+  return { target, dream };
+}
+
+async function requireNotJailed(msg) {
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return false;
+  }
+  return true;
 }
 
 // =========================
@@ -4048,17 +4202,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
     // RELATIONSHIP COMMANDS
     // =========================
     if (isExactCommand(lowerText, "ревновать")) {
-      const target = await resolveTargetUserFromReply(msg);
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) и напиши: ревновать");
-        return;
-      }
-
-      const isTargetSpouse = await isSpouse(msg.from.id, target.id);
-      if (!isTargetSpouse) {
-        await safeSendMessage(msg.chat.id, "❌ Ревновать можно только своего супруга(у).");
-        return;
-      }
+      const target = await requireMySpouse(msg, "ревновать");
+      if (!target) return;
 
       const added = Math.floor(Math.random() * 11) + 5;
       const state = await changeCoupleJealousy(msg.from.id, target.id, added);
@@ -4120,17 +4265,8 @@ ${mood}`,
     }
 
     if (isExactCommand(lowerText, "помириться")) {
-      const target = await resolveTargetUserFromReply(msg);
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) и напиши: помириться");
-        return;
-      }
-
-      const isTargetSpouse = await isSpouse(msg.from.id, target.id);
-      if (!isTargetSpouse) {
-        await safeSendMessage(msg.chat.id, "❌ Мириться можно только со своим супругом(ой).");
-        return;
-      }
+      const target = await requireMySpouse(msg, "помириться");
+      if (!target) return;
 
       const reduced = Math.floor(Math.random() * 16) + 10;
       const state = await changeCoupleJealousy(msg.from.id, target.id, -reduced);
@@ -4233,15 +4369,8 @@ ${mood}`,
     // =========================
     if (lowerText.startsWith("наказать ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1"
-        );
-        return;
-      }
+      const child = await requireMyChild(msg, "наказать ребенка 1");
+      if (!child) return;
 
       const match = lowerText.match(/^наказать ребенка\s+(\d+)$/);
       const days = match ? Number(match[1]) : NaN;
@@ -4251,12 +4380,6 @@ ${mood}`,
           msg.chat.id,
           `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.\nПример: наказать ребенка 3`
         );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь наказывать только своего ребёнка.");
         return;
       }
 
@@ -4283,21 +4406,8 @@ ${mood}`,
 
     if (isExactCommand(lowerText, "снять наказание")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: снять наказание"
-        );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь снимать наказание только у своего ребёнка.");
-        return;
-      }
+      const child = await requireMyChild(msg, "снять наказание");
+      if (!child) return;
 
       const removed = await removePunishment(child.id);
       if (!removed) {
@@ -4361,21 +4471,8 @@ ${mood}`,
     // =========================
     if (isExactCommand(lowerText, "похвалить ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка"
-        );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь хвалить только своего ребёнка.");
-        return;
-      }
+      const child = await requireMyChild(msg, "похвалить ребенка");
+      if (!child) return;
 
       const obedience = await changeChildObedience(child.id, 5);
 
@@ -4394,15 +4491,8 @@ ${mood}`,
 
     if (lowerText.startsWith("наградить ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20"
-        );
-        return;
-      }
+      const child = await requireMyChild(msg, "наградить ребенка 20");
+      if (!child) return;
 
       const match = lowerText.match(/^наградить ребенка\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
@@ -4412,12 +4502,6 @@ ${mood}`,
           msg.chat.id,
           "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20"
         );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь награждать только своего ребёнка.");
         return;
       }
 
@@ -4452,21 +4536,8 @@ ${mood}`,
 
     if (lowerText.startsWith("добавить доброе дело")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому"
-        );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь добавлять добрые дела только своему ребёнку.");
-        return;
-      }
+      const child = await requireMyChild(msg, "добавить доброе дело помог по дому");
+      if (!child) return;
 
       const deedText = text.slice("добавить доброе дело".length).trim();
       if (!deedText || deedText.length < 2) {
@@ -4543,21 +4614,8 @@ ${lines.join("\n")}`,
 
     if (lowerText.startsWith("удалить доброе дело")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1"
-        );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь удалять добрые дела только у своего ребёнка.");
-        return;
-      }
+      const child = await requireMyChild(msg, "удалить доброе дело 1");
+      if (!child) return;
 
       const match = lowerText.match(/^удалить доброе дело\s+(\d+)$/);
       const index = match ? Number(match[1]) : NaN;
@@ -4591,21 +4649,8 @@ ${lines.join("\n")}`,
 
     if (isExactCommand(lowerText, "очистить добрые дела")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела"
-        );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь очищать добрые дела только у своего ребёнка.");
-        return;
-      }
+      const child = await requireMyChild(msg, "очистить добрые дела");
+      if (!child) return;
 
       const deletedCount = await clearGoodDeeds(child.id);
 
@@ -5388,15 +5433,10 @@ ${lines.join("\n")}`,
     }
 
     if (lowerText.startsWith("на мечту")) {
-      const target = await resolveTargetUserFromReply(msg);
+      const childData = await requireChildWithDreamFromReply(msg, "на мечту 5");
+      if (!childData) return;
 
-      if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: на мечту 5"
-        );
-        return;
-      }
+      const { target } = childData;
 
       const match = lowerText.match(/^на мечту\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
@@ -5426,12 +5466,26 @@ ${lines.join("\n")}`,
         );
       } catch (error) {
         if (error.message === "NO_DREAM") {
-          await safeSendMessage(msg.chat.id, "❌ У ребёнка нет мечты.");
+          await safeSendMessage(
+            msg.chat.id,
+            `❌ У ${getUserLink(target)} нет мечты.`,
+            {
+              parse_mode: "HTML",
+              disable_web_page_preview: true
+            }
+          );
           return;
         }
 
         if (error.message === "NOT_MY_CHILD") {
-          await safeSendMessage(msg.chat.id, "❌ Ты можешь помогать только мечте своего ребёнка.");
+          await safeSendMessage(
+            msg.chat.id,
+            `❌ ${getUserLink(target)} не является твоим ребёнком.\nОтветь на сообщение своего ребёнка.`,
+            {
+              parse_mode: "HTML",
+              disable_web_page_preview: true
+            }
+          );
           return;
         }
 
@@ -5504,21 +5558,10 @@ ${lines.join("\n")}`,
     }
 
     if (lowerText.startsWith("дать ребенку")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5"
-        );
-        return;
-      }
+      const target = await requireMyChild(msg, "дать ребенку 5");
+      if (!target) return;
 
       const match = lowerText.match(/^дать ребенку\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
@@ -5527,15 +5570,6 @@ ${lines.join("\n")}`,
         await safeSendMessage(
           msg.chat.id,
           "❌ Укажи нормальную сумму.\nПример: дать ребенку 5"
-        );
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(msg.from.id, target.id);
-      if (!isChild) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ты можешь давать деньги только своему ребёнку."
         );
         return;
       }
@@ -5577,31 +5611,17 @@ ${lines.join("\n")}`,
     }
 
     if (lowerText.startsWith("карманные деньги")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: карманные деньги 50");
-        return;
-      }
+      const target = await requireMyChild(msg, "карманные деньги 50");
+      if (!target) return;
 
       const match = lowerText.match(/^карманные деньги\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
         await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму больше 0.\nПример: карманные деньги 50");
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(sender.id, target.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь давать карманные деньги только своему ребёнку.");
         return;
       }
 
@@ -5645,11 +5665,7 @@ ${lines.join("\n")}`,
     // ROBBERY
     // =========================
     if (isExactCommand(lowerText, "ограбить")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const childPunishment = await getPunishedBlockText(msg.from.id);
       if (childPunishment) {
@@ -5660,11 +5676,8 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const target = await resolveTargetUserFromReply(msg);
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: ограбить");
-        return;
-      }
+      const target = await requireReplyTarget(msg, "ограбить");
+      if (!target) return;
 
       if (Number(target.id) === Number(msg.from.id)) {
         await safeSendMessage(msg.chat.id, "❌ Нельзя ограбить самого себя.");
@@ -5809,11 +5822,7 @@ ${lines.join("\n")}`,
     // MONEY GAMES
     // =========================
     if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const result = await claimDailyCoins(msg.from.id);
 
@@ -5848,11 +5857,7 @@ ${lines.join("\n")}`,
     }
 
     if (isExactCommand(lowerText, "охота")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const result = await runHunt(msg.from.id);
 
@@ -5894,11 +5899,7 @@ ${coinsLine}
     }
 
     if (isExactCommand(lowerText, "снайпер")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const result = await runSniper(msg.from.id);
 
@@ -5939,11 +5940,7 @@ ${coinsLine}
     }
 
     if (isExactCommand(lowerText, "банк")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const result = await runBank(msg.from.id);
 
@@ -5981,11 +5978,7 @@ ${escapeHtml(result.bank.text)}
     }
 
     if (isExactCommand(lowerText, "баскетбол")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const result = await runBasketball(msg.from.id);
 
@@ -6031,11 +6024,7 @@ ${coinsLine}
       lowerText === "кнб ножницы" ||
       lowerText === "кнб бумага"
     ) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
+      if (!(await requireNotJailed(msg))) return;
 
       const playerChoice = lowerText.replace("кнб ", "").trim();
       const result = await runKnb(msg.from.id, playerChoice);
@@ -6099,15 +6088,8 @@ ${coinsLine}
     }
 
     if (isExactCommand(lowerText, "купить монеты другу")) {
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Ответь на сообщение игрока и напиши: купить монеты другу"
-        );
-        return;
-      }
+      const target = await requireReplyTarget(msg, "купить монеты другу");
+      if (!target) return;
 
       if (Number(target.id) === Number(msg.from.id)) {
         await safeSendMessage(
@@ -6192,15 +6174,8 @@ ${coinsLine}
 
     if (isExactCommand(lowerText, "брак") || isExactCommand(lowerText, "зарегистрироваться в брак")) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: брак");
-        return;
-      }
-
-      await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
+      const target = await requireReplyTarget(msg, "брак");
+      if (!target) return;
 
       if (sender.id === target.id) {
         await safeSendMessage(msg.chat.id, "❌ Нельзя зарегистрироваться в брак с самим собой.");
@@ -6224,6 +6199,18 @@ ${coinsLine}
 
       if (senderAdoption || targetAdoption) {
         await safeSendMessage(msg.chat.id, "❌ Игрок в роли ребёнка не может вступить в брак.");
+        return;
+      }
+
+      const isTargetMyChild = await isChildInMyFamily(sender.id, target.id);
+      if (isTargetMyChild) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя вступить в брак со своим ребёнком.");
+        return;
+      }
+
+      const amIChildOfTarget = await isChildInMyFamily(target.id, sender.id);
+      if (amIChildOfTarget) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя вступить в брак со своим родителем.");
         return;
       }
 
@@ -6288,6 +6275,9 @@ ${getUserLink(target)}, выбери ниже:
       const partnerUser = await getStoredUser(marriagePartner.partnerId);
 
       await divorceMarriageByUserId(msg.from.id);
+      if (partnerUser) {
+        await deleteCoupleStateByUsers(msg.from.id, partnerUser.id);
+      }
 
       await safeSendMessage(
         msg.chat.id,
@@ -6302,15 +6292,13 @@ ${getUserLink(target)}, выбери ниже:
 
     if (isExactCommand(lowerText, "усыновить")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await requireReplyTarget(msg, "усыновить");
+      if (!child) return;
 
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: усыновить");
+      if (Number(parent.id) === Number(child.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя усыновить самого себя.");
         return;
       }
-
-      await initUser(child);
-      await saveSeenUser(msg.chat.id, child);
 
       const validation = await canAdoptUser(parent.id, child.id);
       if (!validation.ok) {
@@ -6373,12 +6361,8 @@ ${getUserLink(child)}, выбери ниже:
 
     if (isExactCommand(lowerText, "отказаться от ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение ребёнка и напиши: отказаться от ребенка");
-        return;
-      }
+      const child = await requireMyChild(msg, "отказаться от ребенка");
+      if (!child) return;
 
       const removed = await removeChildFromParent(parent.id, child.id);
 
@@ -6423,18 +6407,8 @@ ${getUserLink(child)}, выбери ниже:
 
     if (isExactCommand(lowerText, "любимый ребенок")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: любимый ребенок");
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Любимым можно сделать только своего ребёнка.");
-        return;
-      }
+      const child = await requireMyChild(msg, "любимый ребенок");
+      if (!child) return;
 
       await setFavoriteChild(parent.id, child.id);
 
@@ -6473,7 +6447,11 @@ ${getUserLink(child)}, выбери ниже:
 
       if (msg.reply_to_message) {
         const resolved = await resolveTargetUserFromReply(msg);
-        if (resolved) targetUser = resolved;
+        if (resolved) {
+          await initUser(resolved);
+          await saveSeenUser(msg.chat.id, resolved);
+          targetUser = resolved;
+        }
       }
 
       const partnerInfo = await getMarriagePartner(targetUser.id);
@@ -6590,12 +6568,8 @@ ${getUserLink(child)}, выбери ниже:
       isExactCommand(lowerText, "он врёт?") ||
       isExactCommand(lowerText, "врёт?")
     ) {
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: он врет?");
-        return;
-      }
+      const target = await requireReplyTarget(msg, "он врет?");
+      if (!target) return;
 
       const result = getLieResult();
 
@@ -6615,15 +6589,8 @@ ${escapeHtml(result.text)}`,
 
     if (isExactCommand(lowerText, "респект")) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: респект");
-        return;
-      }
-
-      await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
+      const target = await requireReplyTarget(msg, "респект");
+      if (!target) return;
 
       if (sender.id === target.id) {
         await safeSendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
@@ -6745,15 +6712,8 @@ ${escapeHtml(prediction)}`,
 
     if (isExactCommand(lowerText, "подарок")) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: подарок");
-        return;
-      }
-
-      await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
+      const target = await requireReplyTarget(msg, "подарок");
+      if (!target) return;
 
       if (sender.id === target.id) {
         await safeSendMessage(
@@ -6783,15 +6743,8 @@ ${escapeHtml(prediction)}`,
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
-        return;
-      }
-
-      await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
+      const target = await requireReplyTarget(msg, lowerText);
+      if (!target) return;
 
       if (sender.id === target.id) {
         await safeSendMessage(
@@ -6820,15 +6773,8 @@ ${escapeHtml(prediction)}`,
     if (!command) return;
 
     const sender = msg.from;
-    const target = await resolveTargetUserFromReply(msg);
-
-    if (!target) {
-      await safeSendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
-      return;
-    }
-
-    await initUser(target);
-    await saveSeenUser(msg.chat.id, target);
+    const target = await requireReplyTarget(msg, lowerText);
+    if (!target) return;
 
     if (sender.id === target.id) {
       await safeSendMessage(
