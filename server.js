@@ -23,6 +23,7 @@ const OWNER_ID = 7837011810;
 const chatMembers = {};
 const recentActiveUsers = {};
 const activeBombs = {};
+const activeBankHeists = {};
 const pendingCommandCreation = {};
 
 const pendingMarriagesByRequestId = {};
@@ -34,7 +35,7 @@ const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const SNIPER_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const ROBBERY_COOLDOWN_MS = 2 * 60 * 60 * 1000;
-const BANK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const BANK_HEIST_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
 const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -60,6 +61,10 @@ const JAIL_LAWYER_COST = 250;
 const JAIL_BRIBE_COST = 400;
 
 const TIME_EDIT_MAX_MINUTES = 10080;
+
+const BANK_HEIST_MIN_MEMBERS = 2;
+const BANK_HEIST_MAX_MEMBERS = 4;
+const BANK_MASK_COST = 35;
 
 // =========================
 // SERVER
@@ -269,40 +274,6 @@ function getLieResult() {
   if (percent >= 65) return { percent, text: "🤥 Похоже, он врёт" };
   if (percent >= 45) return { percent, text: "😐 Не могу понять" };
   return { percent, text: "✅ Скорее говорит правду" };
-}
-
-function getBankGameResult() {
-  const roll = Math.random();
-
-  if (roll < 0.10) {
-    return {
-      type: "jackpot",
-      text: "🏦 Банк сорвал куш!",
-      coins: Math.floor(Math.random() * 101) + 120
-    };
-  }
-
-  if (roll < 0.45) {
-    return {
-      type: "win",
-      text: "💰 Вклад удачно сработал!",
-      coins: Math.floor(Math.random() * 41) + 20
-    };
-  }
-
-  if (roll < 0.75) {
-    return {
-      type: "small",
-      text: "🙂 Банк дал небольшой бонус.",
-      coins: Math.floor(Math.random() * 11) + 5
-    };
-  }
-
-  return {
-    type: "fail",
-    text: "📉 Банк сегодня без прибыли.",
-    coins: 0
-  };
 }
 
 function getBasketballResult() {
@@ -517,8 +488,8 @@ function getCooldownColumnAndMsByName(rawName) {
     return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
   }
 
-  if (["банк", "bank"].includes(name)) {
-    return { column: "last_bank_at", cooldownMs: BANK_COOLDOWN_MS, title: "банк" };
+  if (["ограбление банка", "банк", "heist", "bank"].includes(name)) {
+    return { column: "last_bank_at", cooldownMs: BANK_HEIST_COOLDOWN_MS, title: "ограбление банка" };
   }
 
   if (["баскетбол", "basketball"].includes(name)) {
@@ -673,6 +644,447 @@ async function passBomb(chatId, fromUser) {
 
   await startBombTimer(chatId);
   return true;
+}
+
+// =========================
+// BANK HEIST
+// =========================
+function getBankHeistChatKey(chatId) {
+  return String(chatId);
+}
+
+function clearBankHeist(chatId) {
+  delete activeBankHeists[getBankHeistChatKey(chatId)];
+}
+
+function getBankHeist(chatId) {
+  return activeBankHeists[getBankHeistChatKey(chatId)] || null;
+}
+
+function getHeistMembersList(heist) {
+  return Object.values(heist?.members || {});
+}
+
+function getHeistMemberCount(heist) {
+  return getHeistMembersList(heist).length;
+}
+
+function isHeistParticipant(heist, userId) {
+  return !!heist?.members?.[String(userId)];
+}
+
+function getMaskedMembersCount(heist) {
+  return getHeistMembersList(heist).filter((m) => m.hasMask).length;
+}
+
+function getHeistStageText(stage) {
+  if (stage === "gathering") return "сбор команды";
+  if (stage === "inside") return "внутри банка";
+  if (stage === "escape") return "побег";
+  return "неизвестно";
+}
+
+function getHeistMembersText(heist) {
+  const members = getHeistMembersList(heist);
+  if (!members.length) return "нет";
+
+  return members
+    .map((member, index) => {
+      const crown = Number(member.id) === Number(heist.leaderId) ? "👑 " : "";
+      const mask = member.hasMask ? "🎭" : "❌";
+      return `${index + 1}. ${crown}${getUserLink(member)} — маска: ${mask}`;
+    })
+    .join("\n");
+}
+
+function getHeistStatusText(heist) {
+  if (!heist) return "❌ В этом чате сейчас нет активного ограбления банка.";
+
+  const policeText = heist.policeAlert ? "🚨 полиция настороже" : "😶 пока тихо";
+  const masked = getMaskedMembersCount(heist);
+
+  return `🏦 Ограбление банка
+
+👑 Лидер: ${getUserLink(heist.members[String(heist.leaderId)])}
+📍 Этап: ${escapeHtml(getHeistStageText(heist.stage))}
+👥 Команда: ${getHeistMemberCount(heist)}/${BANK_HEIST_MAX_MEMBERS}
+🎭 Маски: ${masked}/${getHeistMemberCount(heist)}
+🚔 Полиция: ${policeText}
+💰 Добыча: ${Number(heist.loot || 0)} монет
+
+Участники:
+${getHeistMembersText(heist)}
+
+Команды:
+• присоединиться к ограблению
+• купить маску
+• статус ограбления
+• начать штурм
+• вскрыть сейф
+• сбежать с банка
+• отменить ограбление`;
+}
+
+function createBankHeist(chatId, leaderUser) {
+  const key = getBankHeistChatKey(chatId);
+
+  activeBankHeists[key] = {
+    chatId,
+    leaderId: Number(leaderUser.id),
+    stage: "gathering",
+    policeAlert: false,
+    loot: 0,
+    createdAt: Date.now(),
+    startedAt: null,
+    members: {
+      [String(leaderUser.id)]: {
+        id: Number(leaderUser.id),
+        first_name: leaderUser.first_name || "",
+        last_name: leaderUser.last_name || "",
+        username: leaderUser.username || "",
+        hasMask: false
+      }
+    }
+  };
+
+  return activeBankHeists[key];
+}
+
+async function addUserToBankHeist(chatId, user) {
+  const heist = getBankHeist(chatId);
+  if (!heist) return { ok: false, reason: "no_heist" };
+
+  if (heist.stage !== "gathering") {
+    return { ok: false, reason: "already_started" };
+  }
+
+  if (isHeistParticipant(heist, user.id)) {
+    return { ok: false, reason: "already_member" };
+  }
+
+  const count = getHeistMemberCount(heist);
+  if (count >= BANK_HEIST_MAX_MEMBERS) {
+    return { ok: false, reason: "team_full" };
+  }
+
+  heist.members[String(user.id)] = {
+    id: Number(user.id),
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || "",
+    hasMask: false
+  };
+
+  return { ok: true, heist };
+}
+
+async function buyMaskForHeistMember(chatId, userId) {
+  const heist = getBankHeist(chatId);
+  if (!heist) throw new Error("NO_HEIST");
+  if (heist.stage !== "gathering") throw new Error("WRONG_STAGE");
+  if (!isHeistParticipant(heist, userId)) throw new Error("NOT_MEMBER");
+
+  const member = heist.members[String(userId)];
+  if (member.hasMask) throw new Error("ALREADY_HAVE_MASK");
+
+  const result = await deductCoinsExact(userId, BANK_MASK_COST);
+  if (!result.ok) throw new Error("NOT_ENOUGH_MONEY");
+
+  member.hasMask = true;
+
+  return {
+    heist,
+    userBalance: result.balance
+  };
+}
+
+function getBankEntryOutcome(heist) {
+  const members = getHeistMemberCount(heist);
+  const masks = getMaskedMembersCount(heist);
+
+  let cleanSuccessChance = 0.20;
+  cleanSuccessChance += members * 0.12;
+  cleanSuccessChance += masks * 0.10;
+  cleanSuccessChance = Math.min(cleanSuccessChance, 0.78);
+
+  const noisySuccessChance = cleanSuccessChance + 0.17;
+
+  const roll = Math.random();
+
+  if (roll < cleanSuccessChance) {
+    return { type: "clean_success" };
+  }
+
+  if (roll < noisySuccessChance) {
+    return { type: "noisy_success" };
+  }
+
+  if (roll < noisySuccessChance + 0.13) {
+    return { type: "partial_fail_alarm" };
+  }
+
+  return { type: "total_fail" };
+}
+
+function getVaultOutcome(heist) {
+  const members = getHeistMemberCount(heist);
+  const masks = getMaskedMembersCount(heist);
+
+  let jackpotChance = 0.10 + masks * 0.05;
+  let successChance = 0.34 + members * 0.07 + masks * 0.06;
+  if (heist.policeAlert) {
+    jackpotChance -= 0.04;
+    successChance -= 0.10;
+  }
+
+  jackpotChance = clamp(jackpotChance, 0.03, 0.32);
+  successChance = clamp(successChance, 0.18, 0.72);
+
+  const roll = Math.random();
+
+  if (roll < jackpotChance) {
+    return {
+      type: "jackpot",
+      loot: Math.floor(Math.random() * 151) + 450
+    };
+  }
+
+  if (roll < successChance) {
+    return {
+      type: "success",
+      loot: Math.floor(Math.random() * 161) + 240
+    };
+  }
+
+  if (roll < successChance + 0.18) {
+    return {
+      type: "small",
+      loot: Math.floor(Math.random() * 111) + 100
+    };
+  }
+
+  if (roll < successChance + 0.33) {
+    return {
+      type: "fail_alarm",
+      loot: 0
+    };
+  }
+
+  return {
+    type: "disaster",
+    loot: 0
+  };
+}
+
+function getEscapeOutcome(heist) {
+  const members = getHeistMemberCount(heist);
+  const masks = getMaskedMembersCount(heist);
+  const loot = Number(heist.loot || 0);
+
+  let fullEscapeChance = 0.26 + members * 0.07 + masks * 0.07;
+  if (heist.policeAlert) fullEscapeChance -= 0.18;
+  if (loot >= 450) fullEscapeChance -= 0.08;
+  if (loot >= 600) fullEscapeChance -= 0.06;
+  fullEscapeChance = clamp(fullEscapeChance, 0.08, 0.72);
+
+  const partialEscapeChance = fullEscapeChance + 0.28;
+  const caughtOneChance = partialEscapeChance + 0.23;
+
+  const roll = Math.random();
+
+  if (roll < fullEscapeChance) return { type: "full_escape" };
+  if (roll < partialEscapeChance) return { type: "half_escape" };
+  if (roll < caughtOneChance) return { type: "one_caught" };
+  return { type: "all_caught" };
+}
+
+async function updateBankHeistCooldownForUsers(userIds) {
+  if (!Array.isArray(userIds) || !userIds.length) return;
+  await pool.query(
+    `UPDATE users SET last_bank_at = NOW() WHERE user_id = ANY($1::bigint[])`,
+    [userIds.map((id) => Number(id))]
+  );
+}
+
+async function getBankHeistCooldown(userId) {
+  const result = await pool.query(
+    `SELECT last_bank_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  const row = result.rows[0];
+  if (!row || !row.last_bank_at) return 0;
+
+  const nextTime = new Date(new Date(row.last_bank_at).getTime() + BANK_HEIST_COOLDOWN_MS);
+  const diff = nextTime.getTime() - Date.now();
+
+  return diff > 0 ? diff : 0;
+}
+
+async function deductCoinsExact(userId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const row = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const current = Number(row.rows[0].balance || 0);
+    if (current < amount) {
+      await client.query("ROLLBACK");
+      return { ok: false, balance: current };
+    }
+
+    const updated = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [userId, amount]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      ok: true,
+      balance: Number(updated.rows[0]?.balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function punishHeistMembersWithPolice(chatId, heist, mode, extraText = "") {
+  const members = getHeistMembersList(heist);
+  const memberIds = members.map((m) => Number(m.id));
+  await updateBankHeistCooldownForUsers(memberIds);
+
+  if (mode === "total_fail_before_entry") {
+    const arrestedCount = members.length >= 3 ? 2 : 1;
+    const shuffled = [...members].sort(() => Math.random() - 0.5);
+    const arrested = shuffled.slice(0, arrestedCount);
+    const fined = shuffled.slice(arrestedCount);
+
+    for (const user of arrested) {
+      await sendUserToJail(user.id, POLICE_JAIL_MS);
+    }
+
+    let text = `🚔 Ограбление банка сорвалось ещё на входе!
+
+${extraText ? `${extraText}\n` : ""}Полиция приехала слишком быстро.`;
+
+    if (arrested.length) {
+      text += `\n\n⛓ Арестованы:\n${arrested.map((u) => `• ${getUserLink(u)}`).join("\n")}`;
+    }
+
+    if (fined.length) {
+      for (const user of fined) {
+        try {
+          await deductCoinsSafe(user.id, Math.floor(Math.random() * 21) + 20);
+        } catch (error) {
+          console.error("Ошибка штрафа банка:", error);
+        }
+      }
+
+      text += `\n\n💸 Остальным удалось уйти, но они получили штрафы.`;
+    }
+
+    clearBankHeist(chatId);
+
+    await safeSendMessage(chatId, text, {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    });
+    return;
+  }
+
+  if (mode === "vault_disaster") {
+    for (const user of members) {
+      await sendUserToJail(user.id, POLICE_JAIL_MS);
+    }
+
+    clearBankHeist(chatId);
+
+    await safeSendMessage(
+      chatId,
+      `🚨 Во время вскрытия сейфа всё пошло очень плохо!
+
+${extraText ? `${extraText}\n` : ""}Сработала защита банка и полиция окружила здание.
+
+⛓ Вся команда арестована:
+${members.map((u) => `• ${getUserLink(u)}`).join("\n")}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return;
+  }
+
+  if (mode === "all_caught_escape") {
+    for (const user of members) {
+      await sendUserToJail(user.id, POLICE_JAIL_MS);
+    }
+
+    clearBankHeist(chatId);
+
+    await safeSendMessage(
+      chatId,
+      `🚔 Побег не удался.
+
+${extraText ? `${extraText}\n` : ""}Полиция догнала всю команду.
+
+⛓ В тюрьму отправлены:
+${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
+
+💰 Добыча потеряна.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  }
+}
+
+async function rewardHeistMembers(chatId, heist, totalLoot, options = {}) {
+  const members = getHeistMembersList(heist);
+  const memberIds = members.map((m) => Number(m.id));
+  await updateBankHeistCooldownForUsers(memberIds);
+
+  const activeMembers = options.activeMembers || members;
+  const share = Math.floor(totalLoot / activeMembers.length);
+  let leftover = totalLoot - share * activeMembers.length;
+
+  const lines = [];
+
+  for (const user of activeMembers) {
+    let amount = share;
+    if (leftover > 0) {
+      amount += 1;
+      leftover -= 1;
+    }
+    const newBalance = await addCoinsToUser(user.id, amount);
+    lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
+  }
+
+  clearBankHeist(chatId);
+
+  await safeSendMessage(
+    chatId,
+    `${options.title || "💰 Ограбление банка удалось!"}
+
+${options.subtitle ? `${options.subtitle}\n\n` : ""}Раздел добычи:
+${lines.join("\n")}`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
 }
 
 // =========================
@@ -2294,46 +2706,6 @@ async function runSniper(userId) {
   return { ok: true, sniper, balance: Number(updateResult.rows[0].balance || 0) };
 }
 
-async function runBank(userId) {
-  const result = await pool.query(
-    `SELECT balance, last_bank_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastBankAt = row.last_bank_at ? new Date(row.last_bank_at) : null;
-
-  if (lastBankAt) {
-    const nextTime = new Date(lastBankAt.getTime() + BANK_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const bankResult = getBankGameResult();
-  const newBalance = Number(row.balance || 0) + Number(bankResult.coins || 0);
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = $2,
-        last_bank_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, Math.max(0, newBalance)]
-  );
-
-  return {
-    ok: true,
-    bank: bankResult,
-    balance: Number(updateResult.rows[0].balance || 0)
-  };
-}
-
 async function runBasketball(userId) {
   const result = await pool.query(
     `SELECT balance, last_basketball_at FROM users WHERE user_id = $1`,
@@ -2475,7 +2847,7 @@ async function getCooldownText(userId) {
 🏹 Охота: ${getRemaining(stats.last_hunt_at, HUNT_COOLDOWN_MS)}
 🎯 Снайпер: ${getRemaining(stats.last_sniper_at, SNIPER_COOLDOWN_MS)}
 🕵️ Ограбление: ${getRemaining(stats.last_robbery_at, ROBBERY_COOLDOWN_MS)}
-🏦 Банк: ${getRemaining(stats.last_bank_at, BANK_COOLDOWN_MS)}
+🏦 Ограбление банка: ${getRemaining(stats.last_bank_at, BANK_HEIST_COOLDOWN_MS)}
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
 }
@@ -3526,7 +3898,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • охота
 • снайпер
 • ограбить
-• банк
 • баскетбол
 • кнб камень
 • кнб ножницы
@@ -3537,6 +3908,17 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • мой щит
 • /balance
 • /cooldowns
+
+<b>🏦 Ограбление банка</b>
+• ограбление банка
+• присоединиться к ограблению
+• в дело
+• купить маску
+• статус ограбления
+• начать штурм
+• вскрыть сейф
+• сбежать с банка
+• отменить ограбление
 
 <b>🚔 Тюрьма</b>
 • тюрьма
@@ -3799,7 +4181,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)(?:\s+([^\s]+))?
     if (deltaMs === null) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин"
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа"
       );
       return;
     }
@@ -3848,7 +4230,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)(?:\s+([^\s]+))?
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно только: деньги, охота, снайпер, ограбление, банк, баскетбол, кнб");
+      await safeSendMessage(msg.chat.id, "❌ Доступно только: деньги, охота, снайпер, ограбление, ограбление банка, баскетбол, кнб");
       return;
     }
 
@@ -5939,44 +6321,6 @@ ${coinsLine}
       return;
     }
 
-    if (isExactCommand(lowerText, "банк")) {
-      if (!(await requireNotJailed(msg))) return;
-
-      const result = await runBank(msg.from.id);
-
-      if (!result.ok) {
-        if (result.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, банк снова будет доступен через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🏦 ${getUserLink(msg.from)} сходил(а) в банк
-
-${escapeHtml(result.bank.text)}
-💰 Получено: ${result.bank.coins} монет
-
-Баланс: ${result.balance} монет`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
     if (isExactCommand(lowerText, "баскетбол")) {
       if (!(await requireNotJailed(msg))) return;
 
@@ -6065,6 +6409,547 @@ ${coinsLine}
           parse_mode: "HTML",
           disable_web_page_preview: true
         }
+      );
+      return;
+    }
+
+    // =========================
+    // BANK HEIST COMMANDS
+    // =========================
+    if (isExactCommand(lowerText, "ограбление банка")) {
+      if (!(await requireNotJailed(msg))) return;
+
+      const existingHeist = getBankHeist(msg.chat.id);
+      if (existingHeist) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ В этом чате уже есть активное ограбление банка.\n\n${getHeistStatusText(existingHeist)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const cooldown = await getBankHeistCooldown(msg.from.id);
+      if (cooldown > 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ Ограбление банка снова будет доступно через ${formatRemainingTime(cooldown)}`
+        );
+        return;
+      }
+
+      const heist = createBankHeist(msg.chat.id, msg.from);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏦 ${getUserLink(msg.from)} начал(а) подготовку к ограблению банка!
+
+👑 Лидер: ${getUserLink(msg.from)}
+👥 Сейчас в команде: 1/${BANK_HEIST_MAX_MEMBERS}
+🎯 Нужно минимум ${BANK_HEIST_MIN_MEMBERS} игрока
+
+Что делать дальше:
+• присоединиться к ограблению
+• в дело
+• купить маску
+• статус ограбления
+• начать штурм
+
+💡 Маска стоит ${BANK_MASK_COST} монет и повышает шансы команды.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "присоединиться к ограблению") || isExactCommand(lowerText, "в дело")) {
+      if (!(await requireNotJailed(msg))) return;
+
+      const heist = getBankHeist(msg.chat.id);
+      if (!heist) {
+        await safeSendMessage(msg.chat.id, "❌ В этом чате нет активного ограбления банка.");
+        return;
+      }
+
+      const cooldown = await getBankHeistCooldown(msg.from.id);
+      if (cooldown > 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ Ты ещё не можешь участвовать в новом ограблении банка.\nОсталось: ${formatRemainingTime(cooldown)}`
+        );
+        return;
+      }
+
+      const result = await addUserToBankHeist(msg.chat.id, msg.from);
+
+      if (!result.ok) {
+        if (result.reason === "already_started") {
+          await safeSendMessage(msg.chat.id, "❌ Ограбление уже началось. Присоединиться поздно.");
+          return;
+        }
+
+        if (result.reason === "already_member") {
+          await safeSendMessage(msg.chat.id, "✅ Ты уже в команде.");
+          return;
+        }
+
+        if (result.reason === "team_full") {
+          await safeSendMessage(msg.chat.id, `❌ Команда уже полная. Максимум ${BANK_HEIST_MAX_MEMBERS} игроков.`);
+          return;
+        }
+
+        await safeSendMessage(msg.chat.id, "❌ Ошибка присоединения к ограблению.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `👥 ${getUserLink(msg.from)} присоединился(ась) к ограблению банка!
+
+Команда: ${getHeistMemberCount(heist)}/${BANK_HEIST_MAX_MEMBERS}
+Лидер: ${getUserLink(heist.members[String(heist.leaderId)])}
+
+Теперь можно:
+• купить маску
+• статус ограбления
+• начать штурм`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "купить маску")) {
+      const heist = getBankHeist(msg.chat.id);
+      if (!heist) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
+        return;
+      }
+
+      try {
+        const result = await buyMaskForHeistMember(msg.chat.id, msg.from.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🎭 ${getUserLink(msg.from)} купил(а) маску для ограбления.
+
+💸 Цена: ${BANK_MASK_COST} монет
+👛 Баланс: ${result.userBalance}
+🎭 Масок в команде: ${getMaskedMembersCount(result.heist)}/${getHeistMemberCount(result.heist)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (error.message === "NO_HEIST") {
+          await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
+          return;
+        }
+
+        if (error.message === "WRONG_STAGE") {
+          await safeSendMessage(msg.chat.id, "❌ Уже поздно покупать маску. Ограбление уже началось.");
+          return;
+        }
+
+        if (error.message === "NOT_MEMBER") {
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в команде ограбления.");
+          return;
+        }
+
+        if (error.message === "ALREADY_HAVE_MASK") {
+          await safeSendMessage(msg.chat.id, "✅ У тебя уже есть маска.");
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, `❌ Маска стоит ${BANK_MASK_COST} монет. У тебя не хватает денег.`);
+          return;
+        }
+
+        console.error("Ошибка покупки маски:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка покупки маски.");
+      }
+      return;
+    }
+
+    if (isExactCommand(lowerText, "статус ограбления")) {
+      const heist = getBankHeist(msg.chat.id);
+      await safeSendMessage(msg.chat.id, getHeistStatusText(heist), {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "отменить ограбление")) {
+      const heist = getBankHeist(msg.chat.id);
+      if (!heist) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
+        return;
+      }
+
+      if (Number(msg.from.id) !== Number(heist.leaderId)) {
+        await safeSendMessage(msg.chat.id, "❌ Только лидер может отменить ограбление.");
+        return;
+      }
+
+      if (heist.stage !== "gathering") {
+        await safeSendMessage(msg.chat.id, "❌ Ограбление уже началось. Отменить поздно.");
+        return;
+      }
+
+      clearBankHeist(msg.chat.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🛑 ${getUserLink(msg.from)} отменил(а) подготовку к ограблению банка.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "начать штурм")) {
+      if (!(await requireNotJailed(msg))) return;
+
+      const heist = getBankHeist(msg.chat.id);
+      if (!heist) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
+        return;
+      }
+
+      if (Number(msg.from.id) !== Number(heist.leaderId)) {
+        await safeSendMessage(msg.chat.id, "❌ Только лидер может начать штурм.");
+        return;
+      }
+
+      if (heist.stage !== "gathering") {
+        await safeSendMessage(msg.chat.id, "❌ Штурм уже начат.");
+        return;
+      }
+
+      const members = getHeistMembersList(heist);
+      if (members.length < BANK_HEIST_MIN_MEMBERS) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Для ограбления банка нужно минимум ${BANK_HEIST_MIN_MEMBERS} игрока.`
+        );
+        return;
+      }
+
+      for (const user of members) {
+        const jail = await getJailStatus(user.id);
+        if (jail) {
+          await safeSendMessage(
+            msg.chat.id,
+            `❌ ${getUserLink(user)} сейчас в тюрьме. Команда не может начать штурм.`,
+            {
+              parse_mode: "HTML",
+              disable_web_page_preview: true
+            }
+          );
+          return;
+        }
+      }
+
+      heist.startedAt = Date.now();
+
+      const entry = getBankEntryOutcome(heist);
+
+      if (entry.type === "clean_success") {
+        heist.stage = "inside";
+        heist.policeAlert = false;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🏦 Команда ворвалась в банк без лишнего шума!
+
+👥 Участников: ${getHeistMemberCount(heist)}
+🎭 Масок: ${getMaskedMembersCount(heist)}
+😶 Полиция пока ничего не знает.
+
+Следующая команда:
+• вскрыть сейф`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (entry.type === "noisy_success") {
+        heist.stage = "inside";
+        heist.policeAlert = true;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🚨 Команда ворвалась в банк, но подняла шум!
+
+🏦 Внутрь попасть удалось.
+🚔 Полиция уже получила сигнал.
+
+Следующая команда:
+• вскрыть сейф`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (entry.type === "partial_fail_alarm") {
+        heist.stage = "inside";
+        heist.policeAlert = true;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⚠️ На входе всё пошло криво, но команда всё же прорвалась внутрь.
+
+🚨 Сработала тревога.
+🚔 Полиция уже в пути.
+
+Следующая команда:
+• вскрыть сейф`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await punishHeistMembersWithPolice(
+        msg.chat.id,
+        heist,
+        "total_fail_before_entry",
+        "Охрана заметила подготовку и нажала тревожную кнопку."
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "вскрыть сейф")) {
+      const heist = getBankHeist(msg.chat.id);
+      if (!heist) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
+        return;
+      }
+
+      if (Number(msg.from.id) !== Number(heist.leaderId)) {
+        await safeSendMessage(msg.chat.id, "❌ Только лидер может дать команду на вскрытие сейфа.");
+        return;
+      }
+
+      if (heist.stage !== "inside") {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нельзя вскрывать сейф.");
+        return;
+      }
+
+      const vault = getVaultOutcome(heist);
+
+      if (vault.type === "jackpot") {
+        heist.loot = vault.loot;
+        heist.stage = "escape";
+
+        if (Math.random() < 0.65) {
+          heist.policeAlert = true;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `💰 Сейф вскрыт идеально!
+
+🗄 Команда забрала ${vault.loot} монет
+🚔 Полиция: ${heist.policeAlert ? "уже рядом" : "пока не настигла"}
+
+Следующая команда:
+• сбежать с банка`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (vault.type === "success") {
+        heist.loot = vault.loot;
+        heist.stage = "escape";
+
+        if (Math.random() < 0.50) {
+          heist.policeAlert = true;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🗄 Сейф вскрыт!
+
+💰 Добыча: ${vault.loot} монет
+🚔 Полиция: ${heist.policeAlert ? "уже на подходе" : "ещё не догнала"}
+
+Следующая команда:
+• сбежать с банка`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (vault.type === "small") {
+        heist.loot = vault.loot;
+        heist.stage = "escape";
+        heist.policeAlert = true;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⚠️ Сейф удалось открыть только частично.
+
+💰 Взято: ${vault.loot} монет
+🚨 Поднята тревога, полиция уже мчится!
+
+Следующая команда:
+• сбежать с банка`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (vault.type === "fail_alarm") {
+        heist.loot = 0;
+        heist.stage = "escape";
+        heist.policeAlert = true;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🚨 Сейф не поддался!
+
+💰 Добыча: 0 монет
+🚔 Полиция уже рядом.
+
+Последний шанс:
+• сбежать с банка`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await punishHeistMembersWithPolice(
+        msg.chat.id,
+        heist,
+        "vault_disaster",
+        "При попытке вскрытия сейфа сработала защита."
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "сбежать с банка")) {
+      const heist = getBankHeist(msg.chat.id);
+      if (!heist) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
+        return;
+      }
+
+      if (!isHeistParticipant(heist, msg.from.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в команде этого ограбления.");
+        return;
+      }
+
+      if (heist.stage !== "escape") {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас рано бежать. Сначала нужно дойти до этого этапа.");
+        return;
+      }
+
+      const outcome = getEscapeOutcome(heist);
+      const members = getHeistMembersList(heist);
+
+      if (outcome.type === "full_escape") {
+        await rewardHeistMembers(msg.chat.id, heist, heist.loot, {
+          title: "🏃 Побег удался!",
+          subtitle: `Команда смогла унести всю добычу: ${heist.loot} монет`
+        });
+        return;
+      }
+
+      if (outcome.type === "half_escape") {
+        const savedLoot = Math.max(1, Math.floor(heist.loot * 0.55));
+        await rewardHeistMembers(msg.chat.id, heist, savedLoot, {
+          title: "🏃 Побег частично удался",
+          subtitle: `Во время побега пришлось бросить часть мешков.\nСохранено: ${savedLoot} из ${heist.loot} монет`
+        });
+        return;
+      }
+
+      if (outcome.type === "one_caught") {
+        const shuffled = [...members].sort(() => Math.random() - 0.5);
+        const caught = shuffled[0];
+        const escaped = shuffled.slice(1);
+
+        await sendUserToJail(caught.id, POLICE_JAIL_MS);
+        await updateBankHeistCooldownForUsers(members.map((m) => m.id));
+
+        const savedLoot = Math.max(1, Math.floor(heist.loot * 0.70));
+        let shareText = "";
+
+        if (escaped.length) {
+          const share = Math.floor(savedLoot / escaped.length);
+          let leftover = savedLoot - share * escaped.length;
+          const lines = [];
+
+          for (const user of escaped) {
+            let amount = share;
+            if (leftover > 0) {
+              amount += 1;
+              leftover -= 1;
+            }
+            const newBalance = await addCoinsToUser(user.id, amount);
+            lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
+          }
+
+          shareText = lines.join("\n");
+        }
+
+        clearBankHeist(msg.chat.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🚔 Побег удался не всем.
+
+⛓ Пойман(а): ${getUserLink(caught)}
+💰 Остальным удалось унести ${savedLoot} монет
+
+${shareText ? `Раздел добычи:\n${shareText}` : "Никто больше не ушёл с добычей."}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await punishHeistMembersWithPolice(
+        msg.chat.id,
+        heist,
+        "all_caught_escape",
+        "На выезде команду уже ждала полиция."
       );
       return;
     }
