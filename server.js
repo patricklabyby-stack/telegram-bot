@@ -30,7 +30,14 @@ const pendingMarriagesByUserKey = {};
 const pendingAdoptionsByRequestId = {};
 const pendingAdoptionsByUserKey = {};
 
-const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;       // 24 ч
+const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;        // 24 ч
+const SNIPER_COOLDOWN_MS = 12 * 60 * 60 * 1000;      // 12 ч
+const ROBBERY_COOLDOWN_MS = 2 * 60 * 60 * 1000;      // 2 ч
+const BANK_COOLDOWN_MS = 24 * 60 * 60 * 1000;        // 24 ч
+const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;       // 1 ч
+const KNB_COOLDOWN_MS = 30 * 60 * 1000;              // 30 мин
+
 const BOMB_TIMER_MS = 5000;
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
 const MARRIAGE_REQUEST_MS = 10 * 60 * 1000;
@@ -41,7 +48,6 @@ const MAX_CHILDREN_PER_FAMILY = 3;
 const MAX_PUNISHMENT_DAYS = 7;
 const MAX_GOOD_DEED_LENGTH = 120;
 
-const ROBBERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const POLICE_JAIL_MS = 60 * 60 * 1000;
 
 const SHIELD_COST = 250;
@@ -52,10 +58,6 @@ const JAIL_LAWYER_COOLDOWN_MS = 20 * 60 * 1000;
 const JAIL_BRIBE_COOLDOWN_MS = 20 * 60 * 1000;
 const JAIL_LAWYER_COST = 250;
 const JAIL_BRIBE_COST = 400;
-
-const BANK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
-const RPS_COOLDOWN_MS = 45 * 60 * 1000;
 
 const TIME_EDIT_MAX_MINUTES = 10080; // 7 дней
 
@@ -272,105 +274,117 @@ function getLieResult() {
 function getBankGameResult() {
   const roll = Math.random();
 
-  if (roll < 0.08) {
+  if (roll < 0.10) {
     return {
       type: "jackpot",
-      text: "🏦 Банк дал редкий жирный выигрыш!",
+      text: "🏦 Банк сорвал куш!",
       coins: Math.floor(Math.random() * 101) + 120
     };
   }
 
-  if (roll < 0.33) {
+  if (roll < 0.45) {
     return {
       type: "win",
-      text: "💰 Вклад сработал удачно!",
-      coins: Math.floor(Math.random() * 41) + 25
+      text: "💰 Вклад удачно сработал!",
+      coins: Math.floor(Math.random() * 41) + 20
     };
   }
 
-  if (roll < 0.63) {
+  if (roll < 0.75) {
     return {
       type: "small",
-      text: "🙂 Банк дал маленький доход.",
-      coins: Math.floor(Math.random() * 16) + 5
+      text: "🙂 Банк дал небольшой бонус.",
+      coins: Math.floor(Math.random() * 11) + 5
     };
   }
 
   return {
     type: "fail",
-    text: "📉 Сегодня банк ничего не дал.",
+    text: "📉 Банк сегодня без прибыли.",
     coins: 0
   };
 }
 
-function getBasketballGameResult() {
+function getBasketballResult() {
   const roll = Math.random();
 
-  if (roll < 0.06) {
+  if (roll < 0.12) {
     return {
-      type: "perfect",
-      hit: true,
-      text: "🏀 Идеальный бросок! Мяч красиво залетел в кольцо.",
-      coins: Math.floor(Math.random() * 11) + 15
+      type: "jackpot",
+      text: "🏀 Идеальный дальний бросок! Мяч залетел очень красиво.",
+      coins: Math.floor(Math.random() * 31) + 30
     };
   }
 
-  if (roll < 0.22) {
+  if (roll < 0.32) {
     return {
-      type: "hit",
-      hit: true,
-      text: "🏀 Попадание! Мяч в кольце.",
-      coins: Math.floor(Math.random() * 7) + 4
+      type: "win",
+      text: "🏀 Попал! Хороший бросок.",
+      coins: Math.floor(Math.random() * 11) + 10
     };
   }
 
   return {
-    type: "miss",
-    hit: false,
-    text: "❌ Мимо кольца.",
-    coins: -5
+    type: "fail",
+    text: "❌ Промах. Мяч отскочил от кольца.",
+    coins: -(Math.floor(Math.random() * 6) + 5) // -5..-10
   };
 }
 
-function getRpsBotChoice() {
+function getKnbBotChoiceRareWin(playerChoice) {
   const choices = ["камень", "ножницы", "бумага"];
-  return choices[Math.floor(Math.random() * choices.length)];
-}
+  const beats = {
+    камень: "ножницы",
+    ножницы: "бумага",
+    бумага: "камень"
+  };
+  const losesTo = {
+    камень: "бумага",
+    ножницы: "камень",
+    бумага: "ножницы"
+  };
 
-function normalizeRpsChoice(text) {
-  const t = normalizeText(text);
-  if (["камень", "к", "rock"].includes(t)) return "камень";
-  if (["ножницы", "н", "scissors"].includes(t)) return "ножницы";
-  if (["бумага", "б", "paper"].includes(t)) return "бумага";
-  return null;
-}
-
-function decideBiasedRps(userChoice) {
   const roll = Math.random();
 
-  let result = "lose";
-  if (roll < 0.18) result = "win";
-  else if (roll < 0.43) result = "draw";
-  else result = "lose";
-
-  let botChoice = "камень";
-
-  if (result === "draw") {
-    botChoice = userChoice;
-  } else if (result === "win") {
-    if (userChoice === "камень") botChoice = "ножницы";
-    if (userChoice === "ножницы") botChoice = "бумага";
-    if (userChoice === "бумага") botChoice = "камень";
-  } else {
-    if (userChoice === "камень") botChoice = "бумага";
-    if (userChoice === "ножницы") botChoice = "камень";
-    if (userChoice === "бумага") botChoice = "ножницы";
+  if (roll < 0.15) {
+    return beats[playerChoice]; // игрок выигрывает редко
   }
 
-  const reward = result === "win" ? Math.floor(Math.random() * 7) + 4 : 0;
-  const penalty = result === "lose" ? 4 : 0;
+  if (roll < 0.45) {
+    return playerChoice; // ничья
+  }
 
-  return { result, botChoice, reward, penalty };
+  return losesTo[playerChoice]; // бот чаще выигрывает
+}
+
+function resolveKnb(playerChoice, botChoice) {
+  if (playerChoice === botChoice) {
+    return {
+      type: "draw",
+      text: "🤝 Ничья.",
+      coins: 0
+    };
+  }
+
+  const wins = {
+    камень: "ножницы",
+    ножницы: "бумага",
+    бумага: "камень"
+  };
+
+  if (wins[playerChoice] === botChoice) {
+    return {
+      type: "win",
+      text: "🎉 Ты выиграл у бота.",
+      coins: Math.floor(Math.random() * 8) + 8
+    };
+  }
+
+  return {
+    type: "lose",
+    text: "💀 Бот выиграл.",
+    coins: -(Math.floor(Math.random() * 5) + 4)
+  };
 }
 
 function parseTimeEditAmount(rawValue, rawUnit = "") {
@@ -495,15 +509,15 @@ function getCooldownColumnAndMsByName(rawName) {
   const name = normalizeText(rawName);
 
   if (["деньги", "монеты", "money", "daily"].includes(name)) {
-    return { column: "last_daily_at", cooldownMs: DAILY_COOLDOWN_MS, title: "деньги" };
+    return { column: "last_daily_at", cooldownMs: MONEY_COOLDOWN_MS, title: "деньги" };
   }
 
   if (["охота", "hunt"].includes(name)) {
-    return { column: "last_hunt_at", cooldownMs: DAILY_COOLDOWN_MS, title: "охота" };
+    return { column: "last_hunt_at", cooldownMs: HUNT_COOLDOWN_MS, title: "охота" };
   }
 
   if (["снайпер", "sniper"].includes(name)) {
-    return { column: "last_sniper_at", cooldownMs: DAILY_COOLDOWN_MS, title: "снайпер" };
+    return { column: "last_sniper_at", cooldownMs: SNIPER_COOLDOWN_MS, title: "снайпер" };
   }
 
   if (["ограбление", "ограбить", "robbery"].includes(name)) {
@@ -518,8 +532,8 @@ function getCooldownColumnAndMsByName(rawName) {
     return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
   }
 
-  if (["кнб", "каменьножницыбумага", "камень-ножницы-бумага", "rps"].includes(name)) {
-    return { column: "last_rps_at", cooldownMs: RPS_COOLDOWN_MS, title: "кнб" };
+  if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
+    return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
   }
 
   return null;
@@ -702,7 +716,7 @@ async function initDb() {
       last_robbery_at TIMESTAMPTZ,
       last_bank_at TIMESTAMPTZ,
       last_basketball_at TIMESTAMPTZ,
-      last_rps_at TIMESTAMPTZ,
+      last_knb_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
   `);
@@ -869,7 +883,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_robbery_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bank_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_rps_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
 
   console.log("✅ Database ready");
 }
@@ -2179,8 +2193,104 @@ async function robberyTransfer(thiefId, victimId, requestedAmount) {
 }
 
 // =========================
-// EXTRA GAMES
+// GAME
 // =========================
+async function claimDailyCoins(userId) {
+  const result = await pool.query(`SELECT balance, last_daily_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
+
+  if (lastDailyAt) {
+    const nextTime = new Date(lastDailyAt.getTime() + MONEY_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const coins = getRandomCoins();
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = balance + $2,
+        last_daily_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, coins]
+  );
+
+  return { ok: true, coins, balance: Number(updateResult.rows[0].balance || 0) };
+}
+
+async function runHunt(userId) {
+  const result = await pool.query(`SELECT balance, last_hunt_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
+
+  if (lastHuntAt) {
+    const nextTime = new Date(lastHuntAt.getTime() + HUNT_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const hunt = getHuntResult();
+  let newBalance = Number(row.balance || 0) + hunt.coins;
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_hunt_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return { ok: true, hunt, balance: Number(updateResult.rows[0].balance || 0) };
+}
+
+async function runSniper(userId) {
+  const result = await pool.query(`SELECT balance, last_sniper_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
+
+  if (lastSniperAt) {
+    const nextTime = new Date(lastSniperAt.getTime() + SNIPER_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const sniper = getSniperResult();
+  const newBalance = Number(row.balance || 0) + sniper.coins;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_sniper_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return { ok: true, sniper, balance: Number(updateResult.rows[0].balance || 0) };
+}
+
 async function runBank(userId) {
   const result = await pool.query(
     `SELECT balance, last_bank_at FROM users WHERE user_id = $1`,
@@ -2211,7 +2321,7 @@ async function runBank(userId) {
     WHERE user_id = $1
     RETURNING balance
     `,
-    [userId, newBalance]
+    [userId, Math.max(0, newBalance)]
   );
 
   return {
@@ -2240,7 +2350,7 @@ async function runBasketball(userId) {
     }
   }
 
-  const game = getBasketballGameResult();
+  const game = getBasketballResult();
   let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
   if (newBalance < 0) newBalance = 0;
 
@@ -2262,45 +2372,48 @@ async function runBasketball(userId) {
   };
 }
 
-async function getRpsCooldown(userId) {
+async function runKnb(userId, playerChoice) {
   const result = await pool.query(
-    `SELECT last_rps_at FROM users WHERE user_id = $1`,
+    `SELECT balance, last_knb_at FROM users WHERE user_id = $1`,
     [userId]
   );
+
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
   const row = result.rows[0];
-  if (!row || !row.last_rps_at) return 0;
+  const now = new Date();
+  const lastAt = row.last_knb_at ? new Date(row.last_knb_at) : null;
 
-  const nextTime = new Date(new Date(row.last_rps_at).getTime() + RPS_COOLDOWN_MS);
-  const diff = nextTime.getTime() - Date.now();
-  return diff > 0 ? diff : 0;
-}
-
-async function updateLastRpsAt(userId) {
-  await pool.query(
-    `UPDATE users SET last_rps_at = NOW() WHERE user_id = $1`,
-    [userId]
-  );
-}
-
-async function applyRpsResult(userId, outcome) {
-  const current = await getUserStats(userId);
-  if (!current) throw new Error("USER_NOT_FOUND");
-
-  let newBalance = Number(current.balance || 0);
-
-  if (outcome.result === "win") {
-    newBalance += outcome.reward;
-  } else if (outcome.result === "lose") {
-    newBalance -= outcome.penalty;
-    if (newBalance < 0) newBalance = 0;
+  if (lastAt) {
+    const nextTime = new Date(lastAt.getTime() + KNB_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
   }
 
-  const result = await pool.query(
-    `UPDATE users SET balance = $2, last_rps_at = NOW() WHERE user_id = $1 RETURNING balance`,
+  const botChoice = getKnbBotChoiceRareWin(playerChoice);
+  const game = resolveKnb(playerChoice, botChoice);
+
+  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_knb_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
     [userId, newBalance]
   );
 
-  return Number(result.rows[0]?.balance || 0);
+  return {
+    ok: true,
+    game,
+    botChoice,
+    balance: Number(updateResult.rows[0].balance || 0)
+  };
 }
 
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
@@ -2335,6 +2448,294 @@ async function adjustUserCooldown(userId, cooldownName, deltaMs) {
     newDate,
     remainingMs
   };
+}
+
+async function getCooldownText(userId) {
+  const stats = await getUserStats(userId);
+  if (!stats) return "Профиль не найден.";
+
+  const now = new Date();
+
+  function getRemaining(lastAt, cooldownMs) {
+    if (!lastAt) return "✅ Уже доступно";
+
+    const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+    const diff = nextTime.getTime() - now.getTime();
+
+    if (diff <= 0) return "✅ Уже доступно";
+    return `⏳ ${formatRemainingTime(diff)}`;
+  }
+
+  return `⏱ Кулдауны
+
+💰 Деньги: ${getRemaining(stats.last_daily_at, MONEY_COOLDOWN_MS)}
+🏹 Охота: ${getRemaining(stats.last_hunt_at, HUNT_COOLDOWN_MS)}
+🎯 Снайпер: ${getRemaining(stats.last_sniper_at, SNIPER_COOLDOWN_MS)}
+🕵️ Ограбление: ${getRemaining(stats.last_robbery_at, ROBBERY_COOLDOWN_MS)}
+🏦 Банк: ${getRemaining(stats.last_bank_at, BANK_COOLDOWN_MS)}
+🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
+✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
+}
+
+// =========================
+// PROFILE
+// =========================
+async function getProfileText(user) {
+  await initUser(user);
+  const stats = await getUserStats(user.id);
+  const shield = await getShieldRow(user.id);
+
+  return `👤 Профиль пользователя
+
+Имя: ${getUserLink(user)}
+ID: ${user.id}
+
+💰 Монеты: ${stats.balance || 0}
+🤝 Респект: ${stats.respect || 0}
+🛡 Щиты: ${Number(shield?.count || 0)}/${MAX_SHIELDS}
+
+📊 Статистика:
+💀 Убили: ${stats.kills}
+❤️ Обняли: ${stats.hugs}
+💋 Поцеловали: ${stats.kisses}
+👊 Ударили: ${stats.hits}
+😈 Укусили: ${stats.bites}
+🤲 Погладили: ${stats.pats}
+🦵 Пнули: ${stats.kicks}
+🖐 Шлёпнули: ${stats.slaps}
+🥊 Врезали: ${stats.punches}
+👅 Лизнули: ${stats.licks}
+🕵️ Обокрали: ${stats.steals}
+💸 Заскамили: ${stats.scams}
+☠️ Уничтожили: ${stats.destroys}
+⏰ Разбудили: ${stats.wakes}
+🧊 Заморозили: ${stats.freezes}
+🛡️ Спасли: ${stats.saves}
+
+🔥 Всего взаимодействий: ${stats.total}`;
+}
+
+async function sendProfile(chatId, targetUser, replyToMessageId = undefined) {
+  const text = await getProfileText(targetUser);
+
+  const sent = await bot.sendMessage(chatId, text, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_to_message_id: replyToMessageId
+  });
+
+  await saveProfileMessage(sent.message_id, targetUser.id);
+  return sent;
+}
+
+async function resolveTargetUserFromReply(msg) {
+  if (!msg.reply_to_message) return null;
+
+  const replyMsg = msg.reply_to_message;
+
+  if (replyMsg.from && !replyMsg.from.is_bot && replyMsg.from.id) {
+    await initUser(replyMsg.from);
+    await saveSeenUser(msg.chat.id, replyMsg.from);
+
+    return {
+      id: Number(replyMsg.from.id),
+      first_name: replyMsg.from.first_name || "",
+      last_name: replyMsg.from.last_name || "",
+      username: replyMsg.from.username || ""
+    };
+  }
+
+  const profileOwnerId = await getProfileOwnerByMessageId(replyMsg.message_id);
+  if (profileOwnerId) {
+    const storedUser = await getStoredUser(profileOwnerId);
+    if (storedUser) return storedUser;
+  }
+
+  return null;
+}
+
+// =========================
+// REQUEST HELPERS
+// =========================
+function saveMarriageRequest(request) {
+  pendingMarriagesByRequestId[request.requestId] = request;
+  pendingMarriagesByUserKey[request.userKey] = request.requestId;
+}
+
+function deleteMarriageRequest(request) {
+  if (!request) return;
+  delete pendingMarriagesByRequestId[request.requestId];
+  delete pendingMarriagesByUserKey[request.userKey];
+}
+
+function findMarriageRequestByUser(chatId, userId) {
+  const requestId = pendingMarriagesByUserKey[`${chatId}:${userId}`];
+  if (!requestId) return null;
+  return pendingMarriagesByRequestId[requestId] || null;
+}
+
+function saveAdoptionRequest(request) {
+  pendingAdoptionsByRequestId[request.requestId] = request;
+  pendingAdoptionsByUserKey[request.userKey] = request.requestId;
+}
+
+function deleteAdoptionRequest(request) {
+  if (!request) return;
+  delete pendingAdoptionsByRequestId[request.requestId];
+  delete pendingAdoptionsByUserKey[request.userKey];
+}
+
+function findAdoptionRequestByUser(chatId, userId) {
+  const requestId = pendingAdoptionsByUserKey[`${chatId}:${userId}`];
+  if (!requestId) return null;
+  return pendingAdoptionsByRequestId[requestId] || null;
+}
+
+async function finalizeMarriageAccept(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (isRequestExpired(request.createdAt, MARRIAGE_REQUEST_MS)) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "⌛ Предложение брака устарело.");
+    return;
+  }
+
+  const senderMarried = await isUserMarried(request.fromUser.id);
+  const targetMarried = await isUserMarried(request.targetUser.id);
+
+  if (senderMarried || targetMarried) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "❌ Кто-то из вас уже состоит в браке.");
+    return;
+  }
+
+  const senderChildRole = await getActiveAdoptionByChildId(request.fromUser.id);
+  const targetChildRole = await getActiveAdoptionByChildId(request.targetUser.id);
+
+  if (senderChildRole || targetChildRole) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "❌ Игрок в роли ребёнка не может вступить в брак.");
+    return;
+  }
+
+  const marriage = await createMarriage(request.fromUser.id, request.targetUser.id);
+  await ensureCoupleState(request.fromUser.id, request.targetUser.id);
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+  deleteMarriageRequest(request);
+
+  await safeSendMessage(
+    chatId,
+    `💍 Брак зарегистрирован!
+
+${getUserLink(request.fromUser)} + ${getUserLink(request.targetUser)}
+
+📅 Дата: ${formatDate(marriage.created_at)}
+🏡 Теперь вы семья!`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+}
+
+async function finalizeMarriageDecline(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  await safeSendMessage(
+    chatId,
+    `💔 ${getUserLink(request.targetUser)} отказал(а) ${getUserLink(request.fromUser)} в браке.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  deleteMarriageRequest(request);
+}
+
+async function finalizeAdoptionAccept(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (isRequestExpired(request.createdAt, ADOPTION_REQUEST_MS)) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "⌛ Предложение усыновления устарело.");
+    return;
+  }
+
+  const validation = await canAdoptUser(request.parentUser.id, request.childUser.id);
+
+  if (!validation.ok) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, validation.text);
+    return;
+  }
+
+  let creation;
+  try {
+    creation = await createAdoption(request.parentUser.id, request.childUser.id);
+  } catch (error) {
+    console.error("Ошибка createAdoption:", error);
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "❌ Ошибка усыновления. Попробуй ещё раз.");
+    return;
+  }
+
+  if (!creation.ok) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка.");
+    return;
+  }
+
+  await ensureChildObedience(request.childUser.id);
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  const spouseInfo = await getMarriagePartner(request.parentUser.id);
+  const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
+
+  let successText = `👶 Усыновление прошло успешно!
+
+${getUserLink(request.parentUser)} теперь родитель для ${getUserLink(request.childUser)}`;
+
+  if (spouseUser) {
+    successText += `\n💍 Второй родитель: ${getUserLink(spouseUser)}`;
+  }
+
+  successText += `\n📅 Дата: ${formatDate(creation.adoption.created_at)}`;
+
+  deleteAdoptionRequest(request);
+
+  await safeSendMessage(chatId, successText, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+}
+
+async function finalizeAdoptionDecline(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  await safeSendMessage(
+    chatId,
+    `❌ ${getUserLink(request.childUser)} отказал(а) ${getUserLink(request.parentUser)} в усыновлении.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  deleteAdoptionRequest(request);
 }
 
 // =========================
@@ -2487,6 +2888,13 @@ async function takeFromFamilyBudget(userId, amount) {
       `,
       [familyKey, amount]
     );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
     const updatedUser = await client.query(
       `
@@ -2889,393 +3297,6 @@ function isValidTrigger(trigger) {
 }
 
 // =========================
-// GAME
-// =========================
-async function claimDailyCoins(userId) {
-  const result = await pool.query(`SELECT balance, last_daily_at FROM users WHERE user_id = $1`, [userId]);
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
-
-  if (lastDailyAt) {
-    const nextTime = new Date(lastDailyAt.getTime() + DAILY_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const coins = getRandomCoins();
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = balance + $2,
-        last_daily_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, coins]
-  );
-
-  return { ok: true, coins, balance: Number(updateResult.rows[0].balance || 0) };
-}
-
-async function runHunt(userId) {
-  const result = await pool.query(`SELECT balance, last_hunt_at FROM users WHERE user_id = $1`, [userId]);
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
-
-  if (lastHuntAt) {
-    const nextTime = new Date(lastHuntAt.getTime() + DAILY_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const hunt = getHuntResult();
-  let newBalance = Number(row.balance || 0) + hunt.coins;
-  if (newBalance < 0) newBalance = 0;
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = $2,
-        last_hunt_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, newBalance]
-  );
-
-  return { ok: true, hunt, balance: Number(updateResult.rows[0].balance || 0) };
-}
-
-async function runSniper(userId) {
-  const result = await pool.query(`SELECT balance, last_sniper_at FROM users WHERE user_id = $1`, [userId]);
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
-
-  if (lastSniperAt) {
-    const nextTime = new Date(lastSniperAt.getTime() + DAILY_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const sniper = getSniperResult();
-  const newBalance = Number(row.balance || 0) + sniper.coins;
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = $2,
-        last_sniper_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, newBalance]
-  );
-
-  return { ok: true, sniper, balance: Number(updateResult.rows[0].balance || 0) };
-}
-
-async function getCooldownText(userId) {
-  const stats = await getUserStats(userId);
-  if (!stats) return "Профиль не найден.";
-
-  const now = new Date();
-
-  function getRemaining(lastAt, cooldownMs = DAILY_COOLDOWN_MS) {
-    if (!lastAt) return "✅ Уже доступно";
-
-    const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
-    const diff = nextTime.getTime() - now.getTime();
-
-    if (diff <= 0) return "✅ Уже доступно";
-    return `⏳ ${formatRemainingTime(diff)}`;
-  }
-
-  return `⏱ Кулдауны
-
-💰 Деньги: ${getRemaining(stats.last_daily_at)}
-🏹 Охота: ${getRemaining(stats.last_hunt_at)}
-🎯 Снайпер: ${getRemaining(stats.last_sniper_at)}
-🕵️ Ограбление: ${getRemaining(stats.last_robbery_at, ROBBERY_COOLDOWN_MS)}
-🏦 Банк: ${getRemaining(stats.last_bank_at, BANK_COOLDOWN_MS)}
-🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
-✂️ КНБ: ${getRemaining(stats.last_rps_at, RPS_COOLDOWN_MS)}`;
-}
-
-// =========================
-// PROFILE
-// =========================
-async function getProfileText(user) {
-  await initUser(user);
-  const stats = await getUserStats(user.id);
-  const shield = await getShieldRow(user.id);
-
-  return `👤 Профиль пользователя
-
-Имя: ${getUserLink(user)}
-ID: ${user.id}
-
-💰 Монеты: ${stats.balance || 0}
-🤝 Респект: ${stats.respect || 0}
-🛡 Щиты: ${Number(shield?.count || 0)}/${MAX_SHIELDS}
-
-📊 Статистика:
-💀 Убили: ${stats.kills}
-❤️ Обняли: ${stats.hugs}
-💋 Поцеловали: ${stats.kisses}
-👊 Ударили: ${stats.hits}
-😈 Укусили: ${stats.bites}
-🤲 Погладили: ${stats.pats}
-🦵 Пнули: ${stats.kicks}
-🖐 Шлёпнули: ${stats.slaps}
-🥊 Врезали: ${stats.punches}
-👅 Лизнули: ${stats.licks}
-🕵️ Обокрали: ${stats.steals}
-💸 Заскамили: ${stats.scams}
-☠️ Уничтожили: ${stats.destroys}
-⏰ Разбудили: ${stats.wakes}
-🧊 Заморозили: ${stats.freezes}
-🛡️ Спасли: ${stats.saves}
-
-🔥 Всего взаимодействий: ${stats.total}`;
-}
-
-async function sendProfile(chatId, targetUser, replyToMessageId = undefined) {
-  const text = await getProfileText(targetUser);
-
-  const sent = await bot.sendMessage(chatId, text, {
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-    reply_to_message_id: replyToMessageId
-  });
-
-  await saveProfileMessage(sent.message_id, targetUser.id);
-  return sent;
-}
-
-async function resolveTargetUserFromReply(msg) {
-  if (!msg.reply_to_message) return null;
-
-  const replyMsg = msg.reply_to_message;
-
-  if (replyMsg.from && !replyMsg.from.is_bot && replyMsg.from.id) {
-    await initUser(replyMsg.from);
-    await saveSeenUser(msg.chat.id, replyMsg.from);
-
-    return {
-      id: Number(replyMsg.from.id),
-      first_name: replyMsg.from.first_name || "",
-      last_name: replyMsg.from.last_name || "",
-      username: replyMsg.from.username || ""
-    };
-  }
-
-  const profileOwnerId = await getProfileOwnerByMessageId(replyMsg.message_id);
-  if (profileOwnerId) {
-    const storedUser = await getStoredUser(profileOwnerId);
-    if (storedUser) return storedUser;
-  }
-
-  return null;
-}
-
-// =========================
-// REQUEST HELPERS
-// =========================
-function saveMarriageRequest(request) {
-  pendingMarriagesByRequestId[request.requestId] = request;
-  pendingMarriagesByUserKey[request.userKey] = request.requestId;
-}
-
-function deleteMarriageRequest(request) {
-  if (!request) return;
-  delete pendingMarriagesByRequestId[request.requestId];
-  delete pendingMarriagesByUserKey[request.userKey];
-}
-
-function findMarriageRequestByUser(chatId, userId) {
-  const requestId = pendingMarriagesByUserKey[`${chatId}:${userId}`];
-  if (!requestId) return null;
-  return pendingMarriagesByRequestId[requestId] || null;
-}
-
-function saveAdoptionRequest(request) {
-  pendingAdoptionsByRequestId[request.requestId] = request;
-  pendingAdoptionsByUserKey[request.userKey] = request.requestId;
-}
-
-function deleteAdoptionRequest(request) {
-  if (!request) return;
-  delete pendingAdoptionsByRequestId[request.requestId];
-  delete pendingAdoptionsByUserKey[request.userKey];
-}
-
-function findAdoptionRequestByUser(chatId, userId) {
-  const requestId = pendingAdoptionsByUserKey[`${chatId}:${userId}`];
-  if (!requestId) return null;
-  return pendingAdoptionsByRequestId[requestId] || null;
-}
-
-async function finalizeMarriageAccept(request, chatId, messageId = null) {
-  if (!request) return;
-
-  if (isRequestExpired(request.createdAt, MARRIAGE_REQUEST_MS)) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteMarriageRequest(request);
-    await safeSendMessage(chatId, "⌛ Предложение брака устарело.");
-    return;
-  }
-
-  const senderMarried = await isUserMarried(request.fromUser.id);
-  const targetMarried = await isUserMarried(request.targetUser.id);
-
-  if (senderMarried || targetMarried) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteMarriageRequest(request);
-    await safeSendMessage(chatId, "❌ Кто-то из вас уже состоит в браке.");
-    return;
-  }
-
-  const senderChildRole = await getActiveAdoptionByChildId(request.fromUser.id);
-  const targetChildRole = await getActiveAdoptionByChildId(request.targetUser.id);
-
-  if (senderChildRole || targetChildRole) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteMarriageRequest(request);
-    await safeSendMessage(chatId, "❌ Игрок в роли ребёнка не может вступить в брак.");
-    return;
-  }
-
-  const marriage = await createMarriage(request.fromUser.id, request.targetUser.id);
-  await ensureCoupleState(request.fromUser.id, request.targetUser.id);
-
-  if (messageId) await removeInlineKeyboard(chatId, messageId);
-  deleteMarriageRequest(request);
-
-  await safeSendMessage(
-    chatId,
-    `💍 Брак зарегистрирован!
-
-${getUserLink(request.fromUser)} + ${getUserLink(request.targetUser)}
-
-📅 Дата: ${formatDate(marriage.created_at)}
-🏡 Теперь вы семья!`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-}
-
-async function finalizeMarriageDecline(request, chatId, messageId = null) {
-  if (!request) return;
-
-  if (messageId) await removeInlineKeyboard(chatId, messageId);
-
-  await safeSendMessage(
-    chatId,
-    `💔 ${getUserLink(request.targetUser)} отказал(а) ${getUserLink(request.fromUser)} в браке.`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-
-  deleteMarriageRequest(request);
-}
-
-async function finalizeAdoptionAccept(request, chatId, messageId = null) {
-  if (!request) return;
-
-  if (isRequestExpired(request.createdAt, ADOPTION_REQUEST_MS)) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteAdoptionRequest(request);
-    await safeSendMessage(chatId, "⌛ Предложение усыновления устарело.");
-    return;
-  }
-
-  const validation = await canAdoptUser(request.parentUser.id, request.childUser.id);
-
-  if (!validation.ok) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteAdoptionRequest(request);
-    await safeSendMessage(chatId, validation.text);
-    return;
-  }
-
-  let creation;
-  try {
-    creation = await createAdoption(request.parentUser.id, request.childUser.id);
-  } catch (error) {
-    console.error("Ошибка createAdoption:", error);
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteAdoptionRequest(request);
-    await safeSendMessage(chatId, "❌ Ошибка усыновления. Попробуй ещё раз.");
-    return;
-  }
-
-  if (!creation.ok) {
-    if (messageId) await removeInlineKeyboard(chatId, messageId);
-    deleteAdoptionRequest(request);
-    await safeSendMessage(chatId, "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка.");
-    return;
-  }
-
-  await ensureChildObedience(request.childUser.id);
-
-  if (messageId) await removeInlineKeyboard(chatId, messageId);
-
-  const spouseInfo = await getMarriagePartner(request.parentUser.id);
-  const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
-
-  let successText = `👶 Усыновление прошло успешно!
-
-${getUserLink(request.parentUser)} теперь родитель для ${getUserLink(request.childUser)}`;
-
-  if (spouseUser) {
-    successText += `\n💍 Второй родитель: ${getUserLink(spouseUser)}`;
-  }
-
-  successText += `\n📅 Дата: ${formatDate(creation.adoption.created_at)}`;
-
-  deleteAdoptionRequest(request);
-
-  await safeSendMessage(chatId, successText, {
-    parse_mode: "HTML",
-    disable_web_page_preview: true
-  });
-}
-
-async function finalizeAdoptionDecline(request, chatId, messageId = null) {
-  if (!request) return;
-
-  if (messageId) await removeInlineKeyboard(chatId, messageId);
-
-  await safeSendMessage(
-    chatId,
-    `❌ ${getUserLink(request.childUser)} отказал(а) ${getUserLink(request.parentUser)} в усыновлении.`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-
-  deleteAdoptionRequest(request);
-}
-
-// =========================
 // STANDARD RP COMMANDS
 // =========================
 const rpCommands = {
@@ -3624,7 +3645,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+([^\s]+)\s+([+-]?\d+)(?:\s+([^\s]+))?
     if (deltaMs === null) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit баскетбол -20 мин\n/timeedit кнб -10 мин"
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин"
       );
       return;
     }
@@ -5785,8 +5806,138 @@ ${lines.join("\n")}`,
     }
 
     // =========================
-    // BANK
+    // MONEY GAMES
     // =========================
+    if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const result = await claimDailyCoins(msg.from.id);
+
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, получить монеты снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!
+
+Баланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "охота")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const result = await runHunt(msg.from.id);
+
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      let coinsLine = "😐 0 монет";
+      if (result.hunt.coins > 0) coinsLine = `💰 +${result.hunt.coins} монет`;
+      else if (result.hunt.coins < 0) coinsLine = `💀 ${result.hunt.coins} монет`;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏹 ${getUserLink(msg.from)} отправился на охоту...
+
+${escapeHtml(result.hunt.text)}
+${coinsLine}
+
+Баланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "снайпер")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const result = await runSniper(msg.from.id);
+
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      let coinsLine = "😐 0 монет";
+      if (result.sniper.coins > 0) coinsLine = `💰 +${result.sniper.coins} монет`;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎯 ${getUserLink(msg.from)} прицелился...
+
+${escapeHtml(result.sniper.text)}
+${coinsLine}
+
+Баланс: ${result.balance} монет`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
     if (isExactCommand(lowerText, "банк")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -5829,9 +5980,6 @@ ${escapeHtml(result.bank.text)}
       return;
     }
 
-    // =========================
-    // BASKETBALL
-    // =========================
     if (isExactCommand(lowerText, "баскетбол")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -5858,19 +6006,16 @@ ${escapeHtml(result.bank.text)}
         return;
       }
 
-      let moneyText = "";
-      if (result.game.coins >= 0) {
-        moneyText = `💰 Выигрыш: +${result.game.coins} монет`;
-      } else {
-        moneyText = `💸 Проигрыш: ${result.game.coins} монет`;
-      }
+      let coinsLine = "😐 0 монет";
+      if (result.game.coins > 0) coinsLine = `💰 +${result.game.coins} монет`;
+      if (result.game.coins < 0) coinsLine = `💸 ${result.game.coins} монет`;
 
       await safeSendMessage(
         msg.chat.id,
-        `🏀 ${getUserLink(msg.from)} бросает мяч...
+        `🏀 ${getUserLink(msg.from)} бросил(а) мяч в кольцо
 
 ${escapeHtml(result.game.text)}
-${moneyText}
+${coinsLine}
 
 Баланс: ${result.balance} монет`,
         {
@@ -5881,57 +6026,52 @@ ${moneyText}
       return;
     }
 
-    // =========================
-    // RPS
-    // =========================
-    if (lowerText.startsWith("кнб ")) {
+    if (
+      lowerText === "кнб камень" ||
+      lowerText === "кнб ножницы" ||
+      lowerText === "кнб бумага"
+    ) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
         await safeSendMessage(msg.chat.id, jailText);
         return;
       }
 
-      const choiceText = text.slice(4).trim();
-      const userChoice = normalizeRpsChoice(choiceText);
+      const playerChoice = lowerText.replace("кнб ", "").trim();
+      const result = await runKnb(msg.from.id, playerChoice);
 
-      if (!userChoice) {
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
         await safeSendMessage(
           msg.chat.id,
-          "❌ Напиши так:\nкнб камень\nкнб ножницы\nкнб бумага"
+          `⏳ ${getUserLink(msg.from)}, КНБ снова будет доступно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
         );
         return;
       }
 
-      const cd = await getRpsCooldown(msg.from.id);
-      if (cd > 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ КНБ снова будет доступно через ${formatRemainingTime(cd)}`
-        );
-        return;
-      }
-
-      const outcome = decideBiasedRps(userChoice);
-      const newBalance = await applyRpsResult(msg.from.id, outcome);
-
-      let resultText = "";
-      if (outcome.result === "win") {
-        resultText = `🎉 Ты победил бота и получил ${outcome.reward} монет!`;
-      } else if (outcome.result === "draw") {
-        resultText = `😐 Ничья. Никто ничего не получил.`;
-      } else {
-        resultText = `💀 Бот победил. Ты потерял ${outcome.penalty} монет.`;
-      }
+      let coinsLine = "😐 0 монет";
+      if (result.game.coins > 0) coinsLine = `💰 +${result.game.coins} монет`;
+      if (result.game.coins < 0) coinsLine = `💸 ${result.game.coins} монет`;
 
       await safeSendMessage(
         msg.chat.id,
         `✂️ КНБ
 
-👤 Ты: ${escapeHtml(userChoice)}
-🤖 Бот: ${escapeHtml(outcome.botChoice)}
+👤 Ты: ${escapeHtml(playerChoice)}
+🤖 Бот: ${escapeHtml(result.botChoice)}
 
-${resultText}
-💰 Баланс: ${newBalance} монет`,
+${escapeHtml(result.game.text)}
+${coinsLine}
+
+Баланс: ${result.balance} монет`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -6527,136 +6667,6 @@ ${escapeHtml(result.text)}`,
 ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
 
 ❤️ Совместимость: ${percent}%`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
-
-      const result = await claimDailyCoins(msg.from.id);
-
-      if (!result.ok) {
-        if (result.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, получить монеты снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `💰 ${getUserLink(msg.from)}, вы получили ${result.coins} монет!
-
-Баланс: ${result.balance} монет`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "охота")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
-
-      const result = await runHunt(msg.from.id);
-
-      if (!result.ok) {
-        if (result.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      let coinsLine = "😐 0 монет";
-      if (result.hunt.coins > 0) coinsLine = `💰 +${result.hunt.coins} монет`;
-      else if (result.hunt.coins < 0) coinsLine = `💀 ${result.hunt.coins} монет`;
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🏹 ${getUserLink(msg.from)} отправился на охоту...
-
-${escapeHtml(result.hunt.text)}
-${coinsLine}
-
-Баланс: ${result.balance} монет`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "снайпер")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
-
-      const result = await runSniper(msg.from.id);
-
-      if (!result.ok) {
-        if (result.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      let coinsLine = "😐 0 монет";
-      if (result.sniper.coins > 0) coinsLine = `💰 +${result.sniper.coins} монет`;
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🎯 ${getUserLink(msg.from)} прицелился...
-
-${escapeHtml(result.sniper.text)}
-${coinsLine}
-
-Баланс: ${result.balance} монет`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
