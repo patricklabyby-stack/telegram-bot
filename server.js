@@ -24,6 +24,7 @@ const chatMembers = {};
 const recentActiveUsers = {};
 const activeBombs = {};
 const activeBankHeists = {};
+const activeVanHeists = {};
 const pendingCommandCreation = {};
 
 const pendingMarriagesByRequestId = {};
@@ -36,6 +37,8 @@ const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const SNIPER_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const ROBBERY_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 const BANK_HEIST_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const ATM_HACK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+const VAN_HEIST_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
 const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -46,9 +49,11 @@ const ADOPTION_REQUEST_MS = 10 * 60 * 1000;
 
 const MAX_CUSTOM_COMMANDS = 5;
 const CUSTOM_COMMAND_COST = 20;
+
 const MAX_CHILDREN_PER_FAMILY = 3;
 const MAX_PUNISHMENT_DAYS = 7;
 const MAX_GOOD_DEED_LENGTH = 120;
+const MAX_DREAM_LENGTH = 120;
 
 const POLICE_JAIL_MS = 60 * 60 * 1000;
 
@@ -63,16 +68,78 @@ const JAIL_BRIBE_COST = 400;
 
 const TIME_EDIT_MAX_MINUTES = 10080;
 
-const BANK_HEIST_MIN_MEMBERS = 2;
-const BANK_HEIST_MAX_MEMBERS = 4;
-const BANK_MASK_COST = 35;
-
 const MAX_LEVEL = 50;
 const MAX_WANTED_LEVEL = 5;
 
 const LAY_LOW_DURATION_MS = 6 * 60 * 60 * 1000;
 const LAY_LOW_REDUCE_STEP_MS = 3 * 60 * 60 * 1000;
 const WANTED_PASSIVE_DECAY_MS = 12 * 60 * 60 * 1000;
+
+const BANK_HEIST_MIN_MEMBERS = 2;
+const BANK_HEIST_MAX_MEMBERS = 4;
+const VAN_HEIST_MIN_MEMBERS = 2;
+const VAN_HEIST_MAX_MEMBERS = 4;
+
+const ITEMS = {
+  mask: {
+    key: "mask",
+    title: "Маска",
+    emoji: "🎭",
+    price: 35,
+    criminalOnly: true,
+    description: "Улучшает шансы на преступления"
+  },
+  lockpick: {
+    key: "lockpick",
+    title: "Отмычка",
+    emoji: "🗝️",
+    price: 50,
+    criminalOnly: true,
+    description: "Нужна для банкоматов и помогает в ограблениях"
+  },
+  radio: {
+    key: "radio",
+    title: "Рация",
+    emoji: "📡",
+    price: 80,
+    criminalOnly: true,
+    description: "Помогает команде координироваться"
+  },
+  armor: {
+    key: "armor",
+    title: "Бронежилет",
+    emoji: "🦺",
+    price: 120,
+    criminalOnly: true,
+    description: "Снижает шанс провала и ареста"
+  },
+  fake_passport: {
+    key: "fake_passport",
+    title: "Фальшивый паспорт",
+    emoji: "🪪",
+    price: 200,
+    criminalOnly: true,
+    description: "Иногда снижает последствия полиции"
+  },
+  jammer: {
+    key: "jammer",
+    title: "Глушилка",
+    emoji: "📴",
+    price: 160,
+    criminalOnly: true,
+    description: "Помогает против сигнализации"
+  }
+};
+
+const ITEM_ALIASES = {
+  "маска": "mask",
+  "отмычка": "lockpick",
+  "рация": "radio",
+  "бронежилет": "armor",
+  "фальшивый паспорт": "fake_passport",
+  "паспорт": "fake_passport",
+  "глушилка": "jammer"
+};
 
 // =========================
 // SERVER
@@ -190,6 +257,59 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function getRandomFromArray(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function getPendingKey(chatId, userId) {
+  return `${chatId}:${userId}`;
+}
+
+function isRequestExpired(createdAt, ttlMs) {
+  return Date.now() - createdAt > ttlMs;
+}
+
+function parseGiftPayload(payload) {
+  const str = String(payload || "");
+
+  if (str === "coins_50") return { type: "self", amount: 50 };
+  if (str === "coins_100") return { type: "self", amount: 100 };
+  if (str === "coins_200") return { type: "self", amount: 200 };
+  if (str === "coins_300") return { type: "self", amount: 300 };
+
+  const match = str.match(/^giftcoins_(50|100|200|300)_(\d+)$/);
+  if (!match) return null;
+
+  return {
+    type: "gift",
+    amount: Number(match[1]),
+    targetUserId: Number(match[2])
+  };
+}
+
+function getCoupleKeyByUserIds(user1Id, user2Id) {
+  const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
+  return `${ids[0]}:${ids[1]}`;
+}
+
+function parseCreateCommandInput(text) {
+  const cleaned = String(text || "").trim().replace(/\s+/g, " ");
+  const parts = cleaned.split(" ");
+
+  if (parts.length < 2) return null;
+
+  const trigger = parts[0].trim().toLowerCase();
+  const actionText = parts.slice(1).join(" ").trim();
+
+  if (!trigger || !actionText) return null;
+  return { trigger, actionText };
+}
+
+function isValidTrigger(trigger) {
+  return /^[a-zA-Zа-яА-ЯёЁіІїЇєЄ0-9_-]{2,20}$/.test(trigger);
+}
+
 function getRandomGift() {
   const gifts = [
     "шоколад 🍫",
@@ -262,10 +382,10 @@ function getHuntResult() {
 }
 
 function getSniperResult() {
-  if (Math.random() < 0.5) {
+  if (Math.random() < 0.45) {
     return {
       text: "💥 Попадание!",
-      coins: Math.floor(Math.random() * 11)
+      coins: Math.floor(Math.random() * 9) + 2
     };
   }
 
@@ -287,26 +407,26 @@ function getLieResult() {
 function getBasketballResult() {
   const roll = Math.random();
 
-  if (roll < 0.12) {
+  if (roll < 0.08) {
     return {
       type: "jackpot",
-      text: "🏀 Идеальный дальний бросок! Мяч залетел очень красиво.",
-      coins: Math.floor(Math.random() * 31) + 30
+      text: "🏀 Идеальный дальний бросок!",
+      coins: Math.floor(Math.random() * 21) + 20
     };
   }
 
-  if (roll < 0.32) {
+  if (roll < 0.28) {
     return {
       type: "win",
       text: "🏀 Попал! Хороший бросок.",
-      coins: Math.floor(Math.random() * 11) + 10
+      coins: Math.floor(Math.random() * 8) + 6
     };
   }
 
   return {
     type: "fail",
     text: "❌ Промах. Мяч отскочил от кольца.",
-    coins: -(Math.floor(Math.random() * 6) + 5)
+    coins: -(Math.floor(Math.random() * 5) + 3)
   };
 }
 
@@ -324,8 +444,8 @@ function getKnbBotChoiceRareWin(playerChoice) {
 
   const roll = Math.random();
 
-  if (roll < 0.15) return beats[playerChoice];
-  if (roll < 0.45) return playerChoice;
+  if (roll < 0.12) return beats[playerChoice];
+  if (roll < 0.40) return playerChoice;
   return losesTo[playerChoice];
 }
 
@@ -348,14 +468,14 @@ function resolveKnb(playerChoice, botChoice) {
     return {
       type: "win",
       text: "🎉 Ты выиграл у бота.",
-      coins: Math.floor(Math.random() * 8) + 8
+      coins: Math.floor(Math.random() * 7) + 5
     };
   }
 
   return {
     type: "lose",
     text: "💀 Бот выиграл.",
-    coins: -(Math.floor(Math.random() * 5) + 4)
+    coins: -(Math.floor(Math.random() * 4) + 3)
   };
 }
 
@@ -371,6 +491,40 @@ function parseTimeEditAmount(rawValue, rawUnit = "") {
 
   if (["м", "мин", "минута", "минуты", "минут", "m"].includes(unit)) {
     return value * 60 * 1000;
+  }
+
+  return null;
+}
+
+function getCooldownColumnAndMsByName(rawName) {
+  const name = normalizeText(rawName);
+
+  if (["деньги", "монеты", "money", "daily"].includes(name)) {
+    return { column: "last_daily_at", cooldownMs: MONEY_COOLDOWN_MS, title: "деньги" };
+  }
+  if (["охота", "hunt"].includes(name)) {
+    return { column: "last_hunt_at", cooldownMs: HUNT_COOLDOWN_MS, title: "охота" };
+  }
+  if (["снайпер", "sniper"].includes(name)) {
+    return { column: "last_sniper_at", cooldownMs: SNIPER_COOLDOWN_MS, title: "снайпер" };
+  }
+  if (["ограбление", "ограбить", "robbery"].includes(name)) {
+    return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
+  }
+  if (["ограбление банка", "банк", "bank", "heist"].includes(name)) {
+    return { column: "last_bank_at", cooldownMs: BANK_HEIST_COOLDOWN_MS, title: "ограбление банка" };
+  }
+  if (["банкомат", "взлом банкомата", "atm"].includes(name)) {
+    return { column: "last_atm_hack_at", cooldownMs: ATM_HACK_COOLDOWN_MS, title: "взлом банкомата" };
+  }
+  if (["инкассация", "нападение на инкассацию", "van"].includes(name)) {
+    return { column: "last_van_heist_at", cooldownMs: VAN_HEIST_COOLDOWN_MS, title: "нападение на инкассацию" };
+  }
+  if (["баскетбол", "basketball"].includes(name)) {
+    return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
+  }
+  if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
+    return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
   }
 
   return null;
@@ -416,91 +570,6 @@ function getAdoptionDecisionKeyboard(requestId) {
   };
 }
 
-function getPendingKey(chatId, userId) {
-  return `${chatId}:${userId}`;
-}
-
-function addChatMember(chatId, user) {
-  if (!chatId || !user || !user.id || user.is_bot) return;
-
-  const key = String(chatId);
-  if (!chatMembers[key]) chatMembers[key] = {};
-
-  chatMembers[key][String(user.id)] = {
-    id: user.id,
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    username: user.username || ""
-  };
-}
-
-function getRandomChatMember(chatId) {
-  const key = String(chatId);
-  const members = Object.values(chatMembers[key] || {});
-  if (!members.length) return null;
-  return members[Math.floor(Math.random() * members.length)];
-}
-
-function getRandomFromArray(arr) {
-  if (!arr || !arr.length) return null;
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function isRequestExpired(createdAt, ttlMs) {
-  return Date.now() - createdAt > ttlMs;
-}
-
-function parseGiftPayload(payload) {
-  const str = String(payload || "");
-
-  if (str === "coins_50") return { type: "self", amount: 50 };
-  if (str === "coins_100") return { type: "self", amount: 100 };
-  if (str === "coins_200") return { type: "self", amount: 200 };
-  if (str === "coins_300") return { type: "self", amount: 300 };
-
-  const match = str.match(/^giftcoins_(50|100|200|300)_(\d+)$/);
-  if (!match) return null;
-
-  return {
-    type: "gift",
-    amount: Number(match[1]),
-    targetUserId: Number(match[2])
-  };
-}
-
-function getCoupleKeyByUserIds(user1Id, user2Id) {
-  const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
-  return `${ids[0]}:${ids[1]}`;
-}
-
-function getCooldownColumnAndMsByName(rawName) {
-  const name = normalizeText(rawName);
-
-  if (["деньги", "монеты", "money", "daily"].includes(name)) {
-    return { column: "last_daily_at", cooldownMs: MONEY_COOLDOWN_MS, title: "деньги" };
-  }
-  if (["охота", "hunt"].includes(name)) {
-    return { column: "last_hunt_at", cooldownMs: HUNT_COOLDOWN_MS, title: "охота" };
-  }
-  if (["снайпер", "sniper"].includes(name)) {
-    return { column: "last_sniper_at", cooldownMs: SNIPER_COOLDOWN_MS, title: "снайпер" };
-  }
-  if (["ограбление", "ограбить", "robbery"].includes(name)) {
-    return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
-  }
-  if (["ограбление банка", "банк", "heist", "bank"].includes(name)) {
-    return { column: "last_bank_at", cooldownMs: BANK_HEIST_COOLDOWN_MS, title: "ограбление банка" };
-  }
-  if (["баскетбол", "basketball"].includes(name)) {
-    return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
-  }
-  if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
-    return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
-  }
-
-  return null;
-}
-
 // =========================
 // LEVELS
 // =========================
@@ -534,6 +603,386 @@ function getLevelInfoByXp(xp) {
     remaining,
     isMax: level >= MAX_LEVEL
   };
+}
+
+// =========================
+// CHAT USERS
+// =========================
+function addChatMember(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = String(chatId);
+  if (!chatMembers[key]) chatMembers[key] = {};
+
+  chatMembers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || ""
+  };
+}
+
+function getRandomChatMember(chatId) {
+  const key = String(chatId);
+  const members = Object.values(chatMembers[key] || {});
+  if (!members.length) return null;
+  return members[Math.floor(Math.random() * members.length)];
+}
+
+function addRecentActiveUser(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = String(chatId);
+  if (!recentActiveUsers[key]) recentActiveUsers[key] = {};
+
+  recentActiveUsers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || "",
+    last_seen_at: Date.now()
+  };
+}
+
+function getRecentActiveCandidates(chatId, excludeUserIds = []) {
+  const key = String(chatId);
+  const users = Object.values(recentActiveUsers[key] || {});
+  const now = Date.now();
+
+  return users.filter((user) => {
+    if (!user || !user.id) return false;
+    if (excludeUserIds.includes(user.id)) return false;
+    return now - (user.last_seen_at || 0) <= ACTIVE_WINDOW_MS;
+  });
+}
+
+// =========================
+// DATABASE
+// =========================
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id BIGINT PRIMARY KEY,
+      first_name TEXT DEFAULT '',
+      last_name TEXT DEFAULT '',
+      username TEXT DEFAULT '',
+      kills INTEGER DEFAULT 0,
+      hugs INTEGER DEFAULT 0,
+      kisses INTEGER DEFAULT 0,
+      hits INTEGER DEFAULT 0,
+      bites INTEGER DEFAULT 0,
+      pats INTEGER DEFAULT 0,
+      kicks INTEGER DEFAULT 0,
+      slaps INTEGER DEFAULT 0,
+      punches INTEGER DEFAULT 0,
+      licks INTEGER DEFAULT 0,
+      steals INTEGER DEFAULT 0,
+      scams INTEGER DEFAULT 0,
+      destroys INTEGER DEFAULT 0,
+      wakes INTEGER DEFAULT 0,
+      freezes INTEGER DEFAULT 0,
+      saves INTEGER DEFAULT 0,
+      balance INTEGER DEFAULT 0,
+      respect INTEGER DEFAULT 0,
+      xp INTEGER DEFAULT 0,
+      level INTEGER DEFAULT 1,
+      last_daily_at TIMESTAMPTZ,
+      last_hunt_at TIMESTAMPTZ,
+      last_sniper_at TIMESTAMPTZ,
+      last_robbery_at TIMESTAMPTZ,
+      last_bank_at TIMESTAMPTZ,
+      last_atm_hack_at TIMESTAMPTZ,
+      last_van_heist_at TIMESTAMPTZ,
+      last_basketball_at TIMESTAMPTZ,
+      last_knb_at TIMESTAMPTZ,
+      total INTEGER DEFAULT 0
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wanted_status (
+      user_id BIGINT PRIMARY KEY,
+      level INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lay_low_status (
+      user_id BIGINT PRIMARY KEY,
+      until_at TIMESTAMPTZ NOT NULL,
+      last_reduce_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT FALSE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS profile_messages (
+      message_id BIGINT PRIMARY KEY,
+      target_user_id BIGINT NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_seen_users (
+      chat_id BIGINT NOT NULL,
+      user_id BIGINT NOT NULL,
+      first_name TEXT DEFAULT '',
+      last_name TEXT DEFAULT '',
+      username TEXT DEFAULT '',
+      PRIMARY KEY (chat_id, user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS star_purchases (
+      telegram_payment_charge_id TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      payload TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS custom_commands (
+      id SERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      trigger TEXT NOT NULL UNIQUE,
+      action_text TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS marriages (
+      id SERIAL PRIMARY KEY,
+      user1_id BIGINT NOT NULL,
+      user2_id BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS adoptions (
+      id SERIAL PRIMARY KEY,
+      parent_user_id BIGINT NOT NULL,
+      child_user_id BIGINT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS favorite_children (
+      parent_user_id BIGINT PRIMARY KEY,
+      child_user_id BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS family_budgets (
+      family_key TEXT PRIMARY KEY,
+      balance INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS piggy_banks (
+      child_user_id BIGINT PRIMARY KEY,
+      balance INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_dreams (
+      child_user_id BIGINT PRIMARY KEY,
+      dream_text TEXT NOT NULL,
+      dream_balance INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_punishments (
+      child_user_id BIGINT PRIMARY KEY,
+      punished_by_user_id BIGINT NOT NULL,
+      until_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_good_deeds (
+      id SERIAL PRIMARY KEY,
+      child_user_id BIGINT NOT NULL,
+      added_by_user_id BIGINT NOT NULL,
+      deed_text TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_obedience (
+      child_user_id BIGINT PRIMARY KEY,
+      value INTEGER DEFAULT 50,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS police_jail (
+      user_id BIGINT PRIMARY KEY,
+      until_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_shields (
+      user_id BIGINT PRIMARY KEY,
+      count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS jail_actions (
+      user_id BIGINT PRIMARY KEY,
+      last_escape_at TIMESTAMPTZ,
+      last_lawyer_at TIMESTAMPTZ,
+      last_bribe_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS couple_states (
+      couple_key TEXT PRIMARY KEY,
+      user1_id BIGINT NOT NULL,
+      user2_id BIGINT NOT NULL,
+      jealousy INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventories (
+      user_id BIGINT NOT NULL,
+      item_key TEXT NOT NULL,
+      count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, item_key)
+    )
+  `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS xp INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_robbery_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bank_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_atm_hack_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_van_heist_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
+
+  console.log("✅ Database ready");
+}
+
+async function initUser(user) {
+  if (!user || !user.id) return;
+
+  await pool.query(
+    `
+    INSERT INTO users (user_id, first_name, last_name, username)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE users.first_name END,
+      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE users.last_name END,
+      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE users.username END
+    `,
+    [
+      user.id,
+      (user.first_name || "").trim(),
+      (user.last_name || "").trim(),
+      (user.username || "").trim()
+    ]
+  );
+
+  await ensureWantedRow(user.id);
+  await ensureLayLowRow(user.id);
+  await ensureShieldRow(user.id);
+}
+
+async function saveSeenUser(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  await pool.query(
+    `
+    INSERT INTO chat_seen_users (chat_id, user_id, first_name, last_name, username)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (chat_id, user_id)
+    DO UPDATE SET
+      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE chat_seen_users.first_name END,
+      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE chat_seen_users.last_name END,
+      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE chat_seen_users.username END
+    `,
+    [
+      chatId,
+      user.id,
+      (user.first_name || "").trim(),
+      (user.last_name || "").trim(),
+      (user.username || "").trim()
+    ]
+  );
+}
+
+async function getUserStats(userId) {
+  const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
+  return result.rows[0] || null;
+}
+
+async function getStoredUser(userId) {
+  const stats = await getUserStats(userId);
+  if (!stats) return null;
+
+  return {
+    id: Number(stats.user_id),
+    first_name: stats.first_name || "",
+    last_name: stats.last_name || "",
+    username: stats.username || ""
+  };
+}
+
+async function saveProfileMessage(messageId, targetUserId) {
+  await pool.query(
+    `
+    INSERT INTO profile_messages (message_id, target_user_id)
+    VALUES ($1, $2)
+    ON CONFLICT (message_id)
+    DO UPDATE SET target_user_id = EXCLUDED.target_user_id
+    `,
+    [messageId, targetUserId]
+  );
+}
+
+async function getProfileOwnerByMessageId(messageId) {
+  const result = await pool.query(
+    `SELECT target_user_id FROM profile_messages WHERE message_id = $1`,
+    [messageId]
+  );
+  return result.rows[0] ? Number(result.rows[0].target_user_id) : null;
 }
 
 async function addXpToUser(userId, amount) {
@@ -589,8 +1038,328 @@ async function appendLevelUpIfNeeded(text, userId, xpAmount) {
   }
 }
 
+async function transferCoins(fromUserId, toUserId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const fromResult = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [fromUserId]
+    );
+    const toResult = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [toUserId]
+    );
+
+    if (!fromResult.rows[0] || !toResult.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const fromBalance = Number(fromResult.rows[0].balance || 0);
+    if (fromBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    const updatedFrom = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [fromUserId, amount]
+    );
+
+    const updatedTo = await client.query(
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
+      [toUserId, amount]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      fromBalance: Number(updatedFrom.rows[0].balance || 0),
+      toBalance: Number(updatedTo.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function addCoinsToUser(userId, amount) {
+  const result = await pool.query(
+    `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
+    [userId, amount]
+  );
+  return Number(result.rows[0]?.balance || 0);
+}
+
+async function deductCoinsSafe(userId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const row = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const currentBalance = Number(row.rows[0].balance || 0);
+    const toDeduct = Math.min(currentBalance, amount);
+
+    const updated = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [userId, toDeduct]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      deducted: toDeduct,
+      balance: Number(updated.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function deductCoinsExact(userId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const row = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const current = Number(row.rows[0].balance || 0);
+    if (current < amount) {
+      await client.query("ROLLBACK");
+      return { ok: false, balance: current };
+    }
+
+    const updated = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [userId, amount]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      ok: true,
+      balance: Number(updated.rows[0]?.balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function incrementStat(targetUserId, statField) {
+  const allowedFields = [
+    "kills", "hugs", "kisses", "hits", "bites", "pats", "kicks", "slaps",
+    "punches", "licks", "steals", "scams", "destroys", "wakes", "freezes",
+    "saves"
+  ];
+
+  if (!allowedFields.includes(statField)) return;
+
+  await pool.query(
+    `
+    UPDATE users
+    SET ${statField} = ${statField} + 1,
+        total = total + 1
+    WHERE user_id = $1
+    `,
+    [targetUserId]
+  );
+}
+
 // =========================
-// WANTED / ROZYSK / LAY LOW
+// INVENTORY / BLACK MARKET
+// =========================
+async function ensureInventoryRow(userId, itemKey) {
+  await pool.query(
+    `
+    INSERT INTO inventories (user_id, item_key, count, updated_at)
+    VALUES ($1, $2, 0, NOW())
+    ON CONFLICT (user_id, item_key) DO NOTHING
+    `,
+    [userId, itemKey]
+  );
+}
+
+async function getInventoryItem(userId, itemKey) {
+  await ensureInventoryRow(userId, itemKey);
+  const result = await pool.query(
+    `SELECT user_id, item_key, count, updated_at FROM inventories WHERE user_id = $1 AND item_key = $2 LIMIT 1`,
+    [userId, itemKey]
+  );
+  return result.rows[0] || null;
+}
+
+async function getFullInventory(userId) {
+  const result = await pool.query(
+    `
+    SELECT item_key, count, updated_at
+    FROM inventories
+    WHERE user_id = $1
+    ORDER BY item_key ASC
+    `,
+    [userId]
+  );
+
+  const byKey = {};
+  for (const row of result.rows) {
+    byKey[row.item_key] = Number(row.count || 0);
+  }
+
+  for (const key of Object.keys(ITEMS)) {
+    if (typeof byKey[key] === "undefined") byKey[key] = 0;
+  }
+
+  return byKey;
+}
+
+async function addItemToInventory(userId, itemKey, amount = 1) {
+  await ensureInventoryRow(userId, itemKey);
+  const result = await pool.query(
+    `
+    UPDATE inventories
+    SET count = count + $3,
+        updated_at = NOW()
+    WHERE user_id = $1 AND item_key = $2
+    RETURNING count
+    `,
+    [userId, itemKey, amount]
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+async function removeItemFromInventory(userId, itemKey, amount = 1) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+      INSERT INTO inventories (user_id, item_key, count, updated_at)
+      VALUES ($1, $2, 0, NOW())
+      ON CONFLICT (user_id, item_key) DO NOTHING
+      `,
+      [userId, itemKey]
+    );
+
+    const row = await client.query(
+      `SELECT count FROM inventories WHERE user_id = $1 AND item_key = $2 FOR UPDATE`,
+      [userId, itemKey]
+    );
+
+    const current = Number(row.rows[0]?.count || 0);
+    if (current < amount) {
+      await client.query("ROLLBACK");
+      return { ok: false, count: current };
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE inventories
+      SET count = count - $3,
+          updated_at = NOW()
+      WHERE user_id = $1 AND item_key = $2
+      RETURNING count
+      `,
+      [userId, itemKey, amount]
+    );
+
+    await client.query("COMMIT");
+    return { ok: true, count: Number(updated.rows[0]?.count || 0) };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function buyBlackMarketItem(userId, itemKey) {
+  const item = ITEMS[itemKey];
+  if (!item) throw new Error("BAD_ITEM");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO inventories (user_id, item_key, count, updated_at)
+      VALUES ($1, $2, 0, NOW())
+      ON CONFLICT (user_id, item_key) DO NOTHING
+      `,
+      [userId, itemKey]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const balance = Number(userRow.rows[0].balance || 0);
+    if (balance < item.price) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, item.price]
+    );
+
+    const itemRow = await client.query(
+      `
+      UPDATE inventories
+      SET count = count + 1,
+          updated_at = NOW()
+      WHERE user_id = $1 AND item_key = $2
+      RETURNING count
+      `,
+      [userId, itemKey]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      itemCount: Number(itemRow.rows[0]?.count || 0),
+      balance: Number(updatedUser.rows[0]?.balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function resolveItemKey(raw) {
+  const normalized = normalizeText(raw);
+  return ITEM_ALIASES[normalized] || null;
+}
+
+// =========================
+// WANTED / LAY LOW
 // =========================
 function getWantedStatusText(level) {
   const val = Number(level || 0);
@@ -606,18 +1375,10 @@ function getWantedEffectText(level) {
   const val = Number(level || 0);
   if (val <= 0) return "• полиция почти не реагирует";
   if (val === 1) return "• полиция иногда реагирует\n• шанс штрафа выше";
-  if (val === 2) return "• полиция чаще реагирует\n• штрафы выше\n• банк опаснее";
-  if (val === 3) return "• высокий шанс ареста\n• побег сложнее\n• банк очень опасен";
-  if (val === 4) return "• полиция почти всегда рядом\n• ограбления часто проваливаются\n• тюрьма очень вероятна";
-  return "• почти любое преступление может закончиться арестом\n• банк почти всегда с тревогой\n• штрафы и срок выше";
-}
-
-async function getWantedRow(userId) {
-  const result = await pool.query(
-    `SELECT user_id, level, updated_at FROM wanted_status WHERE user_id = $1 LIMIT 1`,
-    [userId]
-  );
-  return result.rows[0] || null;
+  if (val === 2) return "• полиция чаще реагирует\n• штрафы выше\n• криминал опаснее";
+  if (val === 3) return "• высокий шанс ареста\n• банк и инкассация очень опасны";
+  if (val === 4) return "• полиция почти всегда рядом\n• провалы и тюрьма вероятнее";
+  return "• почти любое преступление может закончиться арестом";
 }
 
 async function ensureWantedRow(userId) {
@@ -629,6 +1390,14 @@ async function ensureWantedRow(userId) {
     `,
     [userId]
   );
+}
+
+async function getWantedRow(userId) {
+  const result = await pool.query(
+    `SELECT user_id, level, updated_at FROM wanted_status WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
 }
 
 async function changeWantedLevel(userId, diff) {
@@ -836,1127 +1605,6 @@ async function processPassiveWantedDecay() {
 }
 
 // =========================
-// CLEANUP
-// =========================
-function cleanupPendingRequests() {
-  for (const requestId of Object.keys(pendingMarriagesByRequestId)) {
-    const req = pendingMarriagesByRequestId[requestId];
-    if (!req || isRequestExpired(req.createdAt, MARRIAGE_REQUEST_MS)) {
-      if (req?.userKey) delete pendingMarriagesByUserKey[req.userKey];
-      delete pendingMarriagesByRequestId[requestId];
-    }
-  }
-
-  for (const requestId of Object.keys(pendingAdoptionsByRequestId)) {
-    const req = pendingAdoptionsByRequestId[requestId];
-    if (!req || isRequestExpired(req.createdAt, ADOPTION_REQUEST_MS)) {
-      if (req?.userKey) delete pendingAdoptionsByUserKey[req.userKey];
-      delete pendingAdoptionsByRequestId[requestId];
-    }
-  }
-}
-
-setInterval(cleanupPendingRequests, 60 * 1000);
-
-setInterval(async () => {
-  try {
-    await processLayLowReductions();
-    await processPassiveWantedDecay();
-  } catch (error) {
-    console.error("Ошибка периодической обработки lay low / wanted:", error);
-  }
-}, 60 * 1000);
-
-// =========================
-// BOMB
-// =========================
-function getBombChatKey(chatId) {
-  return String(chatId);
-}
-
-function addRecentActiveUser(chatId, user) {
-  if (!chatId || !user || !user.id || user.is_bot) return;
-
-  const key = getBombChatKey(chatId);
-  if (!recentActiveUsers[key]) recentActiveUsers[key] = {};
-
-  recentActiveUsers[key][String(user.id)] = {
-    id: user.id,
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    username: user.username || "",
-    last_seen_at: Date.now()
-  };
-}
-
-function getRecentActiveCandidates(chatId, excludeUserIds = []) {
-  const key = getBombChatKey(chatId);
-  const users = Object.values(recentActiveUsers[key] || {});
-  const now = Date.now();
-
-  return users.filter((user) => {
-    if (!user || !user.id) return false;
-    if (excludeUserIds.includes(user.id)) return false;
-    return now - (user.last_seen_at || 0) <= ACTIVE_WINDOW_MS;
-  });
-}
-
-function clearBomb(chatId) {
-  const key = getBombChatKey(chatId);
-  if (activeBombs[key]?.timer) clearTimeout(activeBombs[key].timer);
-  delete activeBombs[key];
-}
-
-async function explodeBomb(chatId) {
-  const key = getBombChatKey(chatId);
-  const bomb = activeBombs[key];
-  if (!bomb) return;
-
-  const holder = bomb.holder;
-  clearBomb(chatId);
-
-  await safeSendMessage(
-    chatId,
-    `💥 Бомба взорвалась!\n${getUserLink(holder)} не успел передать бомбу.`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-}
-
-async function startBombTimer(chatId) {
-  const key = getBombChatKey(chatId);
-  const bomb = activeBombs[key];
-  if (!bomb) return;
-
-  if (bomb.timer) clearTimeout(bomb.timer);
-
-  bomb.timer = setTimeout(async () => {
-    try {
-      await explodeBomb(chatId);
-    } catch (error) {
-      console.error("Ошибка взрыва бомбы:", error);
-    }
-  }, BOMB_TIMER_MS);
-}
-
-async function passBomb(chatId, fromUser) {
-  const key = getBombChatKey(chatId);
-  const bomb = activeBombs[key];
-  if (!bomb) return false;
-
-  const excludeIds = [fromUser.id];
-  if (bomb.previousHolderId) excludeIds.push(bomb.previousHolderId);
-
-  let candidates = getRecentActiveCandidates(chatId, excludeIds);
-  if (!candidates.length) candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
-
-  if (!candidates.length) {
-    clearBomb(chatId);
-
-    await safeSendMessage(
-      chatId,
-      `💣 ${getUserLink(fromUser)} попытался передать бомбу, но рядом никого не оказалось.\n\nБомба исчезла.`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-    return true;
-  }
-
-  const nextHolder = getRandomFromArray(candidates);
-
-  activeBombs[key] = {
-    holder: nextHolder,
-    previousHolderId: fromUser.id,
-    timer: null
-  };
-
-  await safeSendMessage(
-    chatId,
-    `💣 ${getUserLink(fromUser)} передал бомбу!\n\n🔥 Теперь бомба у: ${getUserLink(nextHolder)}\n⏳ У него 5 секунд, чтобы написать: передать`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-
-  await startBombTimer(chatId);
-  return true;
-}
-
-// =========================
-// BANK HEIST
-// =========================
-function getBankHeistChatKey(chatId) {
-  return String(chatId);
-}
-
-function clearBankHeist(chatId) {
-  delete activeBankHeists[getBankHeistChatKey(chatId)];
-}
-
-function getBankHeist(chatId) {
-  return activeBankHeists[getBankHeistChatKey(chatId)] || null;
-}
-
-function getHeistMembersList(heist) {
-  return Object.values(heist?.members || {});
-}
-
-function getHeistMemberCount(heist) {
-  return getHeistMembersList(heist).length;
-}
-
-function isHeistParticipant(heist, userId) {
-  return !!heist?.members?.[String(userId)];
-}
-
-function getMaskedMembersCount(heist) {
-  return getHeistMembersList(heist).filter((m) => m.hasMask).length;
-}
-
-function getHeistStageText(stage) {
-  if (stage === "gathering") return "сбор команды";
-  if (stage === "inside") return "внутри банка";
-  if (stage === "escape") return "побег";
-  return "неизвестно";
-}
-
-function getHeistMembersText(heist) {
-  const members = getHeistMembersList(heist);
-  if (!members.length) return "нет";
-
-  return members
-    .map((member, index) => {
-      const crown = Number(member.id) === Number(heist.leaderId) ? "👑 " : "";
-      const mask = member.hasMask ? "🎭" : "❌";
-      return `${index + 1}. ${crown}${getUserLink(member)} — маска: ${mask}`;
-    })
-    .join("\n");
-}
-
-function getHeistStatusText(heist) {
-  if (!heist) return "❌ В этом чате сейчас нет активного ограбления банка.";
-
-  const policeText = heist.policeAlert ? "🚨 полиция уже настороже" : "😶 пока тихо";
-  const masked = getMaskedMembersCount(heist);
-
-  return `🏦 Ограбление банка
-
-👑 Лидер: ${getUserLink(heist.members[String(heist.leaderId)])}
-📍 Этап: ${escapeHtml(getHeistStageText(heist.stage))}
-👥 Команда: ${getHeistMemberCount(heist)}/${BANK_HEIST_MAX_MEMBERS}
-🎭 Маски: ${masked}/${getHeistMemberCount(heist)}
-🚔 Полиция: ${policeText}
-💰 Общая добыча: ${Number(heist.loot || 0)} монет
-
-Участники:
-${getHeistMembersText(heist)}
-
-Команды:
-• присоединиться к ограблению
-• в дело
-• купить маску
-• статус ограбления
-• начать штурм
-• вскрыть сейф
-• сбежать с банка
-• отменить ограбление`;
-}
-
-function createBankHeist(chatId, leaderUser) {
-  const key = getBankHeistChatKey(chatId);
-
-  activeBankHeists[key] = {
-    chatId,
-    leaderId: Number(leaderUser.id),
-    stage: "gathering",
-    policeAlert: false,
-    loot: 0,
-    createdAt: Date.now(),
-    startedAt: null,
-    members: {
-      [String(leaderUser.id)]: {
-        id: Number(leaderUser.id),
-        first_name: leaderUser.first_name || "",
-        last_name: leaderUser.last_name || "",
-        username: leaderUser.username || "",
-        hasMask: false
-      }
-    }
-  };
-
-  return activeBankHeists[key];
-}
-
-async function addUserToBankHeist(chatId, user) {
-  const heist = getBankHeist(chatId);
-  if (!heist) return { ok: false, reason: "no_heist" };
-
-  if (heist.stage !== "gathering") {
-    return { ok: false, reason: "already_started" };
-  }
-
-  if (isHeistParticipant(heist, user.id)) {
-    return { ok: false, reason: "already_member" };
-  }
-
-  const count = getHeistMemberCount(heist);
-  if (count >= BANK_HEIST_MAX_MEMBERS) {
-    return { ok: false, reason: "team_full" };
-  }
-
-  heist.members[String(user.id)] = {
-    id: Number(user.id),
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    username: user.username || "",
-    hasMask: false
-  };
-
-  return { ok: true, heist };
-}
-
-async function buyMaskForHeistMember(chatId, userId) {
-  const heist = getBankHeist(chatId);
-  if (!heist) throw new Error("NO_HEIST");
-  if (heist.stage !== "gathering") throw new Error("WRONG_STAGE");
-  if (!isHeistParticipant(heist, userId)) throw new Error("NOT_MEMBER");
-
-  const member = heist.members[String(userId)];
-  if (member.hasMask) throw new Error("ALREADY_HAVE_MASK");
-
-  const result = await deductCoinsExact(userId, BANK_MASK_COST);
-  if (!result.ok) throw new Error("NOT_ENOUGH_MONEY");
-
-  member.hasMask = true;
-
-  return {
-    heist,
-    userBalance: result.balance
-  };
-}
-
-function getBankEntryOutcome(heist, wantedAverage) {
-  const members = getHeistMemberCount(heist);
-  const masks = getMaskedMembersCount(heist);
-  const wanted = Number(wantedAverage || 0);
-
-  let silentEntryChance = 0.03 + masks * 0.03 - wanted * 0.02;
-  let noisyEntryChance = 0.12 + members * 0.03 + masks * 0.04 - wanted * 0.01;
-
-  silentEntryChance = clamp(silentEntryChance, 0.01, 0.14);
-  noisyEntryChance = clamp(noisyEntryChance, 0.08, 0.28);
-
-  const roll = Math.random();
-
-  if (roll < silentEntryChance) return { type: "clean_success" };
-  if (roll < silentEntryChance + noisyEntryChance) return { type: "noisy_success" };
-  if (roll < 0.78) return { type: "partial_fail_alarm" };
-  return { type: "total_fail" };
-}
-
-function getVaultOutcome(heist, wantedAverage) {
-  const members = getHeistMemberCount(heist);
-  const masks = getMaskedMembersCount(heist);
-  const wanted = Number(wantedAverage || 0);
-
-  let jackpotChance = 0.01;
-  let fullChance = 0.08 + masks * 0.02 - wanted * 0.02;
-  let mediumChance = 0.20 + members * 0.03 - wanted * 0.02;
-  let smallChance = 0.30;
-
-  if (heist.policeAlert) {
-    jackpotChance = 0.005;
-    fullChance -= 0.04;
-    mediumChance -= 0.05;
-    smallChance -= 0.05;
-  }
-
-  jackpotChance = clamp(jackpotChance, 0.005, 0.03);
-  fullChance = clamp(fullChance, 0.02, 0.16);
-  mediumChance = clamp(mediumChance, 0.07, 0.28);
-  smallChance = clamp(smallChance, 0.15, 0.30);
-
-  const roll = Math.random();
-
-  if (roll < jackpotChance) {
-    return {
-      type: "jackpot",
-      loot: Math.floor(Math.random() * 61) + 220
-    };
-  }
-
-  if (roll < jackpotChance + fullChance) {
-    return {
-      type: "success",
-      loot: Math.floor(Math.random() * 71) + 110
-    };
-  }
-
-  if (roll < jackpotChance + fullChance + mediumChance) {
-    return {
-      type: "medium",
-      loot: Math.floor(Math.random() * 41) + 50
-    };
-  }
-
-  if (roll < jackpotChance + fullChance + mediumChance + smallChance) {
-    return {
-      type: "small",
-      loot: Math.floor(Math.random() * 21) + 15
-    };
-  }
-
-  if (roll < 0.88) {
-    return { type: "fail_alarm", loot: 0 };
-  }
-
-  return { type: "disaster", loot: 0 };
-}
-
-function getEscapeOutcome(heist, wantedAverage) {
-  const members = getHeistMemberCount(heist);
-  const masks = getMaskedMembersCount(heist);
-  const loot = Number(heist.loot || 0);
-  const wanted = Number(wantedAverage || 0);
-
-  let fullEscapeChance = 0.05 + masks * 0.03 - wanted * 0.02;
-
-  if (members >= 3) fullEscapeChance -= 0.02;
-  if (heist.policeAlert) fullEscapeChance -= 0.08;
-  if (loot >= 80) fullEscapeChance -= 0.03;
-  if (loot >= 140) fullEscapeChance -= 0.04;
-  if (loot >= 220) fullEscapeChance -= 0.05;
-
-  fullEscapeChance = clamp(fullEscapeChance, 0.01, 0.16);
-
-  const partialEscapeChance = fullEscapeChance + 0.22;
-  const oneCaughtChance = partialEscapeChance + 0.28;
-
-  const roll = Math.random();
-
-  if (roll < fullEscapeChance) return { type: "full_escape" };
-  if (roll < partialEscapeChance) return { type: "half_escape" };
-  if (roll < oneCaughtChance) return { type: "one_caught" };
-  return { type: "all_caught" };
-}
-
-async function getAverageWantedForHeist(heist) {
-  const members = getHeistMembersList(heist);
-  if (!members.length) return 0;
-
-  let sum = 0;
-  for (const member of members) {
-    const row = await getWantedRow(member.id);
-    sum += Number(row?.level || 0);
-  }
-  return sum / members.length;
-}
-
-async function updateBankHeistCooldownForUsers(userIds) {
-  if (!Array.isArray(userIds) || !userIds.length) return;
-  await pool.query(
-    `UPDATE users SET last_bank_at = NOW() WHERE user_id = ANY($1::bigint[])`,
-    [userIds.map((id) => Number(id))]
-  );
-}
-
-async function getBankHeistCooldown(userId) {
-  const result = await pool.query(
-    `SELECT last_bank_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
-  const row = result.rows[0];
-  if (!row || !row.last_bank_at) return 0;
-
-  const nextTime = new Date(new Date(row.last_bank_at).getTime() + BANK_HEIST_COOLDOWN_MS);
-  const diff = nextTime.getTime() - Date.now();
-
-  return diff > 0 ? diff : 0;
-}
-
-async function deductCoinsExact(userId, amount) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const row = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [userId]
-    );
-
-    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
-
-    const current = Number(row.rows[0].balance || 0);
-    if (current < amount) {
-      await client.query("ROLLBACK");
-      return { ok: false, balance: current };
-    }
-
-    const updated = await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
-      [userId, amount]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      ok: true,
-      balance: Number(updated.rows[0]?.balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function punishHeistMembersWithPolice(chatId, heist, mode, extraText = "") {
-  const members = getHeistMembersList(heist);
-  const memberIds = members.map((m) => Number(m.id));
-  await updateBankHeistCooldownForUsers(memberIds);
-
-  for (const user of members) {
-    await changeWantedLevel(user.id, 1);
-  }
-
-  if (mode === "total_fail_before_entry") {
-    const arrestedCount = members.length >= 3 ? 2 : 1;
-    const shuffled = [...members].sort(() => Math.random() - 0.5);
-    const arrested = shuffled.slice(0, arrestedCount);
-    const fined = shuffled.slice(arrestedCount);
-
-    for (const user of arrested) {
-      await sendUserToJail(user.id, POLICE_JAIL_MS);
-      await changeWantedLevel(user.id, 1);
-    }
-
-    let text = `🚔 Ограбление банка сорвалось ещё на входе!
-
-${extraText ? `${extraText}\n` : ""}Полиция приехала слишком быстро.`;
-
-    if (arrested.length) {
-      text += `\n\n⛓ Арестованы:\n${arrested.map((u) => `• ${getUserLink(u)}`).join("\n")}`;
-    }
-
-    if (fined.length) {
-      for (const user of fined) {
-        try {
-          await deductCoinsSafe(user.id, Math.floor(Math.random() * 31) + 20);
-        } catch (error) {
-          console.error("Ошибка штрафа банка:", error);
-        }
-      }
-      text += `\n\n💸 Остальные ушли, но получили крупные штрафы.`;
-    }
-
-    clearBankHeist(chatId);
-
-    await safeSendMessage(chatId, text, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
-    return;
-  }
-
-  if (mode === "vault_disaster") {
-    for (const user of members) {
-      await sendUserToJail(user.id, POLICE_JAIL_MS);
-      await changeWantedLevel(user.id, 1);
-    }
-
-    clearBankHeist(chatId);
-
-    await safeSendMessage(
-      chatId,
-      `🚨 Во время вскрытия сейфа всё пошло очень плохо!
-
-${extraText ? `${extraText}\n` : ""}Сработала защита банка и полиция окружила здание.
-
-⛓ Вся команда арестована:
-${members.map((u) => `• ${getUserLink(u)}`).join("\n")}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-    return;
-  }
-
-  if (mode === "all_caught_escape") {
-    for (const user of members) {
-      await sendUserToJail(user.id, POLICE_JAIL_MS);
-      await changeWantedLevel(user.id, 1);
-    }
-
-    clearBankHeist(chatId);
-
-    await safeSendMessage(
-      chatId,
-      `🚔 Побег не удался.
-
-${extraText ? `${extraText}\n` : ""}Полиция догнала всю команду.
-
-⛓ В тюрьму отправлены:
-${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
-
-💰 Добыча потеряна.`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  }
-}
-
-async function rewardHeistMembers(chatId, heist, totalLoot, options = {}) {
-  const members = getHeistMembersList(heist);
-  const memberIds = members.map((m) => Number(m.id));
-  await updateBankHeistCooldownForUsers(memberIds);
-
-  const activeMembers = options.activeMembers || members;
-  const share = Math.floor(totalLoot / activeMembers.length);
-  let leftover = totalLoot - share * activeMembers.length;
-
-  const lines = [];
-
-  for (const user of activeMembers) {
-    let amount = share;
-    if (leftover > 0) {
-      amount += 1;
-      leftover -= 1;
-    }
-    const newBalance = await addCoinsToUser(user.id, amount);
-    await changeWantedLevel(user.id, 2);
-    lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
-  }
-
-  clearBankHeist(chatId);
-
-  await safeSendMessage(
-    chatId,
-    `${options.title || "💰 Ограбление банка удалось!"}
-
-${options.subtitle ? `${options.subtitle}\n\n` : ""}Раздел добычи:
-${lines.join("\n")}`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-}
-
-// =========================
-// DATABASE
-// =========================
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      user_id BIGINT PRIMARY KEY,
-      first_name TEXT DEFAULT '',
-      last_name TEXT DEFAULT '',
-      username TEXT DEFAULT '',
-      kills INTEGER DEFAULT 0,
-      hugs INTEGER DEFAULT 0,
-      kisses INTEGER DEFAULT 0,
-      hits INTEGER DEFAULT 0,
-      bites INTEGER DEFAULT 0,
-      pats INTEGER DEFAULT 0,
-      kicks INTEGER DEFAULT 0,
-      slaps INTEGER DEFAULT 0,
-      punches INTEGER DEFAULT 0,
-      licks INTEGER DEFAULT 0,
-      steals INTEGER DEFAULT 0,
-      scams INTEGER DEFAULT 0,
-      destroys INTEGER DEFAULT 0,
-      wakes INTEGER DEFAULT 0,
-      freezes INTEGER DEFAULT 0,
-      saves INTEGER DEFAULT 0,
-      balance INTEGER DEFAULT 0,
-      respect INTEGER DEFAULT 0,
-      xp INTEGER DEFAULT 0,
-      level INTEGER DEFAULT 1,
-      last_daily_at TIMESTAMPTZ,
-      last_hunt_at TIMESTAMPTZ,
-      last_sniper_at TIMESTAMPTZ,
-      last_robbery_at TIMESTAMPTZ,
-      last_bank_at TIMESTAMPTZ,
-      last_basketball_at TIMESTAMPTZ,
-      last_knb_at TIMESTAMPTZ,
-      total INTEGER DEFAULT 0
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS wanted_status (
-      user_id BIGINT PRIMARY KEY,
-      level INTEGER DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS lay_low_status (
-      user_id BIGINT PRIMARY KEY,
-      until_at TIMESTAMPTZ NOT NULL,
-      last_reduce_at TIMESTAMPTZ NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW(),
-      is_active BOOLEAN DEFAULT FALSE
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS profile_messages (
-      message_id BIGINT PRIMARY KEY,
-      target_user_id BIGINT NOT NULL
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS chat_seen_users (
-      chat_id BIGINT NOT NULL,
-      user_id BIGINT NOT NULL,
-      first_name TEXT DEFAULT '',
-      last_name TEXT DEFAULT '',
-      username TEXT DEFAULT '',
-      PRIMARY KEY (chat_id, user_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS star_purchases (
-      telegram_payment_charge_id TEXT PRIMARY KEY,
-      user_id BIGINT NOT NULL,
-      payload TEXT NOT NULL,
-      amount INTEGER NOT NULL,
-      currency TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS custom_commands (
-      id SERIAL PRIMARY KEY,
-      user_id BIGINT NOT NULL,
-      trigger TEXT NOT NULL UNIQUE,
-      action_text TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS marriages (
-      id SERIAL PRIMARY KEY,
-      user1_id BIGINT NOT NULL,
-      user2_id BIGINT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      is_active BOOLEAN DEFAULT TRUE
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS adoptions (
-      id SERIAL PRIMARY KEY,
-      parent_user_id BIGINT NOT NULL,
-      child_user_id BIGINT NOT NULL UNIQUE,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      is_active BOOLEAN DEFAULT TRUE
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS favorite_children (
-      parent_user_id BIGINT PRIMARY KEY,
-      child_user_id BIGINT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS family_budgets (
-      family_key TEXT PRIMARY KEY,
-      balance INTEGER DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS piggy_banks (
-      child_user_id BIGINT PRIMARY KEY,
-      balance INTEGER DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS child_dreams (
-      child_user_id BIGINT PRIMARY KEY,
-      dream_text TEXT NOT NULL,
-      dream_balance INTEGER DEFAULT 0,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS child_punishments (
-      child_user_id BIGINT PRIMARY KEY,
-      punished_by_user_id BIGINT NOT NULL,
-      until_at TIMESTAMPTZ NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      is_active BOOLEAN DEFAULT TRUE
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS child_good_deeds (
-      id SERIAL PRIMARY KEY,
-      child_user_id BIGINT NOT NULL,
-      added_by_user_id BIGINT NOT NULL,
-      deed_text TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS child_obedience (
-      child_user_id BIGINT PRIMARY KEY,
-      value INTEGER DEFAULT 50,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS police_jail (
-      user_id BIGINT PRIMARY KEY,
-      until_at TIMESTAMPTZ NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_shields (
-      user_id BIGINT PRIMARY KEY,
-      count INTEGER DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS jail_actions (
-      user_id BIGINT PRIMARY KEY,
-      last_escape_at TIMESTAMPTZ,
-      last_lawyer_at TIMESTAMPTZ,
-      last_bribe_at TIMESTAMPTZ,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS couple_states (
-      couple_key TEXT PRIMARY KEY,
-      user1_id BIGINT NOT NULL,
-      user2_id BIGINT NOT NULL,
-      jealousy INTEGER DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS xp INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_robbery_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bank_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
-
-  console.log("✅ Database ready");
-}
-
-async function initUser(user) {
-  if (!user || !user.id) return;
-
-  await pool.query(
-    `
-    INSERT INTO users (user_id, first_name, last_name, username)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE users.first_name END,
-      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE users.last_name END,
-      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE users.username END
-    `,
-    [
-      user.id,
-      (user.first_name || "").trim(),
-      (user.last_name || "").trim(),
-      (user.username || "").trim()
-    ]
-  );
-
-  await ensureWantedRow(user.id);
-  await ensureLayLowRow(user.id);
-}
-
-async function saveSeenUser(chatId, user) {
-  if (!chatId || !user || !user.id || user.is_bot) return;
-
-  await pool.query(
-    `
-    INSERT INTO chat_seen_users (chat_id, user_id, first_name, last_name, username)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (chat_id, user_id)
-    DO UPDATE SET
-      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE chat_seen_users.first_name END,
-      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE chat_seen_users.last_name END,
-      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE chat_seen_users.username END
-    `,
-    [
-      chatId,
-      user.id,
-      (user.first_name || "").trim(),
-      (user.last_name || "").trim(),
-      (user.username || "").trim()
-    ]
-  );
-}
-
-async function getUserStats(userId) {
-  const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
-  return result.rows[0] || null;
-}
-
-async function getStoredUser(userId) {
-  const stats = await getUserStats(userId);
-  if (!stats) return null;
-
-  return {
-    id: Number(stats.user_id),
-    first_name: stats.first_name || "",
-    last_name: stats.last_name || "",
-    username: stats.username || ""
-  };
-}
-
-async function saveProfileMessage(messageId, targetUserId) {
-  await pool.query(
-    `
-    INSERT INTO profile_messages (message_id, target_user_id)
-    VALUES ($1, $2)
-    ON CONFLICT (message_id)
-    DO UPDATE SET target_user_id = EXCLUDED.target_user_id
-    `,
-    [messageId, targetUserId]
-  );
-}
-
-async function getProfileOwnerByMessageId(messageId) {
-  const result = await pool.query(
-    `SELECT target_user_id FROM profile_messages WHERE message_id = $1`,
-    [messageId]
-  );
-  return result.rows[0] ? Number(result.rows[0].target_user_id) : null;
-}
-
-async function incrementStat(targetUserId, statField) {
-  const allowedFields = [
-    "kills", "hugs", "kisses", "hits", "bites", "pats", "kicks", "slaps",
-    "punches", "licks", "steals", "scams", "destroys", "wakes", "freezes",
-    "saves"
-  ];
-
-  if (!allowedFields.includes(statField)) return;
-
-  await pool.query(
-    `
-    UPDATE users
-    SET ${statField} = ${statField} + 1,
-        total = total + 1
-    WHERE user_id = $1
-    `,
-    [targetUserId]
-  );
-}
-
-async function transferCoins(fromUserId, toUserId, amount) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const fromResult = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [fromUserId]
-    );
-    const toResult = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [toUserId]
-    );
-
-    if (!fromResult.rows[0] || !toResult.rows[0]) {
-      throw new Error("USER_NOT_FOUND");
-    }
-
-    const fromBalance = Number(fromResult.rows[0].balance || 0);
-    if (fromBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
-
-    const updatedFrom = await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
-      [fromUserId, amount]
-    );
-
-    const updatedTo = await client.query(
-      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
-      [toUserId, amount]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      fromBalance: Number(updatedFrom.rows[0].balance || 0),
-      toBalance: Number(updatedTo.rows[0].balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function addCoinsToUser(userId, amount) {
-  const result = await pool.query(
-    `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
-    [userId, amount]
-  );
-  return Number(result.rows[0]?.balance || 0);
-}
-
-async function processStarPurchase(buyerUserId, successfulPayment) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const existing = await client.query(
-      `SELECT telegram_payment_charge_id FROM star_purchases WHERE telegram_payment_charge_id = $1`,
-      [successfulPayment.telegram_payment_charge_id]
-    );
-
-    if (existing.rows.length > 0) {
-      const balanceRow = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [buyerUserId]);
-      await client.query("COMMIT");
-
-      return {
-        alreadyProcessed: true,
-        gift: false,
-        buyerBalance: Number(balanceRow.rows[0]?.balance || 0),
-        coinsAdded: 0
-      };
-    }
-
-    const parsed = parseGiftPayload(successfulPayment.invoice_payload);
-    if (!parsed) throw new Error("BAD_PAYMENT_PAYLOAD");
-
-    await client.query(
-      `
-      INSERT INTO star_purchases (
-        telegram_payment_charge_id,
-        user_id,
-        payload,
-        amount,
-        currency
-      ) VALUES ($1, $2, $3, $4, $5)
-      `,
-      [
-        successfulPayment.telegram_payment_charge_id,
-        buyerUserId,
-        successfulPayment.invoice_payload,
-        successfulPayment.total_amount,
-        successfulPayment.currency
-      ]
-    );
-
-    if (parsed.type === "self") {
-      const balanceResult = await client.query(
-        `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
-        [buyerUserId, parsed.amount]
-      );
-
-      await client.query("COMMIT");
-
-      return {
-        alreadyProcessed: false,
-        gift: false,
-        buyerBalance: Number(balanceResult.rows[0]?.balance || 0),
-        coinsAdded: parsed.amount
-      };
-    }
-
-    await client.query(
-      `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1`,
-      [parsed.targetUserId, parsed.amount]
-    );
-
-    const buyerBalanceRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [buyerUserId]
-    );
-    const targetBalanceRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [parsed.targetUserId]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      alreadyProcessed: false,
-      gift: true,
-      targetUserId: parsed.targetUserId,
-      coinsAdded: parsed.amount,
-      buyerBalance: Number(buyerBalanceRow.rows[0]?.balance || 0),
-      targetBalance: Number(targetBalanceRow.rows[0]?.balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function getRandomPairMembersFromDb(chatId) {
-  const result = await pool.query(
-    `
-    SELECT user_id, first_name, last_name, username
-    FROM chat_seen_users
-    WHERE chat_id = $1
-    ORDER BY RANDOM()
-    LIMIT 2
-    `,
-    [chatId]
-  );
-
-  if (result.rows.length < 2) return null;
-
-  return result.rows.map((row) => ({
-    id: Number(row.user_id),
-    first_name: row.first_name || "",
-    last_name: row.last_name || "",
-    username: row.username || ""
-  }));
-}
-
-// =========================
 // SHIELDS
 // =========================
 async function ensureShieldRow(userId) {
@@ -2109,7 +1757,7 @@ async function clampAllShieldsToMax() {
 }
 
 // =========================
-// MARRIAGE
+// MARRIAGE / FAMILY
 // =========================
 async function getActiveMarriageByUserId(userId) {
   const result = await pool.query(
@@ -2183,64 +1831,6 @@ async function isSpouse(userId, targetUserId) {
   );
 }
 
-// =========================
-// COUPLE STATE
-// =========================
-async function ensureCoupleState(user1Id, user2Id) {
-  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
-  const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
-
-  await pool.query(
-    `
-    INSERT INTO couple_states (couple_key, user1_id, user2_id, jealousy, updated_at)
-    VALUES ($1, $2, $3, 0, NOW())
-    ON CONFLICT (couple_key) DO NOTHING
-    `,
-    [coupleKey, ids[0], ids[1]]
-  );
-
-  return coupleKey;
-}
-
-async function getCoupleState(user1Id, user2Id) {
-  const coupleKey = await ensureCoupleState(user1Id, user2Id);
-
-  const result = await pool.query(
-    `
-    SELECT couple_key, user1_id, user2_id, jealousy, updated_at
-    FROM couple_states
-    WHERE couple_key = $1
-    LIMIT 1
-    `,
-    [coupleKey]
-  );
-
-  return result.rows[0] || null;
-}
-
-async function changeCoupleJealousy(user1Id, user2Id, diff) {
-  const state = await getCoupleState(user1Id, user2Id);
-  const current = Number(state?.jealousy || 0);
-  const updatedValue = clamp(current + Number(diff || 0), 0, 100);
-  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
-
-  const result = await pool.query(
-    `
-    UPDATE couple_states
-    SET jealousy = $2,
-        updated_at = NOW()
-    WHERE couple_key = $1
-    RETURNING couple_key, user1_id, user2_id, jealousy, updated_at
-    `,
-    [coupleKey, updatedValue]
-  );
-
-  return result.rows[0] || null;
-}
-
-// =========================
-// ADOPTIONS / FAMILY
-// =========================
 async function getActiveAdoptionByChildId(childUserId) {
   const result = await pool.query(
     `
@@ -2389,6 +1979,17 @@ async function isChildInMyFamily(parentUserId, childUserId) {
   return !!result.rows[0];
 }
 
+async function assertChildInMyFamily(parentUserId, childUserId) {
+  const isChild = await isChildInMyFamily(parentUserId, childUserId);
+  if (!isChild) {
+    return {
+      ok: false,
+      text: "❌ Это не ваш ребёнок. Ответь на сообщение именно своего ребёнка."
+    };
+  }
+  return { ok: true };
+}
+
 async function setFavoriteChild(parentUserId, childUserId) {
   const result = await pool.query(
     `
@@ -2483,7 +2084,62 @@ async function canAdoptUser(parentUserId, targetUserId) {
 }
 
 // =========================
-// PUNISHMENTS
+// COUPLE STATE
+// =========================
+async function ensureCoupleState(user1Id, user2Id) {
+  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
+  const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
+
+  await pool.query(
+    `
+    INSERT INTO couple_states (couple_key, user1_id, user2_id, jealousy, updated_at)
+    VALUES ($1, $2, $3, 0, NOW())
+    ON CONFLICT (couple_key) DO NOTHING
+    `,
+    [coupleKey, ids[0], ids[1]]
+  );
+
+  return coupleKey;
+}
+
+async function getCoupleState(user1Id, user2Id) {
+  const coupleKey = await ensureCoupleState(user1Id, user2Id);
+
+  const result = await pool.query(
+    `
+    SELECT couple_key, user1_id, user2_id, jealousy, updated_at
+    FROM couple_states
+    WHERE couple_key = $1
+    LIMIT 1
+    `,
+    [coupleKey]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function changeCoupleJealousy(user1Id, user2Id, diff) {
+  const state = await getCoupleState(user1Id, user2Id);
+  const current = Number(state?.jealousy || 0);
+  const updatedValue = clamp(current + Number(diff || 0), 0, 100);
+  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
+
+  const result = await pool.query(
+    `
+    UPDATE couple_states
+    SET jealousy = $2,
+        updated_at = NOW()
+    WHERE couple_key = $1
+    RETURNING couple_key, user1_id, user2_id, jealousy, updated_at
+    `,
+    [coupleKey, updatedValue]
+  );
+
+  return result.rows[0] || null;
+}
+
+// =========================
+// PUNISHMENTS / GOOD DEEDS
 // =========================
 async function cleanupExpiredPunishments() {
   await pool.query(`
@@ -2560,9 +2216,6 @@ async function getPunishedBlockText(childUserId) {
   return `❌ Ребёнок сейчас наказан(а).\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
 }
 
-// =========================
-// OBEDIENCE / GOOD DEEDS
-// =========================
 async function ensureChildObedience(childUserId) {
   await pool.query(
     `
@@ -2668,59 +2321,482 @@ async function clearGoodDeeds(childUserId) {
 }
 
 // =========================
-// ROBBERY / POLICE / JAIL
+// FAMILY MONEY / PIGGY / DREAMS
 // =========================
-function getRandomRobberyResult() {
-  const roll = Math.random();
+async function getFamilyKeyByUserId(userId) {
+  const childInfo = await getActiveAdoptionByChildId(userId);
 
-  if (roll < 0.60) return { type: "fail", amount: 0 };
-  if (roll < 0.90) return { type: "small", amount: Math.floor(Math.random() * 10) + 1 };
-  return { type: "big", amount: Math.floor(Math.random() * 16) + 15 };
+  if (childInfo) {
+    const parentId = Number(childInfo.parent_user_id);
+    const partnerInfo = await getMarriagePartner(parentId);
+
+    if (partnerInfo) {
+      const ids = [parentId, Number(partnerInfo.partnerId)].sort((a, b) => a - b);
+      return `married:${ids[0]}:${ids[1]}`;
+    }
+
+    return `single:${parentId}`;
+  }
+
+  const marriageInfo = await getMarriagePartner(userId);
+  if (marriageInfo) {
+    const ids = [Number(userId), Number(marriageInfo.partnerId)].sort((a, b) => a - b);
+    return `married:${ids[0]}:${ids[1]}`;
+  }
+
+  return null;
 }
 
-function getRandomPoliceOutcome(wantedLevel = 0) {
-  const wanted = Number(wantedLevel || 0);
-  const roll = Math.random();
+async function getFamilyBudget(userId) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) return null;
 
-  const noneBorder = Math.max(0.10, 0.50 - wanted * 0.10);
-  const fineBorder = Math.max(noneBorder + 0.10, 0.80 - wanted * 0.05);
-  const returnBorder = Math.max(fineBorder + 0.05, 0.90 - wanted * 0.03);
+  await pool.query(
+    `
+    INSERT INTO family_budgets (family_key, balance, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (family_key) DO NOTHING
+    `,
+    [familyKey]
+  );
 
-  if (roll < noneBorder) return { type: "none" };
-  if (roll < fineBorder) return { type: "fine", amount: Math.floor(Math.random() * 8) + 3 + wanted * 2 };
-  if (roll < returnBorder) return { type: "return" };
-  return { type: "jail" };
+  const result = await pool.query(
+    `SELECT family_key, balance, updated_at FROM family_budgets WHERE family_key = $1 LIMIT 1`,
+    [familyKey]
+  );
+
+  return result.rows[0] || null;
 }
 
-function getRandomEscapeOutcome(wantedLevel = 0) {
-  const wanted = Number(wantedLevel || 0);
-  const successChance = clamp(0.35 - wanted * 0.05, 0.10, 0.35);
-  const failChance = clamp(0.70 - wanted * 0.03, successChance + 0.10, 0.80);
-  const roll = Math.random();
+async function addToFamilyBudget(userId, amount) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) throw new Error("NO_FAMILY");
 
-  if (roll < successChance) return { type: "success" };
-  if (roll < failChance) return { type: "fail" };
-  return { type: "caught_more_time", extraMs: 30 * 60 * 1000 };
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO family_budgets (family_key, balance, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (family_key) DO NOTHING
+      `,
+      [familyKey]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const currentBalance = Number(userRow.rows[0].balance || 0);
+    if (currentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, amount]
+    );
+
+    const familyBudgetRow = await client.query(
+      `
+      UPDATE family_budgets
+      SET balance = balance + $2,
+          updated_at = NOW()
+      WHERE family_key = $1
+      RETURNING balance, updated_at
+      `,
+      [familyKey, amount]
+    );
+
+    const updatedUserRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      familyKey,
+      familyBalance: Number(familyBudgetRow.rows[0].balance || 0),
+      userBalance: Number(updatedUserRow.rows[0].balance || 0),
+      updatedAt: familyBudgetRow.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-function getRandomLawyerOutcome() {
-  const roll = Math.random();
-  if (roll < 0.15) return { type: "free" };
-  if (roll < 0.70) return { type: "reduce", reduceMs: (20 + Math.floor(Math.random() * 21)) * 60 * 1000 };
-  return { type: "fail" };
+async function takeFromFamilyBudget(userId, amount) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) throw new Error("NO_FAMILY");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO family_budgets (family_key, balance, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (family_key) DO NOTHING
+      `,
+      [familyKey]
+    );
+
+    const budgetRow = await client.query(
+      `SELECT balance FROM family_budgets WHERE family_key = $1 FOR UPDATE`,
+      [familyKey]
+    );
+
+    if (!budgetRow.rows[0]) throw new Error("BUDGET_NOT_FOUND");
+
+    const currentBudget = Number(budgetRow.rows[0].balance || 0);
+    if (currentBudget < amount) throw new Error("NOT_ENOUGH_FAMILY_MONEY");
+
+    await client.query(
+      `
+      UPDATE family_budgets
+      SET balance = balance - $2,
+          updated_at = NOW()
+      WHERE family_key = $1
+      `,
+      [familyKey, amount]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const updatedUser = await client.query(
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
+      [userId, amount]
+    );
+
+    const updatedBudget = await client.query(
+      `SELECT balance, updated_at FROM family_budgets WHERE family_key = $1`,
+      [familyKey]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      familyKey,
+      familyBalance: Number(updatedBudget.rows[0].balance || 0),
+      userBalance: Number(updatedUser.rows[0].balance || 0),
+      updatedAt: updatedBudget.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-function getRandomBribeOutcome(wantedLevel = 0) {
-  const wanted = Number(wantedLevel || 0);
-  const freeChance = clamp(0.40 - wanted * 0.05, 0.10, 0.40);
-  const failChance = clamp(0.75 - wanted * 0.03, freeChance + 0.10, 0.85);
-  const roll = Math.random();
-
-  if (roll < freeChance) return { type: "free" };
-  if (roll < failChance) return { type: "fail" };
-  return { type: "caught_more_time", extraMs: 45 * 60 * 1000 };
+async function getPiggyBank(childUserId) {
+  const result = await pool.query(
+    `SELECT child_user_id, balance, updated_at FROM piggy_banks WHERE child_user_id = $1 LIMIT 1`,
+    [childUserId]
+  );
+  return result.rows[0] || null;
 }
 
+async function createPiggyBank(childUserId) {
+  const result = await pool.query(
+    `
+    INSERT INTO piggy_banks (child_user_id, balance, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET updated_at = piggy_banks.updated_at
+    RETURNING child_user_id, balance, updated_at
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function addToPiggyBank(childUserId, amount) {
+  const existing = await getPiggyBank(childUserId);
+  if (!existing) throw new Error("NO_PIGGY_BANK");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [childUserId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const userBalance = Number(userRow.rows[0].balance || 0);
+    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [childUserId, amount]
+    );
+
+    const piggy = await client.query(
+      `
+      UPDATE piggy_banks
+      SET balance = balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      piggyBalance: Number(piggy.rows[0].balance || 0),
+      userBalance: Number(updatedUser.rows[0].balance || 0),
+      updatedAt: piggy.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function breakPiggyBank(childUserId) {
+  const existing = await getPiggyBank(childUserId);
+  if (!existing) throw new Error("NO_PIGGY_BANK");
+
+  const amount = Number(existing.balance || 0);
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    if (amount > 0) {
+      await client.query(
+        `UPDATE users SET balance = balance + $2 WHERE user_id = $1`,
+        [childUserId, amount]
+      );
+    }
+
+    await client.query(
+      `
+      UPDATE piggy_banks
+      SET balance = 0,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      `,
+      [childUserId]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    const piggy = await client.query(
+      `SELECT balance, updated_at FROM piggy_banks WHERE child_user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      taken: amount,
+      userBalance: Number(updatedUser.rows[0]?.balance || 0),
+      piggyBalance: Number(piggy.rows[0]?.balance || 0),
+      updatedAt: piggy.rows[0]?.updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function getChildDream(childUserId) {
+  const result = await pool.query(
+    `
+    SELECT child_user_id, dream_text, dream_balance, created_at, updated_at
+    FROM child_dreams
+    WHERE child_user_id = $1
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function setChildDream(childUserId, dreamText) {
+  const cleaned = String(dreamText || "").trim();
+
+  const result = await pool.query(
+    `
+    INSERT INTO child_dreams (child_user_id, dream_text, dream_balance, created_at, updated_at)
+    VALUES ($1, $2, 0, NOW(), NOW())
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET
+      dream_text = EXCLUDED.dream_text,
+      updated_at = NOW()
+    RETURNING child_user_id, dream_text, dream_balance, created_at, updated_at
+    `,
+    [childUserId, cleaned]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deleteChildDream(childUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM child_dreams
+    WHERE child_user_id = $1
+    RETURNING child_user_id, dream_balance
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function addSelfMoneyToDream(childUserId, amount) {
+  const dream = await getChildDream(childUserId);
+  if (!dream) throw new Error("NO_DREAM");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [childUserId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const userBalance = Number(userRow.rows[0].balance || 0);
+    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [childUserId, amount]
+    );
+
+    const dreamRow = await client.query(
+      `
+      UPDATE child_dreams
+      SET dream_balance = dream_balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING dream_text, dream_balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      dreamText: dreamRow.rows[0].dream_text,
+      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
+      updatedAt: dreamRow.rows[0].updated_at,
+      userBalance: Number(updatedUser.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function addParentMoneyToDream(parentUserId, childUserId, amount) {
+  const dream = await getChildDream(childUserId);
+  if (!dream) throw new Error("NO_DREAM");
+
+  const childCheck = await assertChildInMyFamily(parentUserId, childUserId);
+  if (!childCheck.ok) throw new Error("NOT_MY_CHILD");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const parentRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [parentUserId]
+    );
+
+    if (!parentRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const parentBalance = Number(parentRow.rows[0].balance || 0);
+    if (parentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [parentUserId, amount]
+    );
+
+    const dreamRow = await client.query(
+      `
+      UPDATE child_dreams
+      SET dream_balance = dream_balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING dream_text, dream_balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedParent = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [parentUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      dreamText: dreamRow.rows[0].dream_text,
+      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
+      updatedAt: dreamRow.rows[0].updated_at,
+      parentBalance: Number(updatedParent.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// =========================
+// JAIL
+// =========================
 async function cleanupExpiredJail() {
   await pool.query(`
     DELETE FROM police_jail
@@ -2867,292 +2943,87 @@ function getActionRemaining(lastAt, cooldownMs) {
   return diff > 0 ? diff : 0;
 }
 
-async function updateLastRobberyAt(userId) {
-  await pool.query(
-    `UPDATE users SET last_robbery_at = NOW() WHERE user_id = $1`,
-    [userId]
-  );
+function getRandomPoliceOutcome(wantedLevel = 0) {
+  const wanted = Number(wantedLevel || 0);
+  const roll = Math.random();
+
+  const noneBorder = Math.max(0.06, 0.42 - wanted * 0.08);
+  const fineBorder = Math.max(noneBorder + 0.12, 0.78 - wanted * 0.05);
+  const returnBorder = Math.max(fineBorder + 0.05, 0.89 - wanted * 0.03);
+
+  if (roll < noneBorder) return { type: "none" };
+  if (roll < fineBorder) return { type: "fine", amount: Math.floor(Math.random() * 8) + 4 + wanted * 2 };
+  if (roll < returnBorder) return { type: "return" };
+  return { type: "jail" };
 }
 
-async function getRobberyCooldown(userId) {
-  const result = await pool.query(
-    `SELECT last_robbery_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
+function getRandomEscapeOutcome(wantedLevel = 0, hasArmor = false, hasPassport = false) {
+  const wanted = Number(wantedLevel || 0);
+  let successChance = 0.28 - wanted * 0.04;
+  if (hasArmor) successChance += 0.04;
+  if (hasPassport) successChance += 0.03;
+  successChance = clamp(successChance, 0.08, 0.36);
 
+  const failChance = clamp(successChance + 0.34, successChance + 0.12, 0.82);
+  const roll = Math.random();
+
+  if (roll < successChance) return { type: "success" };
+  if (roll < failChance) return { type: "fail" };
+  return { type: "caught_more_time", extraMs: 30 * 60 * 1000 };
+}
+
+function getRandomLawyerOutcome() {
+  const roll = Math.random();
+  if (roll < 0.14) return { type: "free" };
+  if (roll < 0.68) return { type: "reduce", reduceMs: (20 + Math.floor(Math.random() * 21)) * 60 * 1000 };
+  return { type: "fail" };
+}
+
+function getRandomBribeOutcome(wantedLevel = 0, hasPassport = false) {
+  const wanted = Number(wantedLevel || 0);
+  let freeChance = 0.34 - wanted * 0.04;
+  if (hasPassport) freeChance += 0.05;
+  freeChance = clamp(freeChance, 0.08, 0.38);
+
+  const failChance = clamp(freeChance + 0.34, freeChance + 0.12, 0.82);
+  const roll = Math.random();
+
+  if (roll < freeChance) return { type: "free" };
+  if (roll < failChance) return { type: "fail" };
+  return { type: "caught_more_time", extraMs: 45 * 60 * 1000 };
+}
+
+// =========================
+// GAME COOLDOWNS
+// =========================
+async function updateCooldownColumnNow(userId, column) {
+  await pool.query(`UPDATE users SET ${column} = NOW() WHERE user_id = $1`, [userId]);
+}
+
+async function getGenericCooldown(userId, column, cooldownMs) {
+  const result = await pool.query(`SELECT ${column} AS value FROM users WHERE user_id = $1`, [userId]);
   const row = result.rows[0];
-  if (!row || !row.last_robbery_at) return 0;
+  if (!row || !row.value) return 0;
 
-  const nextTime = new Date(new Date(row.last_robbery_at).getTime() + ROBBERY_COOLDOWN_MS);
+  const nextTime = new Date(new Date(row.value).getTime() + cooldownMs);
   const diff = nextTime.getTime() - Date.now();
-
   return diff > 0 ? diff : 0;
 }
 
-async function deductCoinsSafe(userId, amount) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const row = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [userId]
-    );
-
-    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
-
-    const currentBalance = Number(row.rows[0].balance || 0);
-    const toDeduct = Math.min(currentBalance, amount);
-
-    const updated = await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
-      [userId, toDeduct]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      deducted: toDeduct,
-      balance: Number(updated.rows[0].balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+async function getRobberyCooldown(userId) {
+  return getGenericCooldown(userId, "last_robbery_at", ROBBERY_COOLDOWN_MS);
 }
 
-async function robberyTransfer(thiefId, victimId, requestedAmount) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const thiefRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [thiefId]
-    );
-    const victimRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [victimId]
-    );
-
-    if (!thiefRow.rows[0] || !victimRow.rows[0]) throw new Error("USER_NOT_FOUND");
-
-    const victimBalance = Number(victimRow.rows[0].balance || 0);
-    const actualAmount = Math.min(victimBalance, requestedAmount);
-
-    if (actualAmount <= 0) throw new Error("VICTIM_NO_MONEY");
-
-    const updatedVictim = await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
-      [victimId, actualAmount]
-    );
-
-    const updatedThief = await client.query(
-      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
-      [thiefId, actualAmount]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      stolen: actualAmount,
-      thiefBalance: Number(updatedThief.rows[0].balance || 0),
-      victimBalance: Number(updatedVictim.rows[0].balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+async function getBankHeistCooldown(userId) {
+  return getGenericCooldown(userId, "last_bank_at", BANK_HEIST_COOLDOWN_MS);
 }
 
-// =========================
-// GAME
-// =========================
-async function claimDailyCoins(userId) {
-  const result = await pool.query(`SELECT balance, last_daily_at FROM users WHERE user_id = $1`, [userId]);
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
-
-  if (lastDailyAt) {
-    const nextTime = new Date(lastDailyAt.getTime() + MONEY_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const coins = getRandomCoins();
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = balance + $2,
-        last_daily_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, coins]
-  );
-
-  return { ok: true, coins, balance: Number(updateResult.rows[0].balance || 0) };
+async function getAtmHackCooldown(userId) {
+  return getGenericCooldown(userId, "last_atm_hack_at", ATM_HACK_COOLDOWN_MS);
 }
 
-async function runHunt(userId) {
-  const result = await pool.query(`SELECT balance, last_hunt_at FROM users WHERE user_id = $1`, [userId]);
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
-
-  if (lastHuntAt) {
-    const nextTime = new Date(lastHuntAt.getTime() + HUNT_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const hunt = getHuntResult();
-  let newBalance = Number(row.balance || 0) + hunt.coins;
-  if (newBalance < 0) newBalance = 0;
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = $2,
-        last_hunt_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, newBalance]
-  );
-
-  return { ok: true, hunt, balance: Number(updateResult.rows[0].balance || 0) };
-}
-
-async function runSniper(userId) {
-  const result = await pool.query(`SELECT balance, last_sniper_at FROM users WHERE user_id = $1`, [userId]);
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
-
-  if (lastSniperAt) {
-    const nextTime = new Date(lastSniperAt.getTime() + SNIPER_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const sniper = getSniperResult();
-  const newBalance = Number(row.balance || 0) + sniper.coins;
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = $2,
-        last_sniper_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, newBalance]
-  );
-
-  return { ok: true, sniper, balance: Number(updateResult.rows[0].balance || 0) };
-}
-
-async function runBasketball(userId) {
-  const result = await pool.query(
-    `SELECT balance, last_basketball_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastAt = row.last_basketball_at ? new Date(row.last_basketball_at) : null;
-
-  if (lastAt) {
-    const nextTime = new Date(lastAt.getTime() + BASKETBALL_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const game = getBasketballResult();
-  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
-  if (newBalance < 0) newBalance = 0;
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = $2,
-        last_basketball_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, newBalance]
-  );
-
-  return {
-    ok: true,
-    game,
-    balance: Number(updateResult.rows[0].balance || 0)
-  };
-}
-
-async function runKnb(userId, playerChoice) {
-  const result = await pool.query(
-    `SELECT balance, last_knb_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
-
-  if (!result.rows[0]) return { ok: false, reason: "not_found" };
-
-  const row = result.rows[0];
-  const now = new Date();
-  const lastAt = row.last_knb_at ? new Date(row.last_knb_at) : null;
-
-  if (lastAt) {
-    const nextTime = new Date(lastAt.getTime() + KNB_COOLDOWN_MS);
-    if (now < nextTime) {
-      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
-    }
-  }
-
-  const botChoice = getKnbBotChoiceRareWin(playerChoice);
-  const game = resolveKnb(playerChoice, botChoice);
-
-  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
-  if (newBalance < 0) newBalance = 0;
-
-  const updateResult = await pool.query(
-    `
-    UPDATE users
-    SET balance = $2,
-        last_knb_at = NOW()
-    WHERE user_id = $1
-    RETURNING balance
-    `,
-    [userId, newBalance]
-  );
-
-  return {
-    ok: true,
-    game,
-    botChoice,
-    balance: Number(updateResult.rows[0].balance || 0)
-  };
+async function getVanHeistCooldown(userId) {
+  return getGenericCooldown(userId, "last_van_heist_at", VAN_HEIST_COOLDOWN_MS);
 }
 
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
@@ -3212,6 +3083,8 @@ async function getCooldownText(userId) {
 🎯 Снайпер: ${getRemaining(stats.last_sniper_at, SNIPER_COOLDOWN_MS)}
 🕵️ Ограбление: ${getRemaining(stats.last_robbery_at, ROBBERY_COOLDOWN_MS)}
 🏦 Ограбление банка: ${getRemaining(stats.last_bank_at, BANK_HEIST_COOLDOWN_MS)}
+🏧 Взлом банкомата: ${getRemaining(stats.last_atm_hack_at, ATM_HACK_COOLDOWN_MS)}
+🚚 Инкассация: ${getRemaining(stats.last_van_heist_at, VAN_HEIST_COOLDOWN_MS)}
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
 }
@@ -3494,481 +3367,188 @@ async function finalizeAdoptionDecline(request, chatId, messageId = null) {
 }
 
 // =========================
-// FAMILY BUDGET
+// BOMB
 // =========================
-async function getFamilyKeyByUserId(userId) {
-  const childInfo = await getActiveAdoptionByChildId(userId);
+function getBombChatKey(chatId) {
+  return String(chatId);
+}
 
-  if (childInfo) {
-    const parentId = Number(childInfo.parent_user_id);
-    const partnerInfo = await getMarriagePartner(parentId);
+function clearBomb(chatId) {
+  const key = getBombChatKey(chatId);
+  if (activeBombs[key]?.timer) clearTimeout(activeBombs[key].timer);
+  delete activeBombs[key];
+}
 
-    if (partnerInfo) {
-      const ids = [parentId, Number(partnerInfo.partnerId)].sort((a, b) => a - b);
-      return `married:${ids[0]}:${ids[1]}`;
+async function explodeBomb(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
+
+  const holder = bomb.holder;
+  clearBomb(chatId);
+
+  await safeSendMessage(
+    chatId,
+    `💥 Бомба взорвалась!\n${getUserLink(holder)} не успел передать бомбу.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     }
-
-    return `single:${parentId}`;
-  }
-
-  const marriageInfo = await getMarriagePartner(userId);
-  if (marriageInfo) {
-    const ids = [Number(userId), Number(marriageInfo.partnerId)].sort((a, b) => a - b);
-    return `married:${ids[0]}:${ids[1]}`;
-  }
-
-  return null;
-}
-
-async function getFamilyBudget(userId) {
-  const familyKey = await getFamilyKeyByUserId(userId);
-  if (!familyKey) return null;
-
-  await pool.query(
-    `
-    INSERT INTO family_budgets (family_key, balance, updated_at)
-    VALUES ($1, 0, NOW())
-    ON CONFLICT (family_key) DO NOTHING
-    `,
-    [familyKey]
   );
-
-  const result = await pool.query(
-    `SELECT family_key, balance, updated_at FROM family_budgets WHERE family_key = $1 LIMIT 1`,
-    [familyKey]
-  );
-
-  return result.rows[0] || null;
 }
 
-async function addToFamilyBudget(userId, amount) {
-  const familyKey = await getFamilyKeyByUserId(userId);
-  if (!familyKey) throw new Error("NO_FAMILY");
+async function startBombTimer(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
 
-  const client = await pool.connect();
+  if (bomb.timer) clearTimeout(bomb.timer);
 
-  try {
-    await client.query("BEGIN");
-
-    await client.query(
-      `
-      INSERT INTO family_budgets (family_key, balance, updated_at)
-      VALUES ($1, 0, NOW())
-      ON CONFLICT (family_key) DO NOTHING
-      `,
-      [familyKey]
-    );
-
-    const userRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [userId]
-    );
-
-    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
-
-    const currentBalance = Number(userRow.rows[0].balance || 0);
-    if (currentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
-
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [userId, amount]
-    );
-
-    const familyBudgetRow = await client.query(
-      `
-      UPDATE family_budgets
-      SET balance = balance + $2,
-          updated_at = NOW()
-      WHERE family_key = $1
-      RETURNING balance, updated_at
-      `,
-      [familyKey, amount]
-    );
-
-    const updatedUserRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [userId]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      familyKey,
-      familyBalance: Number(familyBudgetRow.rows[0].balance || 0),
-      userBalance: Number(updatedUserRow.rows[0].balance || 0),
-      updatedAt: familyBudgetRow.rows[0].updated_at
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function takeFromFamilyBudget(userId, amount) {
-  const familyKey = await getFamilyKeyByUserId(userId);
-  if (!familyKey) throw new Error("NO_FAMILY");
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    await client.query(
-      `
-      INSERT INTO family_budgets (family_key, balance, updated_at)
-      VALUES ($1, 0, NOW())
-      ON CONFLICT (family_key) DO NOTHING
-      `,
-      [familyKey]
-    );
-
-    const budgetRow = await client.query(
-      `SELECT balance FROM family_budgets WHERE family_key = $1 FOR UPDATE`,
-      [familyKey]
-    );
-
-    if (!budgetRow.rows[0]) throw new Error("BUDGET_NOT_FOUND");
-
-    const currentBudget = Number(budgetRow.rows[0].balance || 0);
-    if (currentBudget < amount) throw new Error("NOT_ENOUGH_FAMILY_MONEY");
-
-    await client.query(
-      `
-      UPDATE family_budgets
-      SET balance = balance - $2,
-          updated_at = NOW()
-      WHERE family_key = $1
-      `,
-      [familyKey, amount]
-    );
-
-    const userRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [userId]
-    );
-
-    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
-
-    const updatedUser = await client.query(
-      `
-      UPDATE users
-      SET balance = balance + $2
-      WHERE user_id = $1
-      RETURNING balance
-      `,
-      [userId, amount]
-    );
-
-    const updatedBudget = await client.query(
-      `SELECT balance, updated_at FROM family_budgets WHERE family_key = $1`,
-      [familyKey]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      familyKey,
-      familyBalance: Number(updatedBudget.rows[0].balance || 0),
-      userBalance: Number(updatedUser.rows[0].balance || 0),
-      updatedAt: updatedBudget.rows[0].updated_at
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-// =========================
-// PIGGY BANK
-// =========================
-async function getPiggyBank(childUserId) {
-  const result = await pool.query(
-    `SELECT child_user_id, balance, updated_at FROM piggy_banks WHERE child_user_id = $1 LIMIT 1`,
-    [childUserId]
-  );
-  return result.rows[0] || null;
-}
-
-async function createPiggyBank(childUserId) {
-  const result = await pool.query(
-    `
-    INSERT INTO piggy_banks (child_user_id, balance, updated_at)
-    VALUES ($1, 0, NOW())
-    ON CONFLICT (child_user_id)
-    DO UPDATE SET updated_at = piggy_banks.updated_at
-    RETURNING child_user_id, balance, updated_at
-    `,
-    [childUserId]
-  );
-  return result.rows[0] || null;
-}
-
-async function addToPiggyBank(childUserId, amount) {
-  const existing = await getPiggyBank(childUserId);
-  if (!existing) throw new Error("NO_PIGGY_BANK");
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const userRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [childUserId]
-    );
-
-    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
-
-    const userBalance = Number(userRow.rows[0].balance || 0);
-    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
-
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [childUserId, amount]
-    );
-
-    const piggy = await client.query(
-      `
-      UPDATE piggy_banks
-      SET balance = balance + $2,
-          updated_at = NOW()
-      WHERE child_user_id = $1
-      RETURNING balance, updated_at
-      `,
-      [childUserId, amount]
-    );
-
-    const updatedUser = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [childUserId]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      piggyBalance: Number(piggy.rows[0].balance || 0),
-      userBalance: Number(updatedUser.rows[0].balance || 0),
-      updatedAt: piggy.rows[0].updated_at
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function breakPiggyBank(childUserId) {
-  const existing = await getPiggyBank(childUserId);
-  if (!existing) throw new Error("NO_PIGGY_BANK");
-
-  const amount = Number(existing.balance || 0);
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    if (amount > 0) {
-      await client.query(
-        `UPDATE users SET balance = balance + $2 WHERE user_id = $1`,
-        [childUserId, amount]
-      );
+  bomb.timer = setTimeout(async () => {
+    try {
+      await explodeBomb(chatId);
+    } catch (error) {
+      console.error("Ошибка взрыва бомбы:", error);
     }
+  }, BOMB_TIMER_MS);
+}
 
-    await client.query(
-      `
-      UPDATE piggy_banks
-      SET balance = 0,
-          updated_at = NOW()
-      WHERE child_user_id = $1
-      `,
-      [childUserId]
+async function passBomb(chatId, fromUser) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return false;
+
+  const excludeIds = [fromUser.id];
+  if (bomb.previousHolderId) excludeIds.push(bomb.previousHolderId);
+
+  let candidates = getRecentActiveCandidates(chatId, excludeIds);
+  if (!candidates.length) candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
+
+  if (!candidates.length) {
+    clearBomb(chatId);
+
+    await safeSendMessage(
+      chatId,
+      `💣 ${getUserLink(fromUser)} попытался передать бомбу, но рядом никого не оказалось.\n\nБомба исчезла.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
     );
-
-    const updatedUser = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [childUserId]
-    );
-
-    const piggy = await client.query(
-      `SELECT balance, updated_at FROM piggy_banks WHERE child_user_id = $1`,
-      [childUserId]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      taken: amount,
-      userBalance: Number(updatedUser.rows[0]?.balance || 0),
-      piggyBalance: Number(piggy.rows[0]?.balance || 0),
-      updatedAt: piggy.rows[0]?.updated_at
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
+    return true;
   }
+
+  const nextHolder = getRandomFromArray(candidates);
+
+  activeBombs[key] = {
+    holder: nextHolder,
+    previousHolderId: fromUser.id,
+    timer: null
+  };
+
+  await safeSendMessage(
+    chatId,
+    `💣 ${getUserLink(fromUser)} передал бомбу!
+
+🔥 Теперь бомба у: ${getUserLink(nextHolder)}
+⏳ У него 5 секунд, чтобы написать: передать`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  await startBombTimer(chatId);
+  return true;
 }
 
 // =========================
-// DREAMS
+// ROBBERY DIFFICULTY
 // =========================
-async function getChildDream(childUserId) {
-  const result = await pool.query(
-    `
-    SELECT child_user_id, dream_text, dream_balance, created_at, updated_at
-    FROM child_dreams
-    WHERE child_user_id = $1
-    LIMIT 1
-    `,
-    [childUserId]
-  );
-  return result.rows[0] || null;
+async function getCrimeBonuses(userId) {
+  const inventory = await getFullInventory(userId);
+
+  return {
+    mask: Number(inventory.mask || 0) > 0,
+    lockpick: Number(inventory.lockpick || 0) > 0,
+    radio: Number(inventory.radio || 0) > 0,
+    armor: Number(inventory.armor || 0) > 0,
+    fakePassport: Number(inventory.fake_passport || 0) > 0,
+    jammer: Number(inventory.jammer || 0) > 0
+  };
 }
 
-async function setChildDream(childUserId, dreamText) {
-  const cleaned = String(dreamText || "").trim();
+function getRandomRobberyResult(targetBalance, wantedLevel, bonuses) {
+  const wanted = Number(wantedLevel || 0);
+  let successChance = 0.30;
+  let bigChance = 0.07;
 
-  const result = await pool.query(
-    `
-    INSERT INTO child_dreams (child_user_id, dream_text, dream_balance, created_at, updated_at)
-    VALUES ($1, $2, 0, NOW(), NOW())
-    ON CONFLICT (child_user_id)
-    DO UPDATE SET
-      dream_text = EXCLUDED.dream_text,
-      updated_at = NOW()
-    RETURNING child_user_id, dream_text, dream_balance, created_at, updated_at
-    `,
-    [childUserId, cleaned]
-  );
+  if (bonuses.mask) successChance += 0.05;
+  if (bonuses.lockpick) successChance += 0.03;
+  if (bonuses.radio) successChance += 0.02;
+  if (bonuses.armor) successChance += 0.02;
 
-  return result.rows[0] || null;
+  successChance -= wanted * 0.04;
+  bigChance -= wanted * 0.01;
+
+  successChance = clamp(successChance, 0.10, 0.46);
+  bigChance = clamp(bigChance, 0.02, 0.10);
+
+  const roll = Math.random();
+
+  if (roll > successChance) {
+    return { type: "fail", amount: 0 };
+  }
+
+  const isBig = Math.random() < bigChance;
+  const maxSteal = Math.max(1, Math.floor(targetBalance * (isBig ? 0.22 : 0.10)));
+  const minSteal = isBig ? 12 : 2;
+  const amount = clamp(Math.floor(Math.random() * maxSteal) + minSteal, 1, targetBalance);
+
+  return {
+    type: isBig ? "big" : "small",
+    amount
+  };
 }
 
-async function deleteChildDream(childUserId) {
-  const result = await pool.query(
-    `
-    DELETE FROM child_dreams
-    WHERE child_user_id = $1
-    RETURNING child_user_id, dream_balance
-    `,
-    [childUserId]
-  );
-  return result.rows[0] || null;
-}
-
-async function addSelfMoneyToDream(childUserId, amount) {
-  const dream = await getChildDream(childUserId);
-  if (!dream) throw new Error("NO_DREAM");
-
+async function robberyTransfer(thiefId, victimId, requestedAmount) {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    const userRow = await client.query(
+    const thiefRow = await client.query(
       `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [childUserId]
+      [thiefId]
+    );
+    const victimRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [victimId]
     );
 
-    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+    if (!thiefRow.rows[0] || !victimRow.rows[0]) throw new Error("USER_NOT_FOUND");
 
-    const userBalance = Number(userRow.rows[0].balance || 0);
-    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+    const victimBalance = Number(victimRow.rows[0].balance || 0);
+    const actualAmount = Math.min(victimBalance, requestedAmount);
 
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [childUserId, amount]
+    if (actualAmount <= 0) throw new Error("VICTIM_NO_MONEY");
+
+    const updatedVictim = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [victimId, actualAmount]
     );
 
-    const dreamRow = await client.query(
-      `
-      UPDATE child_dreams
-      SET dream_balance = dream_balance + $2,
-          updated_at = NOW()
-      WHERE child_user_id = $1
-      RETURNING dream_text, dream_balance, updated_at
-      `,
-      [childUserId, amount]
-    );
-
-    const updatedUser = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [childUserId]
+    const updatedThief = await client.query(
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
+      [thiefId, actualAmount]
     );
 
     await client.query("COMMIT");
 
     return {
-      dreamText: dreamRow.rows[0].dream_text,
-      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
-      updatedAt: dreamRow.rows[0].updated_at,
-      userBalance: Number(updatedUser.rows[0].balance || 0)
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function addParentMoneyToDream(parentUserId, childUserId, amount) {
-  const dream = await getChildDream(childUserId);
-  if (!dream) throw new Error("NO_DREAM");
-
-  const isChild = await isChildInMyFamily(parentUserId, childUserId);
-  if (!isChild) throw new Error("NOT_MY_CHILD");
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const parentRow = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
-      [parentUserId]
-    );
-
-    if (!parentRow.rows[0]) throw new Error("USER_NOT_FOUND");
-
-    const parentBalance = Number(parentRow.rows[0].balance || 0);
-    if (parentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
-
-    await client.query(
-      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
-      [parentUserId, amount]
-    );
-
-    const dreamRow = await client.query(
-      `
-      UPDATE child_dreams
-      SET dream_balance = dream_balance + $2,
-          updated_at = NOW()
-      WHERE child_user_id = $1
-      RETURNING dream_text, dream_balance, updated_at
-      `,
-      [childUserId, amount]
-    );
-
-    const updatedParent = await client.query(
-      `SELECT balance FROM users WHERE user_id = $1`,
-      [parentUserId]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      dreamText: dreamRow.rows[0].dream_text,
-      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
-      updatedAt: dreamRow.rows[0].updated_at,
-      parentBalance: Number(updatedParent.rows[0].balance || 0)
+      stolen: actualAmount,
+      thiefBalance: Number(updatedThief.rows[0].balance || 0),
+      victimBalance: Number(updatedVictim.rows[0].balance || 0)
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -3979,80 +3559,647 @@ async function addParentMoneyToDream(parentUserId, childUserId, amount) {
 }
 
 // =========================
-// CUSTOM COMMANDS
+// ATM HACK
 // =========================
-async function getUserCustomCommandCount(userId) {
-  const result = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`,
-    [userId]
-  );
-  return result.rows[0]?.count || 0;
+function getAtmHackOutcome(wantedLevel, bonuses) {
+  const wanted = Number(wantedLevel || 0);
+
+  let successChance = 0.24;
+  let jackpotChance = 0.03;
+
+  if (bonuses.lockpick) successChance += 0.08;
+  if (bonuses.jammer) successChance += 0.05;
+  if (bonuses.mask) successChance += 0.03;
+  if (bonuses.radio) successChance += 0.02;
+
+  successChance -= wanted * 0.04;
+  jackpotChance -= wanted * 0.005;
+
+  successChance = clamp(successChance, 0.08, 0.44);
+  jackpotChance = clamp(jackpotChance, 0.01, 0.05);
+
+  const roll = Math.random();
+
+  if (roll > successChance) {
+    return {
+      type: "fail",
+      coins: 0
+    };
+  }
+
+  if (Math.random() < jackpotChance) {
+    return {
+      type: "jackpot",
+      coins: Math.floor(Math.random() * 21) + 25
+    };
+  }
+
+  return {
+    type: "success",
+    coins: Math.floor(Math.random() * 12) + 8
+  };
 }
 
-async function getUserCustomCommands(userId) {
-  const result = await pool.query(
+// =========================
+// BANK HEIST
+// =========================
+function getBankHeistChatKey(chatId) {
+  return String(chatId);
+}
+
+function getBankHeist(chatId) {
+  return activeBankHeists[getBankHeistChatKey(chatId)] || null;
+}
+
+function clearBankHeist(chatId) {
+  delete activeBankHeists[getBankHeistChatKey(chatId)];
+}
+
+function createBankHeist(chatId, leaderUser) {
+  const key = getBankHeistChatKey(chatId);
+
+  activeBankHeists[key] = {
+    chatId,
+    leaderId: Number(leaderUser.id),
+    stage: "gathering",
+    policeAlert: false,
+    loot: 0,
+    createdAt: Date.now(),
+    members: {
+      [String(leaderUser.id)]: {
+        id: Number(leaderUser.id),
+        first_name: leaderUser.first_name || "",
+        last_name: leaderUser.last_name || "",
+        username: leaderUser.username || ""
+      }
+    }
+  };
+
+  return activeBankHeists[key];
+}
+
+function getHeistMembersList(heist) {
+  return Object.values(heist?.members || {});
+}
+
+function getHeistMemberCount(heist) {
+  return getHeistMembersList(heist).length;
+}
+
+function isHeistParticipant(heist, userId) {
+  return !!heist?.members?.[String(userId)];
+}
+
+async function getHeistTeamStats(heist) {
+  const members = getHeistMembersList(heist);
+
+  let masks = 0;
+  let radios = 0;
+  let armors = 0;
+  let jammers = 0;
+  let passports = 0;
+  let wantedSum = 0;
+
+  for (const user of members) {
+    const inv = await getFullInventory(user.id);
+    if (Number(inv.mask || 0) > 0) masks++;
+    if (Number(inv.radio || 0) > 0) radios++;
+    if (Number(inv.armor || 0) > 0) armors++;
+    if (Number(inv.jammer || 0) > 0) jammers++;
+    if (Number(inv.fake_passport || 0) > 0) passports++;
+
+    const wanted = await getWantedRow(user.id);
+    wantedSum += Number(wanted?.level || 0);
+  }
+
+  return {
+    members: members.length,
+    masks,
+    radios,
+    armors,
+    jammers,
+    passports,
+    avgWanted: members.length ? wantedSum / members.length : 0
+  };
+}
+
+function getBankEntryOutcome(stats) {
+  let successChance = 0.20;
+  successChance += stats.masks * 0.04;
+  successChance += stats.radios * 0.03;
+  successChance += stats.jammers * 0.04;
+  successChance += stats.armors * 0.02;
+  successChance -= stats.avgWanted * 0.05;
+
+  successChance = clamp(successChance, 0.08, 0.46);
+
+  const roll = Math.random();
+
+  if (roll < successChance * 0.45) return { type: "clean_success" };
+  if (roll < successChance) return { type: "noisy_success" };
+  if (roll < 0.82) return { type: "partial_fail_alarm" };
+  return { type: "total_fail" };
+}
+
+function getVaultOutcome(stats, policeAlert) {
+  let jackpotChance = 0.01;
+  let fullChance = 0.08;
+  let mediumChance = 0.20;
+  let smallChance = 0.25;
+
+  fullChance += stats.lockpicksBonus || 0;
+  fullChance += stats.jammers * 0.02;
+  mediumChance += stats.radios * 0.02;
+  mediumChance += stats.masks * 0.01;
+  fullChance -= stats.avgWanted * 0.03;
+  mediumChance -= stats.avgWanted * 0.02;
+
+  if (policeAlert) {
+    jackpotChance -= 0.003;
+    fullChance -= 0.04;
+    mediumChance -= 0.05;
+    smallChance -= 0.05;
+  }
+
+  jackpotChance = clamp(jackpotChance, 0.005, 0.02);
+  fullChance = clamp(fullChance, 0.03, 0.16);
+  mediumChance = clamp(mediumChance, 0.08, 0.28);
+  smallChance = clamp(smallChance, 0.10, 0.30);
+
+  const roll = Math.random();
+
+  if (roll < jackpotChance) {
+    return { type: "jackpot", loot: Math.floor(Math.random() * 61) + 180 };
+  }
+
+  if (roll < jackpotChance + fullChance) {
+    return { type: "success", loot: Math.floor(Math.random() * 61) + 95 };
+  }
+
+  if (roll < jackpotChance + fullChance + mediumChance) {
+    return { type: "medium", loot: Math.floor(Math.random() * 36) + 45 };
+  }
+
+  if (roll < jackpotChance + fullChance + mediumChance + smallChance) {
+    return { type: "small", loot: Math.floor(Math.random() * 16) + 12 };
+  }
+
+  if (roll < 0.90) {
+    return { type: "fail_alarm", loot: 0 };
+  }
+
+  return { type: "disaster", loot: 0 };
+}
+
+function getBankEscapeOutcome(stats, loot, policeAlert) {
+  let fullEscapeChance = 0.10;
+  fullEscapeChance += stats.radios * 0.04;
+  fullEscapeChance += stats.armors * 0.03;
+  fullEscapeChance += stats.masks * 0.02;
+  fullEscapeChance += stats.passports * 0.03;
+  fullEscapeChance -= stats.avgWanted * 0.04;
+
+  if (policeAlert) fullEscapeChance -= 0.08;
+  if (loot >= 60) fullEscapeChance -= 0.02;
+  if (loot >= 100) fullEscapeChance -= 0.03;
+  if (loot >= 160) fullEscapeChance -= 0.05;
+
+  fullEscapeChance = clamp(fullEscapeChance, 0.02, 0.28);
+
+  const partialEscapeChance = fullEscapeChance + 0.24;
+  const oneCaughtChance = partialEscapeChance + 0.28;
+
+  const roll = Math.random();
+
+  if (roll < fullEscapeChance) return { type: "full_escape" };
+  if (roll < partialEscapeChance) return { type: "half_escape" };
+  if (roll < oneCaughtChance) return { type: "one_caught" };
+  return { type: "all_caught" };
+}
+
+// =========================
+// VAN HEIST
+// =========================
+function getVanHeistChatKey(chatId) {
+  return String(chatId);
+}
+
+function getVanHeist(chatId) {
+  return activeVanHeists[getVanHeistChatKey(chatId)] || null;
+}
+
+function clearVanHeist(chatId) {
+  delete activeVanHeists[getVanHeistChatKey(chatId)];
+}
+
+function createVanHeist(chatId, leaderUser) {
+  const key = getVanHeistChatKey(chatId);
+
+  activeVanHeists[key] = {
+    chatId,
+    leaderId: Number(leaderUser.id),
+    stage: "gathering",
+    policeAlert: false,
+    loot: 0,
+    createdAt: Date.now(),
+    members: {
+      [String(leaderUser.id)]: {
+        id: Number(leaderUser.id),
+        first_name: leaderUser.first_name || "",
+        last_name: leaderUser.last_name || "",
+        username: leaderUser.username || ""
+      }
+    }
+  };
+
+  return activeVanHeists[key];
+}
+
+function getVanMembersList(van) {
+  return Object.values(van?.members || {});
+}
+
+function getVanMemberCount(van) {
+  return getVanMembersList(van).length;
+}
+
+function isVanParticipant(van, userId) {
+  return !!van?.members?.[String(userId)];
+}
+
+async function getVanTeamStats(van) {
+  const members = getVanMembersList(van);
+
+  let masks = 0;
+  let radios = 0;
+  let armors = 0;
+  let jammers = 0;
+  let passports = 0;
+  let wantedSum = 0;
+
+  for (const user of members) {
+    const inv = await getFullInventory(user.id);
+    if (Number(inv.mask || 0) > 0) masks++;
+    if (Number(inv.radio || 0) > 0) radios++;
+    if (Number(inv.armor || 0) > 0) armors++;
+    if (Number(inv.jammer || 0) > 0) jammers++;
+    if (Number(inv.fake_passport || 0) > 0) passports++;
+
+    const wanted = await getWantedRow(user.id);
+    wantedSum += Number(wanted?.level || 0);
+  }
+
+  return {
+    members: members.length,
+    masks,
+    radios,
+    armors,
+    jammers,
+    passports,
+    avgWanted: members.length ? wantedSum / members.length : 0
+  };
+}
+
+function getVanAttackOutcome(stats) {
+  let successChance = 0.18;
+  successChance += stats.masks * 0.04;
+  successChance += stats.radios * 0.03;
+  successChance += stats.armors * 0.04;
+  successChance += stats.jammers * 0.03;
+  successChance -= stats.avgWanted * 0.04;
+
+  successChance = clamp(successChance, 0.08, 0.42);
+
+  const roll = Math.random();
+  if (roll < successChance * 0.35) return { type: "clean_success" };
+  if (roll < successChance) return { type: "success_alarm" };
+  if (roll < 0.82) return { type: "partial_fail" };
+  return { type: "disaster" };
+}
+
+function getVanEscapeOutcome(stats, loot, policeAlert) {
+  let chance = 0.12;
+  chance += stats.radios * 0.05;
+  chance += stats.armors * 0.04;
+  chance += stats.passports * 0.03;
+  chance -= stats.avgWanted * 0.04;
+
+  if (policeAlert) chance -= 0.08;
+  if (loot >= 50) chance -= 0.03;
+  if (loot >= 90) chance -= 0.04;
+
+  chance = clamp(chance, 0.03, 0.28);
+
+  const roll = Math.random();
+  if (roll < chance) return { type: "full_escape" };
+  if (roll < chance + 0.25) return { type: "partial_escape" };
+  if (roll < chance + 0.53) return { type: "one_caught" };
+  return { type: "all_caught" };
+}
+
+// =========================
+// GAME ACTIONS
+// =========================
+async function claimDailyCoins(userId) {
+  const result = await pool.query(`SELECT balance, last_daily_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
+
+  if (lastDailyAt) {
+    const nextTime = new Date(lastDailyAt.getTime() + MONEY_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const coins = getRandomCoins();
+
+  const updateResult = await pool.query(
     `
-    SELECT trigger, action_text
-    FROM custom_commands
+    UPDATE users
+    SET balance = balance + $2,
+        last_daily_at = NOW()
     WHERE user_id = $1
-    ORDER BY created_at ASC
+    RETURNING balance
     `,
-    [userId]
+    [userId, coins]
   );
-  return result.rows;
+
+  return { ok: true, coins, balance: Number(updateResult.rows[0].balance || 0) };
 }
 
-async function getCustomCommandByTrigger(trigger) {
-  const result = await pool.query(
+async function runHunt(userId) {
+  const result = await pool.query(`SELECT balance, last_hunt_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
+
+  if (lastHuntAt) {
+    const nextTime = new Date(lastHuntAt.getTime() + HUNT_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const hunt = getHuntResult();
+  let newBalance = Number(row.balance || 0) + hunt.coins;
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
     `
-    SELECT id, user_id, trigger, action_text
-    FROM custom_commands
-    WHERE LOWER(trigger) = LOWER($1)
-    LIMIT 1
+    UPDATE users
+    SET balance = $2,
+        last_hunt_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
     `,
-    [trigger]
+    [userId, newBalance]
   );
-  return result.rows[0] || null;
+
+  return { ok: true, hunt, balance: Number(updateResult.rows[0].balance || 0) };
 }
 
-async function createCustomCommand(userId, trigger, actionText) {
-  await pool.query(
-    `INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`,
-    [userId, trigger, actionText]
-  );
-}
+async function runSniper(userId) {
+  const result = await pool.query(`SELECT balance, last_sniper_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
-async function deleteCustomCommand(userId, trigger) {
-  const result = await pool.query(
+  const row = result.rows[0];
+  const now = new Date();
+  const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
+
+  if (lastSniperAt) {
+    const nextTime = new Date(lastSniperAt.getTime() + SNIPER_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const sniper = getSniperResult();
+  const newBalance = Number(row.balance || 0) + sniper.coins;
+
+  const updateResult = await pool.query(
     `
-    DELETE FROM custom_commands
-    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
-    RETURNING trigger
+    UPDATE users
+    SET balance = $2,
+        last_sniper_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
     `,
-    [userId, trigger]
+    [userId, newBalance]
   );
-  return result.rows[0] || null;
+
+  return { ok: true, sniper, balance: Number(updateResult.rows[0].balance || 0) };
 }
 
-function parseCreateCommandInput(text) {
-  const cleaned = String(text || "").trim().replace(/\s+/g, " ");
-  const parts = cleaned.split(" ");
+async function runBasketball(userId) {
+  const result = await pool.query(`SELECT balance, last_basketball_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
-  if (parts.length < 2) return null;
+  const row = result.rows[0];
+  const now = new Date();
+  const lastAt = row.last_basketball_at ? new Date(row.last_basketball_at) : null;
 
-  const trigger = parts[0].trim().toLowerCase();
-  const actionText = parts.slice(1).join(" ").trim();
+  if (lastAt) {
+    const nextTime = new Date(lastAt.getTime() + BASKETBALL_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
 
-  if (!trigger || !actionText) return null;
-  return { trigger, actionText };
+  const game = getBasketballResult();
+  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_basketball_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return {
+    ok: true,
+    game,
+    balance: Number(updateResult.rows[0].balance || 0)
+  };
 }
 
-function isValidTrigger(trigger) {
-  return /^[a-zA-Zа-яА-ЯёЁіІїЇєЄ0-9_-]{2,20}$/.test(trigger);
+async function runKnb(userId, playerChoice) {
+  const result = await pool.query(`SELECT balance, last_knb_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastAt = row.last_knb_at ? new Date(row.last_knb_at) : null;
+
+  if (lastAt) {
+    const nextTime = new Date(lastAt.getTime() + KNB_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const botChoice = getKnbBotChoiceRareWin(playerChoice);
+  const game = resolveKnb(playerChoice, botChoice);
+
+  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_knb_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return {
+    ok: true,
+    game,
+    botChoice,
+    balance: Number(updateResult.rows[0].balance || 0)
+  };
+}
+
+async function processStarPurchase(buyerUserId, successfulPayment) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const existing = await client.query(
+      `SELECT telegram_payment_charge_id FROM star_purchases WHERE telegram_payment_charge_id = $1`,
+      [successfulPayment.telegram_payment_charge_id]
+    );
+
+    if (existing.rows.length > 0) {
+      const balanceRow = await client.query(`SELECT balance FROM users WHERE user_id = $1`, [buyerUserId]);
+      await client.query("COMMIT");
+
+      return {
+        alreadyProcessed: true,
+        gift: false,
+        buyerBalance: Number(balanceRow.rows[0]?.balance || 0),
+        coinsAdded: 0
+      };
+    }
+
+    const parsed = parseGiftPayload(successfulPayment.invoice_payload);
+    if (!parsed) throw new Error("BAD_PAYMENT_PAYLOAD");
+
+    await client.query(
+      `
+      INSERT INTO star_purchases (
+        telegram_payment_charge_id,
+        user_id,
+        payload,
+        amount,
+        currency
+      ) VALUES ($1, $2, $3, $4, $5)
+      `,
+      [
+        successfulPayment.telegram_payment_charge_id,
+        buyerUserId,
+        successfulPayment.invoice_payload,
+        successfulPayment.total_amount,
+        successfulPayment.currency
+      ]
+    );
+
+    if (parsed.type === "self") {
+      const balanceResult = await client.query(
+        `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
+        [buyerUserId, parsed.amount]
+      );
+
+      await client.query("COMMIT");
+
+      return {
+        alreadyProcessed: false,
+        gift: false,
+        buyerBalance: Number(balanceResult.rows[0]?.balance || 0),
+        coinsAdded: parsed.amount
+      };
+    }
+
+    await client.query(
+      `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1`,
+      [parsed.targetUserId, parsed.amount]
+    );
+
+    const buyerBalanceRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [buyerUserId]
+    );
+    const targetBalanceRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [parsed.targetUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      alreadyProcessed: false,
+      gift: true,
+      targetUserId: parsed.targetUserId,
+      coinsAdded: parsed.amount,
+      buyerBalance: Number(buyerBalanceRow.rows[0]?.balance || 0),
+      targetBalance: Number(targetBalanceRow.rows[0]?.balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // =========================
-// STANDARD RP COMMANDS
+// CLEANUP
+// =========================
+function cleanupPendingRequests() {
+  for (const requestId of Object.keys(pendingMarriagesByRequestId)) {
+    const req = pendingMarriagesByRequestId[requestId];
+    if (!req || isRequestExpired(req.createdAt, MARRIAGE_REQUEST_MS)) {
+      if (req?.userKey) delete pendingMarriagesByUserKey[req.userKey];
+      delete pendingMarriagesByRequestId[requestId];
+    }
+  }
+
+  for (const requestId of Object.keys(pendingAdoptionsByRequestId)) {
+    const req = pendingAdoptionsByRequestId[requestId];
+    if (!req || isRequestExpired(req.createdAt, ADOPTION_REQUEST_MS)) {
+      if (req?.userKey) delete pendingAdoptionsByUserKey[req.userKey];
+      delete pendingAdoptionsByRequestId[requestId];
+    }
+  }
+}
+
+setInterval(cleanupPendingRequests, 60 * 1000);
+
+setInterval(async () => {
+  try {
+    await processLayLowReductions();
+    await processPassiveWantedDecay();
+  } catch (error) {
+    console.error("Ошибка периодической обработки lay low / wanted:", error);
+  }
+}, 60 * 1000);
+
+// =========================
+// RP COMMANDS
 // =========================
 const rpCommands = {
   "убить": { text: "убил", stat: "kills", emoji: "💀", xp: 2 },
@@ -4127,6 +4274,12 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • охота
 • снайпер
 • ограбить
+• взлом банкомата
+• нападение на инкассацию
+• присоединиться к инкассации
+• начать перехват
+• атаковать инкассацию
+• уйти с инкассацией
 • баскетбол
 • кнб камень
 • кнб ножницы
@@ -4142,12 +4295,21 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • ограбление банка
 • присоединиться к ограблению
 • в дело
-• купить маску
 • статус ограбления
 • начать штурм
 • вскрыть сейф
 • сбежать с банка
 • отменить ограбление
+
+<b>🎒 Инвентарь</b>
+• инвентарь
+• черный рынок
+• купить маску
+• купить отмычку
+• купить рацию
+• купить бронежилет
+• купить фальшивый паспорт
+• купить глушилку
 
 <b>🚨 Розыск</b>
 • розыск
@@ -4171,6 +4333,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • /cooldowns
 • уровень
 • топ уровней
+• топ богачей
 • респект
 
 <b>🎭 RP команды</b>
@@ -4219,11 +4382,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     let targetUser = null;
-
-    if (msg.reply_to_message) {
-      targetUser = await resolveTargetUserFromReply(msg);
-    }
-
+    if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
     if (!targetUser) targetUser = msg.from;
 
     await initUser(targetUser);
@@ -4270,11 +4429,7 @@ bot.onText(/^\/cooldowns(@[A-Za-z0-9_]+)?$/, async (msg) => {
 
 bot.onText(/^уровень$/i, async (msg) => {
   try {
-    if (!msg.from || msg.from.is_bot) return;
-
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
-
     const stats = await getUserStats(msg.from.id);
     const info = getLevelInfoByXp(Number(stats?.xp || 0));
 
@@ -4338,6 +4493,46 @@ ${lines.join("\n")}`,
   } catch (error) {
     console.error("Ошибка команды топ уровней:", error);
     await safeSendMessage(msg.chat.id, "Ошибка при получении топа уровней.");
+  }
+});
+
+bot.onText(/^топ богачей$/i, async (msg) => {
+  try {
+    const result = await pool.query(`
+      SELECT user_id, first_name, last_name, username, balance
+      FROM users
+      ORDER BY balance DESC, level DESC
+      LIMIT 10
+    `);
+
+    if (!result.rows.length) {
+      await safeSendMessage(msg.chat.id, "Пока нет игроков для топа.");
+      return;
+    }
+
+    const lines = result.rows.map((row, index) => {
+      const user = {
+        id: Number(row.user_id),
+        first_name: row.first_name || "",
+        last_name: row.last_name || "",
+        username: row.username || ""
+      };
+      return `${index + 1}. ${getUserLink(user)} — ${Number(row.balance || 0)} монет`;
+    });
+
+    await safeSendMessage(
+      msg.chat.id,
+      `💰 Топ богачей
+
+${lines.join("\n")}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка команды топ богачей:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка при получении топа богачей.");
   }
 });
 
@@ -4492,6 +4687,8 @@ bot.onText(/^залечь на дно$/i, async (msg) => {
 Пока режим активен:
 • нельзя грабить игроков
 • нельзя участвовать в ограблении банка
+• нельзя участвовать в инкассации
+• нельзя взламывать банкомат
 • розыск будет спадать быстрее`,
       {
         parse_mode: "HTML",
@@ -4564,6 +4761,92 @@ bot.onText(/^выйти из тени$/i, async (msg) => {
   }
 });
 
+bot.onText(/^инвентарь$/i, async (msg) => {
+  try {
+    await initUser(msg.from);
+    const inv = await getFullInventory(msg.from.id);
+
+    const lines = Object.values(ITEMS).map((item) => {
+      const count = Number(inv[item.key] || 0);
+      return `• ${item.emoji} ${item.title} — ${count}`;
+    });
+
+    await safeSendMessage(
+      msg.chat.id,
+      `🎒 Инвентарь ${getUserLink(msg.from)}
+
+${lines.join("\n")}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка инвентаря:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка инвентаря.");
+  }
+});
+
+bot.onText(/^черный рынок$/i, async (msg) => {
+  try {
+    const lines = Object.values(ITEMS).map((item) =>
+      `• ${item.emoji} ${item.title} — ${item.price} монет\n  ${escapeHtml(item.description)}`
+    );
+
+    await safeSendMessage(
+      msg.chat.id,
+      `🕶 Чёрный рынок
+
+${lines.join("\n\n")}
+
+Напиши, например:
+купить маску`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка чёрного рынка:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка чёрного рынка.");
+  }
+});
+
+bot.onText(/^купить\s+(.+)$/i, async (msg, match) => {
+  try {
+    const rawItem = String(match?.[1] || "").trim();
+    const itemKey = resolveItemKey(rawItem);
+
+    if (!itemKey) return;
+
+    await initUser(msg.from);
+
+    const result = await buyBlackMarketItem(msg.from.id, itemKey);
+    const item = ITEMS[itemKey];
+
+    let out = `${item.emoji} ${getUserLink(msg.from)} купил(а) предмет: ${escapeHtml(item.title)}
+
+💸 Цена: ${item.price}
+🎒 Теперь у тебя: ${result.itemCount}
+👛 Баланс: ${result.balance}`;
+
+    out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
+
+    await safeSendMessage(msg.chat.id, out, {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    });
+  } catch (error) {
+    if (error.message === "NOT_ENOUGH_MONEY") {
+      await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+      return;
+    }
+
+    console.error("Ошибка покупки предмета:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка покупки предмета.");
+  }
+});
+
 bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
@@ -4609,11 +4892,62 @@ bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
   }
 });
 
+async function getUserCustomCommandCount(userId) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`,
+    [userId]
+  );
+  return result.rows[0]?.count || 0;
+}
+
+async function getUserCustomCommands(userId) {
+  const result = await pool.query(
+    `
+    SELECT trigger, action_text
+    FROM custom_commands
+    WHERE user_id = $1
+    ORDER BY created_at ASC
+    `,
+    [userId]
+  );
+  return result.rows;
+}
+
+async function getCustomCommandByTrigger(trigger) {
+  const result = await pool.query(
+    `
+    SELECT id, user_id, trigger, action_text
+    FROM custom_commands
+    WHERE LOWER(trigger) = LOWER($1)
+    LIMIT 1
+    `,
+    [trigger]
+  );
+  return result.rows[0] || null;
+}
+
+async function createCustomCommand(userId, trigger, actionText) {
+  await pool.query(
+    `INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`,
+    [userId, trigger, actionText]
+  );
+}
+
+async function deleteCustomCommand(userId, trigger) {
+  const result = await pool.query(
+    `
+    DELETE FROM custom_commands
+    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
+    RETURNING trigger
+    `,
+    [userId, trigger]
+  );
+  return result.rows[0] || null;
+}
+
 bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
-
     const commands = await getUserCustomCommands(msg.from.id);
 
     if (!commands.length) {
@@ -4639,7 +4973,6 @@ bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
 bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
   try {
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
 
     const trigger = normalizeText(match?.[2] || "");
     if (!trigger) {
@@ -4686,8 +5019,6 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
     }
 
     await initUser(target);
-    await saveSeenUser(msg.chat.id, target);
-
     const newBalance = await addCoinsToUser(target.id, amount);
 
     await safeSendMessage(
@@ -4718,27 +5049,22 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     if (deltaMs === null) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа"
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа"
       );
       return;
     }
 
     const deltaMinutes = Math.abs(Math.trunc(deltaMs / 60000));
     if (deltaMinutes > TIME_EDIT_MAX_MINUTES) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`
-      );
+      await safeSendMessage(msg.chat.id, `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`);
       return;
     }
 
     let targetUser = null;
-
     if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
     if (!targetUser) targetUser = msg.from;
 
     await initUser(targetUser);
-    await saveSeenUser(msg.chat.id, targetUser);
 
     const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
     const signText =
@@ -4762,15 +5088,12 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно только: деньги, охота, снайпер, ограбление, ограбление банка, баскетбол, кнб");
+      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, баскетбол, кнб");
       return;
     }
 
     if (error.message === "COOLDOWN_NOT_USED_YET") {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ У игрока этот кулдаун ещё не запускался. Сначала он должен использовать команду хотя бы 1 раз."
-      );
+      await safeSendMessage(msg.chat.id, "❌ У игрока этот кулдаун ещё не запускался.");
       return;
     }
 
@@ -4814,8 +5137,6 @@ bot.on("message", async (msg) => {
     if (!msg.successful_payment || !msg.from) return;
 
     await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
-
     const purchase = await processStarPurchase(msg.from.id, msg.successful_payment);
 
     if (purchase.alreadyProcessed) {
@@ -4855,9 +5176,6 @@ bot.on("message", async (msg) => {
   }
 });
 
-// =========================
-// CALLBACKS
-// =========================
 bot.on("callback_query", async (query) => {
   try {
     if (!query.data || !query.message || !query.from) return;
@@ -4869,7 +5187,6 @@ bot.on("callback_query", async (query) => {
     if (data.startsWith("buy_self_")) {
       await safeAnswerCallback(query);
       await initUser(query.from);
-      await saveSeenUser(chatId, query.from);
 
       const amountCoins = Number(data.split("_")[2]);
 
@@ -4897,7 +5214,6 @@ bot.on("callback_query", async (query) => {
     if (data.startsWith("buy_gift_")) {
       await safeAnswerCallback(query);
       await initUser(query.from);
-      await saveSeenUser(chatId, query.from);
 
       const match = data.match(/^buy_gift_(50|100|200|300)_(\d+)$/);
       if (!match) return;
@@ -5014,7 +5330,7 @@ bot.on("message", async (msg) => {
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
 
     // =========================
-    // CREATE CUSTOM COMMAND
+    // CUSTOM COMMAND CREATION
     // =========================
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
@@ -5059,10 +5375,7 @@ bot.on("message", async (msg) => {
 
       const count = await getUserCustomCommandCount(msg.from.id);
       if (count >= MAX_CUSTOM_COMMANDS) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`
-        );
+        await safeSendMessage(msg.chat.id, `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}`);
         return;
       }
 
@@ -5094,7 +5407,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     // =========================
-    // PENDING YES/NO
+    // PENDING YES / NO
     // =========================
     const pendingMarriage = findMarriageRequestByUser(msg.chat.id, msg.from.id);
     if (pendingMarriage && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
@@ -5102,6 +5415,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
         await finalizeMarriageDecline(pendingMarriage, msg.chat.id);
         return;
       }
+
       await finalizeMarriageAccept(pendingMarriage, msg.chat.id);
       return;
     }
@@ -5112,6 +5426,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
         await finalizeAdoptionDecline(pendingAdoption, msg.chat.id);
         return;
       }
+
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
       return;
     }
@@ -5221,7 +5536,7 @@ ${mood}`;
     }
 
     // =========================
-    // SHIELD COMMANDS
+    // SHIELDS
     // =========================
     if (isExactCommand(lowerText, "купить щит")) {
       const shield = await getShieldRow(msg.from.id);
@@ -5260,11 +5575,7 @@ ${mood}`;
         });
       } catch (error) {
         if (error.message === "NOT_ENOUGH_MONEY") {
-          await safeSendMessage(
-            msg.chat.id,
-            `❌ Щит стоит ${SHIELD_COST} монет.
-У тебя недостаточно монет.`
-          );
+          await safeSendMessage(msg.chat.id, `❌ Щит стоит ${SHIELD_COST} монет.\nУ тебя недостаточно монет.`);
           return;
         }
 
@@ -5298,7 +5609,7 @@ ${mood}`;
     }
 
     // =========================
-    // PUNISHMENT COMMANDS
+    // FAMILY COMMANDS
     // =========================
     if (lowerText.startsWith("наказать ребенка")) {
       const parent = msg.from;
@@ -5313,16 +5624,13 @@ ${mood}`;
       const days = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.\nПример: наказать ребенка 3`
-        );
+        await safeSendMessage(msg.chat.id, `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.`);
         return;
       }
 
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь наказывать только своего ребёнка.");
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -5356,9 +5664,9 @@ ${mood}`;
         return;
       }
 
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь снимать наказание только у своего ребёнка.");
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -5418,9 +5726,6 @@ ${mood}`;
       return;
     }
 
-    // =========================
-    // GOOD DEEDS / OBEDIENCE
-    // =========================
     if (isExactCommand(lowerText, "похвалить ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
@@ -5430,9 +5735,9 @@ ${mood}`;
         return;
       }
 
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь хвалить только своего ребёнка.");
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -5464,13 +5769,13 @@ ${mood}`;
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: наградить ребенка 20");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь награждать только своего ребёнка.");
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -5512,9 +5817,9 @@ ${mood}`;
         return;
       }
 
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь добавлять добрые дела только своему ребёнку.");
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -5525,10 +5830,7 @@ ${mood}`;
       }
 
       if (deedText.length > MAX_GOOD_DEED_LENGTH) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`
-        );
+        await safeSendMessage(msg.chat.id, `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`);
         return;
       }
 
@@ -5565,11 +5867,7 @@ ${mood}`;
 
       const deeds = await getGoodDeeds(targetUser.id);
       if (!deeds.length) {
-        await safeSendMessage(
-          msg.chat.id,
-          `📔 У ${escapeHtml(getUserName(targetUser))} пока нет добрых дел.`,
-          { parse_mode: "HTML" }
-        );
+        await safeSendMessage(msg.chat.id, `📔 У ${escapeHtml(getUserName(targetUser))} пока нет добрых дел.`, { parse_mode: "HTML" });
         return;
       }
 
@@ -5597,9 +5895,9 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь удалять добрые дела только у своего ребёнка.");
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -5607,7 +5905,7 @@ ${lines.join("\n")}`,
       const index = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(index) || index <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи номер.\nПример: удалить доброе дело 1");
+        await safeSendMessage(msg.chat.id, "❌ Укажи номер.");
         return;
       }
 
@@ -5639,9 +5937,9 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь очищать добрые дела только у своего ребёнка.");
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -5689,302 +5987,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // JAIL
-    // =========================
-    if (isExactCommand(lowerText, "тюрьма")) {
-      let targetUser = msg.from;
-
-      if (msg.reply_to_message) {
-        const resolved = await resolveTargetUserFromReply(msg);
-        if (resolved) targetUser = resolved;
-      }
-
-      const jail = await getJailStatus(targetUser.id);
-      if (!jail) {
-        await safeSendMessage(
-          msg.chat.id,
-          `✅ ${getUserLink(targetUser)} не в тюрьме.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      const remainingMs = new Date(jail.until_at).getTime() - Date.now();
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🚔 Тюрьма
-
-Игрок: ${getUserLink(targetUser)}
-🕒 До: ${formatDateTime(jail.until_at)}
-⏳ Осталось: ${formatRemainingTime(remainingMs)}
-
-Доступно:
-• сбежать из тюрьмы
-• адвокат
-• подкупить охрану
-• отсидеть`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "отсидеть")) {
-      const jail = await getJailStatus(msg.from.id);
-      if (!jail) {
-        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
-        return;
-      }
-
-      const remainingMs = new Date(jail.until_at).getTime() - Date.now();
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🪑 ${getUserLink(msg.from)} решил(а) спокойно отсидеть срок.
-
-⏳ До освобождения: ${formatRemainingTime(remainingMs)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "сбежать из тюрьмы")) {
-      const jail = await getJailStatus(msg.from.id);
-      if (!jail) {
-        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
-        return;
-      }
-
-      const wanted = await getWantedRow(msg.from.id);
-
-      const row = await getJailActionRow(msg.from.id);
-      const remainingCd = getActionRemaining(row?.last_escape_at, JAIL_ESCAPE_COOLDOWN_MS);
-      if (remainingCd > 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ Снова попробовать сбежать можно через ${formatRemainingTime(remainingCd)}`
-        );
-        return;
-      }
-
-      await setJailActionUsed(msg.from.id, "last_escape_at");
-
-      const outcome = getRandomEscapeOutcome(wanted?.level || 0);
-
-      if (outcome.type === "success") {
-        await removeUserFromJail(msg.from.id);
-        await changeWantedLevel(msg.from.id, 1);
-
-        let out = `🏃 ${getUserLink(msg.from)} совершил(а) побег из тюрьмы!
-
-🔓 Ему удалось скрыться.`;
-        out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
-
-        await safeSendMessage(msg.chat.id, out, {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        });
-        return;
-      }
-
-      if (outcome.type === "fail") {
-        await safeSendMessage(
-          msg.chat.id,
-          `🚫 Побег не удался.
-
-👮 Охрана заметила попытку, но срок не изменился.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
-      await changeWantedLevel(msg.from.id, 1);
-
-      await safeSendMessage(
-        msg.chat.id,
-        `⛓ ${getUserLink(msg.from)} попытался(ась) сбежать, но был(а) пойман(а).
-
-➕ Срок увеличен на 30 минут.
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "адвокат")) {
-      const jail = await getJailStatus(msg.from.id);
-      if (!jail) {
-        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
-        return;
-      }
-
-      const row = await getJailActionRow(msg.from.id);
-      const remainingCd = getActionRemaining(row?.last_lawyer_at, JAIL_LAWYER_COOLDOWN_MS);
-      if (remainingCd > 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ Снова вызвать адвоката можно через ${formatRemainingTime(remainingCd)}`
-        );
-        return;
-      }
-
-      const stats = await getUserStats(msg.from.id);
-      if (Number(stats?.balance || 0) < JAIL_LAWYER_COST) {
-        await safeSendMessage(msg.chat.id, `❌ Для адвоката нужно ${JAIL_LAWYER_COST} монет.`);
-        return;
-      }
-
-      await deductCoinsSafe(msg.from.id, JAIL_LAWYER_COST);
-      await setJailActionUsed(msg.from.id, "last_lawyer_at");
-
-      const outcome = getRandomLawyerOutcome();
-
-      if (outcome.type === "free") {
-        await removeUserFromJail(msg.from.id);
-        await changeWantedLevel(msg.from.id, -2);
-
-        let out = `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
-
-✅ Адвокат добился освобождения!`;
-        out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
-
-        await safeSendMessage(msg.chat.id, out, {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        });
-        return;
-      }
-
-      if (outcome.type === "reduce") {
-        const updatedJail = await reduceJailTime(msg.from.id, outcome.reduceMs);
-        await changeWantedLevel(msg.from.id, -1);
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
-
-📉 Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
-
-❌ Адвокат ничего не смог сделать.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "подкупить охрану")) {
-      const jail = await getJailStatus(msg.from.id);
-      if (!jail) {
-        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
-        return;
-      }
-
-      const wanted = await getWantedRow(msg.from.id);
-
-      const row = await getJailActionRow(msg.from.id);
-      const remainingCd = getActionRemaining(row?.last_bribe_at, JAIL_BRIBE_COOLDOWN_MS);
-      if (remainingCd > 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ Снова пробовать подкуп можно через ${formatRemainingTime(remainingCd)}`
-        );
-        return;
-      }
-
-      const stats = await getUserStats(msg.from.id);
-      if (Number(stats?.balance || 0) < JAIL_BRIBE_COST) {
-        await safeSendMessage(msg.chat.id, `❌ Для подкупа охраны нужно ${JAIL_BRIBE_COST} монет.`);
-        return;
-      }
-
-      await deductCoinsSafe(msg.from.id, JAIL_BRIBE_COST);
-      await setJailActionUsed(msg.from.id, "last_bribe_at");
-
-      const outcome = getRandomBribeOutcome(wanted?.level || 0);
-
-      if (outcome.type === "free") {
-        await removeUserFromJail(msg.from.id);
-        await changeWantedLevel(msg.from.id, 1);
-
-        let out = `💸 ${getUserLink(msg.from)} подкупил(а) охрану за ${JAIL_BRIBE_COST} монет.
-
-🔓 Его тихо выпустили из тюрьмы.`;
-        out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
-
-        await safeSendMessage(msg.chat.id, out, {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        });
-        return;
-      }
-
-      if (outcome.type === "fail") {
-        await changeWantedLevel(msg.from.id, 1);
-
-        await safeSendMessage(
-          msg.chat.id,
-          `💸 ${getUserLink(msg.from)} попытался(ась) подкупить охрану.
-
-❌ Деньги взяли, но выпускать не стали.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
-      await changeWantedLevel(msg.from.id, 1);
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🚨 Попытка подкупа раскрыта.
-
-⛓ Срок увеличен на 45 минут.
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    // =========================
-    // FAMILY BUDGET
-    // =========================
     if (isExactCommand(lowerText, "семейный бюджет")) {
       const budget = await getFamilyBudget(msg.from.id);
 
@@ -6013,7 +6015,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: вложить в бюджет 5");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
@@ -6034,7 +6036,7 @@ ${lines.join("\n")}`,
         });
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Пополнять семейный бюджет нельзя.");
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье.");
           return;
         }
 
@@ -6055,7 +6057,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: взять с бюджета 5");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
@@ -6063,10 +6065,7 @@ ${lines.join("\n")}`,
       if (childInfo) {
         const punishmentText = await getPunishedBlockText(msg.from.id);
         if (punishmentText) {
-          await safeSendMessage(
-            msg.chat.id,
-            `${punishmentText}\nВо время наказания нельзя брать деньги из семейного бюджета.`
-          );
+          await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания нельзя брать деньги из семейного бюджета.`);
           return;
         }
       }
@@ -6088,7 +6087,7 @@ ${lines.join("\n")}`,
         });
       } catch (error) {
         if (error.message === "NO_FAMILY") {
-          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Брать деньги из семейного бюджета нельзя.");
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье.");
           return;
         }
 
@@ -6104,9 +6103,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // PIGGY BANK
-    // =========================
     if (isExactCommand(lowerText, "создать копилку")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -6176,7 +6172,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить копилку 5");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
@@ -6248,9 +6244,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // DREAMS
-    // =========================
     if (lowerText.startsWith("загадать мечту")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -6265,8 +6258,8 @@ ${lines.join("\n")}`,
         return;
       }
 
-      if (dreamText.length > 120) {
-        await safeSendMessage(msg.chat.id, "❌ Мечта слишком длинная. Максимум 120 символов.");
+      if (dreamText.length > MAX_DREAM_LENGTH) {
+        await safeSendMessage(msg.chat.id, `❌ Мечта слишком длинная. Максимум ${MAX_DREAM_LENGTH} символов.`);
         return;
       }
 
@@ -6355,7 +6348,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: пополнить баланс на мечту 5");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
@@ -6404,7 +6397,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: на мечту 5");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
@@ -6430,7 +6423,7 @@ ${lines.join("\n")}`,
         }
 
         if (error.message === "NOT_MY_CHILD") {
-          await safeSendMessage(msg.chat.id, "❌ Ты можешь помогать только мечте своего ребёнка.");
+          await safeSendMessage(msg.chat.id, "❌ Это не ваш ребёнок. Ответь на сообщение именно своего ребёнка.");
           return;
         }
 
@@ -6446,9 +6439,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // FAMILY MONEY
-    // =========================
     if (lowerText.startsWith("попросить денег")) {
       const childInfo = await getActiveAdoptionByChildId(msg.from.id);
 
@@ -6467,7 +6457,7 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: попросить денег 5");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
@@ -6514,13 +6504,13 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: дать ребенку 5");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
-      const isChild = await isChildInMyFamily(msg.from.id, target.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь давать деньги только своему ребёнку.");
+      const childCheck = await assertChildInMyFamily(msg.from.id, target.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -6576,13 +6566,13 @@ ${lines.join("\n")}`,
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму больше 0.\nПример: карманные деньги 50");
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
         return;
       }
 
-      const isChild = await isChildInMyFamily(sender.id, target.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Ты можешь давать карманные деньги только своему ребёнку.");
+      const childCheck = await assertChildInMyFamily(sender.id, target.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
         return;
       }
 
@@ -6619,62 +6609,337 @@ ${lines.join("\n")}`,
       return;
     }
 
-    // =========================
-    // ROBBERY
-    // =========================
-    if (isExactCommand(lowerText, "ограбить")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
-
-      const layLowBlock = await getLayLowBlockText(msg.from.id);
-      if (layLowBlock) {
-        await safeSendMessage(msg.chat.id, layLowBlock);
-        return;
-      }
-
-      const childPunishment = await getPunishedBlockText(msg.from.id);
-      if (childPunishment) {
-        await safeSendMessage(msg.chat.id, `${childPunishment}\nВо время наказания нельзя грабить других.`);
-        return;
-      }
-
+    if (isExactCommand(lowerText, "брак") || isExactCommand(lowerText, "зарегистрироваться в брак")) {
+      const sender = msg.from;
       const target = await resolveTargetUserFromReply(msg);
+
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: ограбить");
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: брак");
         return;
       }
 
-      if (Number(target.id) === Number(msg.from.id)) {
-        await safeSendMessage(msg.chat.id, "❌ Нельзя ограбить самого себя.");
+      await initUser(target);
+
+      if (sender.id === target.id) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя зарегистрироваться в брак с самим собой.");
         return;
       }
 
-      const robberyCooldown = await getRobberyCooldown(msg.from.id);
-      if (robberyCooldown > 0) {
+      const senderMarriage = await isUserMarried(sender.id);
+      if (senderMarriage) {
+        await safeSendMessage(msg.chat.id, "❌ Ты уже состоишь в браке.");
+        return;
+      }
+
+      const targetMarriage = await isUserMarried(target.id);
+      if (targetMarriage) {
+        await safeSendMessage(msg.chat.id, "❌ Этот человек уже состоит в браке.");
+        return;
+      }
+
+      const senderAdoption = await getActiveAdoptionByChildId(sender.id);
+      const targetAdoption = await getActiveAdoptionByChildId(target.id);
+
+      if (senderAdoption || targetAdoption) {
+        await safeSendMessage(msg.chat.id, "❌ Игрок в роли ребёнка не может вступить в брак.");
+        return;
+      }
+
+      const existingReq = findMarriageRequestByUser(msg.chat.id, target.id);
+      if (existingReq) {
+        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активное предложение брака.");
+        return;
+      }
+
+      const requestId = generateRequestId("marriage");
+      const request = {
+        requestId,
+        userKey: `${msg.chat.id}:${target.id}`,
+        fromUser: {
+          id: sender.id,
+          first_name: sender.first_name || "",
+          last_name: sender.last_name || "",
+          username: sender.username || ""
+        },
+        targetUser: {
+          id: target.id,
+          first_name: target.first_name || "",
+          last_name: target.last_name || "",
+          username: target.username || ""
+        },
+        createdAt: Date.now()
+      };
+
+      saveMarriageRequest(request);
+
+      const sent = await safeSendMessage(
+        msg.chat.id,
+        `💍 ${getUserLink(sender)} сделал(а) предложение ${getUserLink(target)}!
+
+${getUserLink(target)}, выбери ниже:
+✅ Да
+❌ Нет
+
+⌛ У вас есть 10 минут.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+          reply_markup: getMarriageDecisionKeyboard(requestId)
+        }
+      );
+
+      if (sent) request.requestMessageId = sent.message_id;
+      return;
+    }
+
+    if (isExactCommand(lowerText, "развод")) {
+      const marriagePartner = await getMarriagePartner(msg.from.id);
+
+      if (!marriagePartner) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в браке.");
+        return;
+      }
+
+      const partnerUser = await getStoredUser(marriagePartner.partnerId);
+
+      await divorceMarriageByUserId(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💔 ${getUserLink(msg.from)} развёлся(ась) с ${getUserLink(partnerUser)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "усыновить")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: усыновить");
+        return;
+      }
+
+      await initUser(child);
+
+      const validation = await canAdoptUser(parent.id, child.id);
+      if (!validation.ok) {
+        await safeSendMessage(msg.chat.id, validation.text);
+        return;
+      }
+
+      const existingReq = findAdoptionRequestByUser(msg.chat.id, child.id);
+      if (existingReq) {
+        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активный запрос на усыновление.");
+        return;
+      }
+
+      const requestId = generateRequestId("adoption");
+      const request = {
+        requestId,
+        userKey: `${msg.chat.id}:${child.id}`,
+        parentUser: {
+          id: parent.id,
+          first_name: parent.first_name || "",
+          last_name: parent.last_name || "",
+          username: parent.username || ""
+        },
+        childUser: {
+          id: child.id,
+          first_name: child.first_name || "",
+          last_name: child.last_name || "",
+          username: child.username || ""
+        },
+        createdAt: Date.now()
+      };
+
+      saveAdoptionRequest(request);
+
+      const spouseInfo = await getMarriagePartner(parent.id);
+      const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
+
+      let requestText = `👶 ${getUserLink(parent)}`;
+      if (spouseUser) requestText += ` и ${getUserLink(spouseUser)}`;
+      requestText += ` хотят усыновить ${getUserLink(child)}!
+
+${getUserLink(child)}, выбери ниже:
+✅ Да
+❌ Нет
+
+⌛ У вас есть 10 минут.`;
+
+      const sent = await safeSendMessage(msg.chat.id, requestText, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: getAdoptionDecisionKeyboard(requestId)
+      });
+
+      if (sent) request.requestMessageId = sent.message_id;
+      return;
+    }
+
+    if (isExactCommand(lowerText, "отказаться от ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение ребёнка и напиши: отказаться от ребенка");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const removed = await removeChildFromParent(parent.id, child.id);
+
+      if (!removed) {
+        await safeSendMessage(msg.chat.id, "❌ Этот игрок не является твоим ребёнком.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💔 ${getUserLink(parent)} отказался(ась) от ребёнка ${getUserLink(child)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "сбежать из семьи")) {
+      const child = msg.from;
+      const activeAdoption = await getActiveAdoptionByChildId(child.id);
+
+      if (!activeAdoption) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье как ребёнок.");
+        return;
+      }
+
+      const parentUser = await getStoredUser(Number(activeAdoption.parent_user_id));
+      await childEscapeFamily(child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏃 ${getUserLink(child)} сбежал(а) из семьи ${getUserLink(parentUser)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "любимый ребенок")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserFromReply(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: любимый ребенок");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      await setFavoriteChild(parent.id, child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⭐ ${getUserLink(parent)} выбрал(а) ${getUserLink(child)} любимым ребёнком!`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "убрать любимого ребенка")) {
+      const removedFavorite = await removeFavoriteChild(msg.from.id);
+
+      if (!removedFavorite) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет любимого ребёнка.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⭐ ${getUserLink(msg.from)} убрал(а) любимого ребёнка.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "семья")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const partnerInfo = await getMarriagePartner(targetUser.id);
+      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
+
+      if (childInfo) {
+        const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
+        const parentPartnerInfo = await getMarriagePartner(parentUser.id);
+        const secondParent = parentPartnerInfo
+          ? await getStoredUser(Number(parentPartnerInfo.partnerId))
+          : null;
+        const punishment = await getActivePunishment(targetUser.id);
+        const obedience = await getChildObedience(targetUser.id);
+
+        let textFamily = `🏡 Семья
+
+👶 Ребёнок: ${getUserLink(targetUser)}
+👨 Родитель: ${getUserLink(parentUser)}`;
+
+        if (secondParent) {
+          textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
+        }
+
+        textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
+        textFamily += `\n📈 Послушание: ${Number(obedience?.value || 0)}/100`;
+
+        if (punishment) {
+          const remaining = new Date(punishment.until_at).getTime() - Date.now();
+          textFamily += `\n\n⛔ Наказание: активно`;
+          textFamily += `\n🕒 До: ${formatDateTime(punishment.until_at)}`;
+          textFamily += `\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
+        } else {
+          textFamily += `\n\n⛔ Наказание: нет`;
+        }
+
+        await safeSendMessage(msg.chat.id, textFamily, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      const parentIds = await getFamilyParentIds(targetUser.id);
+      const children = await getChildrenByParentIds(parentIds);
+
+      if (!partnerInfo && !children.length) {
         await safeSendMessage(
           msg.chat.id,
-          `⏳ Ограбление снова будет доступно через ${formatRemainingTime(robberyCooldown)}`
-        );
-        return;
-      }
-
-      const myWanted = await getWantedRow(msg.from.id);
-
-      await updateLastRobberyAt(msg.from.id);
-
-      const targetShield = await getShieldRow(target.id);
-      if (Number(targetShield?.count || 0) > 0) {
-        const shieldUse = await useShieldOnce(target.id);
-
-        await safeSendMessage(
-          msg.chat.id,
-          `🛡 ${getUserLink(target)} защитился(ась) щитом!
-
-🕵️ ${getUserLink(msg.from)} не смог(ла) ограбить цель.
-🛡 Осталось щитов у цели: ${shieldUse.count}/${MAX_SHIELDS}`,
+          `${getUserLink(targetUser)} пока не состоит в семье.`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
@@ -6683,118 +6948,342 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const targetStats = await getUserStats(target.id);
-      if (!targetStats || Number(targetStats.balance || 0) <= 0) {
-        await safeSendMessage(msg.chat.id, "❌ У этого игрока нет монет. Грабить нечего.");
+      let familyText = `🏡 Семья
+
+👤 Игрок: ${getUserLink(targetUser)}`;
+
+      if (partnerInfo) {
+        const partnerUser = await getStoredUser(partnerInfo.partnerId);
+        const coupleState = await getCoupleState(targetUser.id, partnerInfo.partnerId);
+        familyText += `\n💍 Супруг(а): ${getUserLink(partnerUser)}`;
+        familyText += `\n📅 Брак с: ${formatDate(partnerInfo.marriage.created_at)}`;
+        familyText += `\n💚 Ревность: ${Number(coupleState?.jealousy || 0)}/100`;
+      }
+
+      if (children.length) {
+        const favoriteChild = await getFavoriteChild(targetUser.id);
+        const favoriteChildId = favoriteChild ? Number(favoriteChild.child_user_id) : null;
+
+        const childLines = [];
+        for (const childRow of children) {
+          const childUser = await getStoredUser(Number(childRow.child_user_id));
+          const childId = Number(childRow.child_user_id);
+          const punishment = await getActivePunishment(childId);
+          const obedience = await getChildObedience(childId);
+
+          let line = "";
+          if (favoriteChildId && favoriteChildId === childId) {
+            line += `⭐ ${getUserLink(childUser)} — любимый`;
+          } else {
+            line += `• ${getUserLink(childUser)}`;
+          }
+
+          line += `\n   📈 Послушание: ${Number(obedience?.value || 0)}/100`;
+
+          if (punishment) {
+            const remaining = new Date(punishment.until_at).getTime() - Date.now();
+            line += `\n   ⛔ Наказан(а)`;
+            line += `\n   ⏳ Осталось: ${formatRemainingTime(remaining)}`;
+          }
+
+          childLines.push(line);
+        }
+
+        familyText += `\n\n👶 Дети:\n${childLines.join("\n")}`;
+      } else {
+        familyText += `\n\n👶 Дети: нет`;
+      }
+
+      await safeSendMessage(msg.chat.id, familyText, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    // =========================
+    // JAIL COMMANDS
+    // =========================
+    if (isExactCommand(lowerText, "тюрьма")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const jail = await getJailStatus(targetUser.id);
+      if (!jail) {
+        await safeSendMessage(
+          msg.chat.id,
+          `✅ ${getUserLink(targetUser)} не в тюрьме.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
         return;
       }
 
-      const robbery = getRandomRobberyResult();
+      const remainingMs = new Date(jail.until_at).getTime() - Date.now();
 
-      if (robbery.type === "fail") {
-        let resultText = `🚨 ${getUserLink(msg.from)} попытался ограбить ${getUserLink(target)}, но его спалили!`;
+      await safeSendMessage(
+        msg.chat.id,
+        `🚔 Тюрьма
 
-        const failFine = Math.floor(Math.random() * 4) + 2;
-        try {
-          const fineResult = await deductCoinsSafe(msg.from.id, failFine);
-          if (fineResult.deducted > 0) {
-            resultText += `\n💸 Штраф за провал: ${fineResult.deducted} монет`;
-          }
-        } catch (error) {
-          console.error("Ошибка штрафа за провал ограбления:", error);
+Игрок: ${getUserLink(targetUser)}
+🕒 До: ${formatDateTime(jail.until_at)}
+⏳ Осталось: ${formatRemainingTime(remainingMs)}
+
+Доступно:
+• сбежать из тюрьмы
+• адвокат
+• подкупить охрану
+• отсидеть`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
         }
+      );
+      return;
+    }
 
+    if (isExactCommand(lowerText, "отсидеть")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
+      }
+
+      const remainingMs = new Date(jail.until_at).getTime() - Date.now();
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🪑 ${getUserLink(msg.from)} решил(а) спокойно отсидеть срок.
+
+⏳ До освобождения: ${formatRemainingTime(remainingMs)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "сбежать из тюрьмы")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
+      }
+
+      const bonuses = await getCrimeBonuses(msg.from.id);
+      const wanted = await getWantedRow(msg.from.id);
+
+      const row = await getJailActionRow(msg.from.id);
+      const remainingCd = getActionRemaining(row?.last_escape_at, JAIL_ESCAPE_COOLDOWN_MS);
+      if (remainingCd > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Снова попробовать сбежать можно через ${formatRemainingTime(remainingCd)}`);
+        return;
+      }
+
+      await setJailActionUsed(msg.from.id, "last_escape_at");
+
+      const outcome = getRandomEscapeOutcome(wanted?.level || 0, bonuses.armor, bonuses.fakePassport);
+
+      if (outcome.type === "success") {
+        await removeUserFromJail(msg.from.id);
         await changeWantedLevel(msg.from.id, 1);
 
-        const police = getRandomPoliceOutcome(myWanted?.level || 0);
+        let out = `🏃 ${getUserLink(msg.from)} совершил(а) побег из тюрьмы!
 
-        if (police.type === "fine") {
-          try {
-            const fine = await deductCoinsSafe(msg.from.id, police.amount);
-            if (fine.deducted > 0) {
-              resultText += `\n🚓 Полиция поймала преступника.\n💸 Полицейский штраф: ${fine.deducted} монет`;
-            } else {
-              resultText += `\n🚓 Полиция пришла, но денег на штраф уже не осталось.`;
-            }
-          } catch (error) {
-            console.error("Ошибка police fine:", error);
-          }
-        }
+🔓 Ему удалось скрыться.`;
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
 
-        if (police.type === "jail") {
-          const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
-          await changeWantedLevel(msg.from.id, 1);
-          await deactivateLayLow(msg.from.id);
-          resultText += `\n🚔 ${getUserLink(msg.from)} арестован(а) и отправлен(а) в тюрьму!`;
-          resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
-        }
-
-        await safeSendMessage(msg.chat.id, resultText, {
+        await safeSendMessage(msg.chat.id, out, {
           parse_mode: "HTML",
           disable_web_page_preview: true
         });
         return;
       }
 
-      let transfer;
-      try {
-        transfer = await robberyTransfer(msg.from.id, target.id, robbery.amount);
-      } catch (error) {
-        if (error.message === "VICTIM_NO_MONEY") {
-          await safeSendMessage(msg.chat.id, "❌ У этого игрока нет монет. Грабить нечего.");
-          return;
-        }
+      if (outcome.type === "fail") {
+        await safeSendMessage(
+          msg.chat.id,
+          `🚫 Побег не удался.
 
-        console.error("Ошибка robberyTransfer:", error);
-        await safeSendMessage(msg.chat.id, "❌ Ошибка ограбления.");
+👮 Охрана заметила попытку, но срок не изменился.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
         return;
       }
 
+      const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
       await changeWantedLevel(msg.from.id, 1);
 
-      let resultText = robbery.type === "small"
-        ? `🕵️ ${getUserLink(msg.from)} ограбил(а) ${getUserLink(target)} и украл(а) ${transfer.stolen} монет`
-        : `💰 ${getUserLink(msg.from)} удачно ограбил(а) ${getUserLink(target)} и вынес(ла) ${transfer.stolen} монет!`;
+      await safeSendMessage(
+        msg.chat.id,
+        `⛓ ${getUserLink(msg.from)} попытался(ась) сбежать, но был(а) пойман(а).
 
-      const police = getRandomPoliceOutcome(myWanted?.level || 0);
+➕ Срок увеличен на 30 минут.
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
 
-      if (police.type === "fine") {
-        try {
-          const fine = await deductCoinsSafe(msg.from.id, police.amount);
-          if (fine.deducted > 0) {
-            resultText += `\n🚓 Но полиция вычислила вора.`;
-            resultText += `\n💸 Штраф: ${fine.deducted} монет`;
-          } else {
-            resultText += `\n🚓 Полиция пришла, но денег на штраф уже не осталось.`;
+    if (isExactCommand(lowerText, "адвокат")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
+      }
+
+      const row = await getJailActionRow(msg.from.id);
+      const remainingCd = getActionRemaining(row?.last_lawyer_at, JAIL_LAWYER_COOLDOWN_MS);
+      if (remainingCd > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Снова вызвать адвоката можно через ${formatRemainingTime(remainingCd)}`);
+        return;
+      }
+
+      const stats = await getUserStats(msg.from.id);
+      if (Number(stats?.balance || 0) < JAIL_LAWYER_COST) {
+        await safeSendMessage(msg.chat.id, `❌ Для адвоката нужно ${JAIL_LAWYER_COST} монет.`);
+        return;
+      }
+
+      await deductCoinsSafe(msg.from.id, JAIL_LAWYER_COST);
+      await setJailActionUsed(msg.from.id, "last_lawyer_at");
+
+      const outcome = getRandomLawyerOutcome();
+
+      if (outcome.type === "free") {
+        await removeUserFromJail(msg.from.id);
+        await changeWantedLevel(msg.from.id, -2);
+
+        let out = `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
+
+✅ Адвокат добился освобождения!`;
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      if (outcome.type === "reduce") {
+        const updatedJail = await reduceJailTime(msg.from.id, outcome.reduceMs);
+        await changeWantedLevel(msg.from.id, -1);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
+
+📉 Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
           }
-        } catch (error) {
-          console.error("Ошибка police fine after success:", error);
-        }
+        );
+        return;
       }
 
-      if (police.type === "return") {
-        try {
-          await transferCoins(msg.from.id, target.id, transfer.stolen);
-          resultText += `\n🚓 Полиция быстро нашла вора и вернула ${transfer.stolen} монет владельцу.`;
-        } catch (error) {
-          console.error("Ошибка возврата денег полицией:", error);
+      await safeSendMessage(
+        msg.chat.id,
+        `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
+
+❌ Адвокат ничего не смог сделать.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
         }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "подкупить охрану")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "✅ Ты не в тюрьме.");
+        return;
       }
 
-      if (police.type === "jail") {
-        const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
+      const bonuses = await getCrimeBonuses(msg.from.id);
+      const wanted = await getWantedRow(msg.from.id);
+
+      const row = await getJailActionRow(msg.from.id);
+      const remainingCd = getActionRemaining(row?.last_bribe_at, JAIL_BRIBE_COOLDOWN_MS);
+      if (remainingCd > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Снова пробовать подкуп можно через ${formatRemainingTime(remainingCd)}`);
+        return;
+      }
+
+      const stats = await getUserStats(msg.from.id);
+      if (Number(stats?.balance || 0) < JAIL_BRIBE_COST) {
+        await safeSendMessage(msg.chat.id, `❌ Для подкупа охраны нужно ${JAIL_BRIBE_COST} монет.`);
+        return;
+      }
+
+      await deductCoinsSafe(msg.from.id, JAIL_BRIBE_COST);
+      await setJailActionUsed(msg.from.id, "last_bribe_at");
+
+      const outcome = getRandomBribeOutcome(wanted?.level || 0, bonuses.fakePassport);
+
+      if (outcome.type === "free") {
+        await removeUserFromJail(msg.from.id);
         await changeWantedLevel(msg.from.id, 1);
-        await deactivateLayLow(msg.from.id);
-        resultText += `\n🚔 Полиция задержала ${getUserLink(msg.from)}!`;
-        resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+
+        let out = `💸 ${getUserLink(msg.from)} подкупил(а) охрану за ${JAIL_BRIBE_COST} монет.
+
+🔓 Его тихо выпустили из тюрьмы.`;
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
       }
 
-      resultText = await appendLevelUpIfNeeded(resultText, msg.from.id, 10);
+      if (outcome.type === "fail") {
+        await changeWantedLevel(msg.from.id, 1);
 
-      await safeSendMessage(msg.chat.id, resultText, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
+        await safeSendMessage(
+          msg.chat.id,
+          `💸 ${getUserLink(msg.from)} попытался(ась) подкупить охрану.
+
+❌ Деньги взяли, но выпускать не стали.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
+      await changeWantedLevel(msg.from.id, 1);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚨 Попытка подкупа раскрыта.
+
+⛓ Срок увеличен на 45 минут.
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
       return;
     }
 
@@ -7032,6 +7521,259 @@ ${coinsLine}
     }
 
     // =========================
+    // ROBBERY
+    // =========================
+    if (isExactCommand(lowerText, "ограбить")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
+        return;
+      }
+
+      const childPunishment = await getPunishedBlockText(msg.from.id);
+      if (childPunishment) {
+        await safeSendMessage(msg.chat.id, `${childPunishment}\nВо время наказания нельзя грабить других.`);
+        return;
+      }
+
+      const target = await resolveTargetUserFromReply(msg);
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: ограбить");
+        return;
+      }
+
+      if (Number(target.id) === Number(msg.from.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя ограбить самого себя.");
+        return;
+      }
+
+      const robberyCooldown = await getRobberyCooldown(msg.from.id);
+      if (robberyCooldown > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Ограбление снова будет доступно через ${formatRemainingTime(robberyCooldown)}`);
+        return;
+      }
+
+      const targetShield = await getShieldRow(target.id);
+      if (Number(targetShield?.count || 0) > 0) {
+        const shieldUse = await useShieldOnce(target.id);
+        await updateCooldownColumnNow(msg.from.id, "last_robbery_at");
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🛡 ${getUserLink(target)} защитился(ась) щитом!
+
+🕵️ ${getUserLink(msg.from)} не смог(ла) ограбить цель.
+🛡 Осталось щитов у цели: ${shieldUse.count}/${MAX_SHIELDS}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const targetStats = await getUserStats(target.id);
+      if (!targetStats || Number(targetStats.balance || 0) <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ У этого игрока нет монет. Грабить нечего.");
+        return;
+      }
+
+      const myWanted = await getWantedRow(msg.from.id);
+      const bonuses = await getCrimeBonuses(msg.from.id);
+
+      await updateCooldownColumnNow(msg.from.id, "last_robbery_at");
+
+      const robbery = getRandomRobberyResult(Number(targetStats.balance || 0), myWanted?.level || 0, bonuses);
+
+      if (robbery.type === "fail") {
+        let resultText = `🚨 ${getUserLink(msg.from)} попытался ограбить ${getUserLink(target)}, но его спалили!`;
+
+        const failFine = Math.floor(Math.random() * 6) + 3;
+        try {
+          const fineResult = await deductCoinsSafe(msg.from.id, failFine);
+          if (fineResult.deducted > 0) {
+            resultText += `\n💸 Штраф за провал: ${fineResult.deducted} монет`;
+          }
+        } catch (error) {
+          console.error("Ошибка штрафа за провал ограбления:", error);
+        }
+
+        await changeWantedLevel(msg.from.id, 1);
+
+        const police = getRandomPoliceOutcome(myWanted?.level || 0);
+
+        if (police.type === "fine") {
+          try {
+            const fine = await deductCoinsSafe(msg.from.id, police.amount);
+            if (fine.deducted > 0) {
+              resultText += `\n🚓 Полиция поймала преступника.\n💸 Полицейский штраф: ${fine.deducted} монет`;
+            }
+          } catch (error) {
+            console.error("Ошибка police fine:", error);
+          }
+        }
+
+        if (police.type === "jail") {
+          const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
+          await changeWantedLevel(msg.from.id, 1);
+          await deactivateLayLow(msg.from.id);
+          resultText += `\n🚔 ${getUserLink(msg.from)} арестован(а) и отправлен(а) в тюрьму!`;
+          resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+        }
+
+        await safeSendMessage(msg.chat.id, resultText, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      let transfer;
+      try {
+        transfer = await robberyTransfer(msg.from.id, target.id, robbery.amount);
+      } catch (error) {
+        if (error.message === "VICTIM_NO_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У этого игрока нет монет. Грабить нечего.");
+          return;
+        }
+
+        console.error("Ошибка robberyTransfer:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка ограбления.");
+        return;
+      }
+
+      await changeWantedLevel(msg.from.id, 1);
+
+      let resultText = robbery.type === "small"
+        ? `🕵️ ${getUserLink(msg.from)} ограбил(а) ${getUserLink(target)} и украл(а) ${transfer.stolen} монет`
+        : `💰 ${getUserLink(msg.from)} удачно ограбил(а) ${getUserLink(target)} и вынес(ла) ${transfer.stolen} монет!`;
+
+      const police = getRandomPoliceOutcome(myWanted?.level || 0);
+
+      if (police.type === "fine") {
+        try {
+          const fine = await deductCoinsSafe(msg.from.id, police.amount);
+          if (fine.deducted > 0) {
+            resultText += `\n🚓 Но полиция вычислила вора.`;
+            resultText += `\n💸 Штраф: ${fine.deducted} монет`;
+          }
+        } catch (error) {
+          console.error("Ошибка police fine after success:", error);
+        }
+      }
+
+      if (police.type === "return") {
+        try {
+          await transferCoins(msg.from.id, target.id, transfer.stolen);
+          resultText += `\n🚓 Полиция быстро нашла вора и вернула ${transfer.stolen} монет владельцу.`;
+        } catch (error) {
+          console.error("Ошибка возврата денег полицией:", error);
+        }
+      }
+
+      if (police.type === "jail") {
+        const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
+        await changeWantedLevel(msg.from.id, 1);
+        await deactivateLayLow(msg.from.id);
+        resultText += `\n🚔 Полиция задержала ${getUserLink(msg.from)}!`;
+        resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+      }
+
+      resultText = await appendLevelUpIfNeeded(resultText, msg.from.id, 10);
+
+      await safeSendMessage(msg.chat.id, resultText, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    // =========================
+    // ATM HACK
+    // =========================
+    if (isExactCommand(lowerText, "взлом банкомата")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
+        return;
+      }
+
+      const cooldown = await getAtmHackCooldown(msg.from.id);
+      if (cooldown > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Взлом банкомата снова будет доступен через ${formatRemainingTime(cooldown)}`);
+        return;
+      }
+
+      const bonuses = await getCrimeBonuses(msg.from.id);
+      if (!bonuses.lockpick) {
+        await safeSendMessage(msg.chat.id, "❌ Для взлома банкомата нужна отмычка.\nКупи её на чёрном рынке.");
+        return;
+      }
+
+      const wanted = await getWantedRow(msg.from.id);
+      await updateCooldownColumnNow(msg.from.id, "last_atm_hack_at");
+
+      const outcome = getAtmHackOutcome(wanted?.level || 0, bonuses);
+
+      if (outcome.type === "fail") {
+        await changeWantedLevel(msg.from.id, 1);
+
+        let out = `🏧 Попытка взлома банкомата провалилась.
+
+🚨 Банкомат заблокировался
+📹 Камера записала лицо`;
+
+        if (Math.random() < 0.55) {
+          const fine = await deductCoinsSafe(msg.from.id, Math.floor(Math.random() * 10) + 8);
+          if (fine.deducted > 0) out += `\n💸 Штраф: ${fine.deducted} монет`;
+        }
+
+        const police = getRandomPoliceOutcome(wanted?.level || 0);
+        if (police.type === "jail") {
+          const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
+          await changeWantedLevel(msg.from.id, 1);
+          out += `\n🚔 Полиция задержала тебя.`;
+          out += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+        }
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      await changeWantedLevel(msg.from.id, 1);
+      const newBalance = await addCoinsToUser(msg.from.id, outcome.coins);
+
+      let out = `🏧 ${getUserLink(msg.from)} взломал(а) банкомат.
+
+💰 Получено: ${outcome.coins} монет
+🚨 Розыск +1
+👛 Баланс: ${newBalance}`;
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 9);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    // =========================
     // BANK HEIST COMMANDS
     // =========================
     if (isExactCommand(lowerText, "ограбление банка")) {
@@ -7049,23 +7791,13 @@ ${coinsLine}
 
       const existingHeist = getBankHeist(msg.chat.id);
       if (existingHeist) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ В этом чате уже есть активное ограбление банка.\n\n${getHeistStatusText(existingHeist)}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
+        await safeSendMessage(msg.chat.id, "❌ В этом чате уже есть активное ограбление банка.");
         return;
       }
 
       const cooldown = await getBankHeistCooldown(msg.from.id);
       if (cooldown > 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ Ограбление банка снова будет доступно через ${formatRemainingTime(cooldown)}`
-        );
+        await safeSendMessage(msg.chat.id, `⏳ Ограбление банка снова будет доступно через ${formatRemainingTime(cooldown)}`);
         return;
       }
 
@@ -7077,14 +7809,13 @@ ${coinsLine}
 👥 Сейчас в команде: 1/${BANK_HEIST_MAX_MEMBERS}
 🎯 Нужно минимум ${BANK_HEIST_MIN_MEMBERS} игрока
 
-Что делать дальше:
+Дальше:
 • присоединиться к ограблению
 • в дело
-• купить маску
 • статус ограбления
 • начать штурм
 
-💡 Маска стоит ${BANK_MASK_COST} монет и повышает шансы команды.`;
+💡 Маска, рация, бронежилет и глушилка сильно помогают.`;
 
       out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
 
@@ -7114,36 +7845,33 @@ ${coinsLine}
         return;
       }
 
+      if (heist.stage !== "gathering") {
+        await safeSendMessage(msg.chat.id, "❌ Ограбление уже началось. Присоединиться поздно.");
+        return;
+      }
+
+      if (isHeistParticipant(heist, msg.from.id)) {
+        await safeSendMessage(msg.chat.id, "✅ Ты уже в команде.");
+        return;
+      }
+
+      if (getHeistMemberCount(heist) >= BANK_HEIST_MAX_MEMBERS) {
+        await safeSendMessage(msg.chat.id, `❌ Команда уже полная. Максимум ${BANK_HEIST_MAX_MEMBERS} игроков.`);
+        return;
+      }
+
       const cooldown = await getBankHeistCooldown(msg.from.id);
       if (cooldown > 0) {
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ Ты ещё не можешь участвовать в новом ограблении банка.\nОсталось: ${formatRemainingTime(cooldown)}`
-        );
+        await safeSendMessage(msg.chat.id, `⏳ Ты ещё не можешь участвовать в новом ограблении банка.\nОсталось: ${formatRemainingTime(cooldown)}`);
         return;
       }
 
-      const result = await addUserToBankHeist(msg.chat.id, msg.from);
-
-      if (!result.ok) {
-        if (result.reason === "already_started") {
-          await safeSendMessage(msg.chat.id, "❌ Ограбление уже началось. Присоединиться поздно.");
-          return;
-        }
-
-        if (result.reason === "already_member") {
-          await safeSendMessage(msg.chat.id, "✅ Ты уже в команде.");
-          return;
-        }
-
-        if (result.reason === "team_full") {
-          await safeSendMessage(msg.chat.id, `❌ Команда уже полная. Максимум ${BANK_HEIST_MAX_MEMBERS} игроков.`);
-          return;
-        }
-
-        await safeSendMessage(msg.chat.id, "❌ Ошибка присоединения к ограблению.");
-        return;
-      }
+      heist.members[String(msg.from.id)] = {
+        id: Number(msg.from.id),
+        first_name: msg.from.first_name || "",
+        last_name: msg.from.last_name || "",
+        username: msg.from.username || ""
+      };
 
       let out = `👥 ${getUserLink(msg.from)} присоединился(ась) к ограблению банка!
 
@@ -7151,7 +7879,6 @@ ${coinsLine}
 Лидер: ${getUserLink(heist.members[String(heist.leaderId)])}
 
 Теперь можно:
-• купить маску
 • статус ограбления
 • начать штурм`;
 
@@ -7164,66 +7891,38 @@ ${coinsLine}
       return;
     }
 
-    if (isExactCommand(lowerText, "купить маску")) {
+    if (isExactCommand(lowerText, "статус ограбления")) {
       const heist = getBankHeist(msg.chat.id);
       if (!heist) {
         await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
         return;
       }
 
-      try {
-        const result = await buyMaskForHeistMember(msg.chat.id, msg.from.id);
+      const stats = await getHeistTeamStats(heist);
+      const membersText = getHeistMembersList(heist)
+        .map((u, i) => `${i + 1}. ${Number(u.id) === Number(heist.leaderId) ? "👑 " : ""}${getUserLink(u)}`)
+        .join("\n");
 
-        let out = `🎭 ${getUserLink(msg.from)} купил(а) маску для ограбления.
+      await safeSendMessage(
+        msg.chat.id,
+        `🏦 Ограбление банка
 
-💸 Цена: ${BANK_MASK_COST} монет
-👛 Баланс: ${result.userBalance}
-🎭 Масок в команде: ${getMaskedMembersCount(result.heist)}/${getHeistMemberCount(result.heist)}`;
+Этап: ${escapeHtml(heist.stage)}
+👥 Команда: ${stats.members}/${BANK_HEIST_MAX_MEMBERS}
+🎭 Маски: ${stats.masks}
+📡 Рации: ${stats.radios}
+🦺 Бронежилеты: ${stats.armors}
+📴 Глушилки: ${stats.jammers}
+🚨 Полиция: ${heist.policeAlert ? "уже настороже" : "пока тихо"}
+💰 Общая добыча: ${Number(heist.loot || 0)} монет
 
-        out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
-
-        await safeSendMessage(msg.chat.id, out, {
+Участники:
+${membersText}`,
+        {
           parse_mode: "HTML",
           disable_web_page_preview: true
-        });
-      } catch (error) {
-        if (error.message === "NO_HEIST") {
-          await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
-          return;
         }
-
-        if (error.message === "WRONG_STAGE") {
-          await safeSendMessage(msg.chat.id, "❌ Уже поздно покупать маску. Ограбление уже началось.");
-          return;
-        }
-
-        if (error.message === "NOT_MEMBER") {
-          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в команде ограбления.");
-          return;
-        }
-
-        if (error.message === "ALREADY_HAVE_MASK") {
-          await safeSendMessage(msg.chat.id, "✅ У тебя уже есть маска.");
-          return;
-        }
-
-        if (error.message === "NOT_ENOUGH_MONEY") {
-          await safeSendMessage(msg.chat.id, `❌ Маска стоит ${BANK_MASK_COST} монет. У тебя не хватает денег.`);
-          return;
-        }
-
-        console.error("Ошибка покупки маски:", error);
-        await safeSendMessage(msg.chat.id, "❌ Ошибка покупки маски.");
-      }
-      return;
-    }
-
-    if (isExactCommand(lowerText, "статус ограбления")) {
-      const heist = getBankHeist(msg.chat.id);
-      await safeSendMessage(msg.chat.id, getHeistStatusText(heist), {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
+      );
       return;
     }
 
@@ -7258,12 +7957,6 @@ ${coinsLine}
     }
 
     if (isExactCommand(lowerText, "начать штурм")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
-
       const heist = getBankHeist(msg.chat.id);
       if (!heist) {
         await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного ограбления банка.");
@@ -7282,46 +7975,33 @@ ${coinsLine}
 
       const members = getHeistMembersList(heist);
       if (members.length < BANK_HEIST_MIN_MEMBERS) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ Для ограбления банка нужно минимум ${BANK_HEIST_MIN_MEMBERS} игрока.`
-        );
+        await safeSendMessage(msg.chat.id, `❌ Для ограбления банка нужно минимум ${BANK_HEIST_MIN_MEMBERS} игрока.`);
         return;
       }
 
       for (const user of members) {
         const jail = await getJailStatus(user.id);
         if (jail) {
-          await safeSendMessage(
-            msg.chat.id,
-            `❌ ${getUserLink(user)} сейчас в тюрьме. Команда не может начать штурм.`,
-            {
-              parse_mode: "HTML",
-              disable_web_page_preview: true
-            }
-          );
+          await safeSendMessage(msg.chat.id, `❌ ${getUserLink(user)} сейчас в тюрьме.`, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          });
           return;
         }
 
         const layLow = await getLayLowStatus(user.id);
         if (layLow && layLow.is_active) {
           const remain = new Date(layLow.until_at).getTime() - Date.now();
-          await safeSendMessage(
-            msg.chat.id,
-            `❌ ${getUserLink(user)} сейчас залёг на дно.\n⏳ Осталось: ${formatRemainingTime(remain)}\nКоманда не может начать штурм.`,
-            {
-              parse_mode: "HTML",
-              disable_web_page_preview: true
-            }
-          );
+          await safeSendMessage(msg.chat.id, `❌ ${getUserLink(user)} сейчас залёг на дно.\n⏳ Осталось: ${formatRemainingTime(remain)}`, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          });
           return;
         }
       }
 
-      heist.startedAt = Date.now();
-
-      const wantedAverage = await getAverageWantedForHeist(heist);
-      const entry = getBankEntryOutcome(heist, wantedAverage);
+      const stats = await getHeistTeamStats(heist);
+      const entry = getBankEntryOutcome(stats);
 
       for (const user of members) {
         await changeWantedLevel(user.id, 1);
@@ -7333,7 +8013,6 @@ ${coinsLine}
 
         let out = `🏦 Команда проникла в банк почти без шума.
 
-👮 Охрана пока не подняла открытый шум.
 ${heist.policeAlert ? "🚨 Но скрытая тревога уже отправила сигнал полиции." : "😶 Скрытая тревога пока не сработала."}
 
 Следующая команда:
@@ -7352,7 +8031,7 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
         heist.stage = "inside";
         heist.policeAlert = true;
 
-        let out = `🚔 У входа стояла вооружённая охрана.
+        let out = `🚔 У входа стояла усиленная охрана.
 
 Команда смогла прорваться внутрь, но:
 🚨 нажата тревожная кнопка
@@ -7393,11 +8072,42 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
         return;
       }
 
-      await punishHeistMembersWithPolice(
+      heist.stage = "failed";
+      clearBankHeist(msg.chat.id);
+
+      for (const user of members) {
+        await updateCooldownColumnNow(user.id, "last_bank_at");
+      }
+
+      const shuffled = [...members].sort(() => Math.random() - 0.5);
+      const arrested = shuffled.slice(0, members.length >= 3 ? 2 : 1);
+      const fined = shuffled.slice(arrested.length);
+
+      for (const user of arrested) {
+        await sendUserToJail(user.id, POLICE_JAIL_MS);
+        await changeWantedLevel(user.id, 1);
+      }
+
+      for (const user of fined) {
+        try {
+          await deductCoinsSafe(user.id, Math.floor(Math.random() * 31) + 20);
+        } catch (error) {
+          console.error("Ошибка штрафа банка:", error);
+        }
+      }
+
+      await safeSendMessage(
         msg.chat.id,
-        heist,
-        "total_fail_before_entry",
-        "Охрана заметила подготовку и нажала тревожную кнопку."
+        `🚔 Ограбление банка сорвалось ещё на входе!
+
+Охрана заметила подготовку и нажала тревожную кнопку.
+
+${arrested.length ? `⛓ Арестованы:\n${arrested.map((u) => `• ${getUserLink(u)}`).join("\n")}` : ""}
+${fined.length ? `\n\n💸 Остальные ушли, но получили крупные штрафы.` : ""}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -7419,43 +8129,20 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
         return;
       }
 
-      const wantedAverage = await getAverageWantedForHeist(heist);
-      const vault = getVaultOutcome(heist, wantedAverage);
+      const stats = await getHeistTeamStats(heist);
+      const vault = getVaultOutcome(stats, heist.policeAlert);
 
-      if (vault.type === "jackpot") {
+      if (vault.type === "jackpot" || vault.type === "success" || vault.type === "medium" || vault.type === "small") {
         heist.loot = vault.loot;
         heist.stage = "escape";
+        if (vault.type !== "jackpot") heist.policeAlert = true;
 
-        if (Math.random() < 0.75) {
-          heist.policeAlert = true;
-        }
+        let intro = "🗄 Сейф вскрыт!";
+        if (vault.type === "jackpot") intro = "💰 Сейф вскрыт идеально!";
+        if (vault.type === "medium") intro = "🗄 Сейф оказался с усиленной защитой.";
+        if (vault.type === "small") intro = "⚠️ Сейф удалось открыть только частично.";
 
-        let out = `💰 Сейф вскрыт идеально!
-
-🗄 Команда забрала ${vault.loot} монет
-🚔 Полиция: ${heist.policeAlert ? "уже рядом" : "пока не настигла"}
-
-Следующая команда:
-• сбежать с банка`;
-
-        out = await appendLevelUpIfNeeded(out, msg.from.id, 10);
-
-        await safeSendMessage(msg.chat.id, out, {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        });
-        return;
-      }
-
-      if (vault.type === "success") {
-        heist.loot = vault.loot;
-        heist.stage = "escape";
-
-        if (Math.random() < 0.65) {
-          heist.policeAlert = true;
-        }
-
-        let out = `🗄 Сейф вскрыт!
+        let out = `${intro}
 
 💰 Общая добыча: ${vault.loot} монет
 🚔 Полиция: ${heist.policeAlert ? "уже на подходе" : "ещё не догнала"}
@@ -7464,51 +8151,6 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
 • сбежать с банка`;
 
         out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
-
-        await safeSendMessage(msg.chat.id, out, {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        });
-        return;
-      }
-
-      if (vault.type === "medium") {
-        heist.loot = vault.loot;
-        heist.stage = "escape";
-        heist.policeAlert = true;
-
-        let out = `🗄 Сейф оказался с усиленной защитой.
-
-Удалось вскрыть только часть хранилища.
-💰 Общая добыча: ${vault.loot} монет
-🚔 Полиция уже подтянулась к банку.
-
-Следующая команда:
-• сбежать с банка`;
-
-        out = await appendLevelUpIfNeeded(out, msg.from.id, 6);
-
-        await safeSendMessage(msg.chat.id, out, {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        });
-        return;
-      }
-
-      if (vault.type === "small") {
-        heist.loot = vault.loot;
-        heist.stage = "escape";
-        heist.policeAlert = true;
-
-        let out = `⚠️ Сейф удалось открыть только частично.
-
-💰 Взято: ${vault.loot} монет
-🚨 Поднята тревога, полиция уже мчится!
-
-Следующая команда:
-• сбежать с банка`;
-
-        out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
 
         await safeSendMessage(msg.chat.id, out, {
           parse_mode: "HTML",
@@ -7539,11 +8181,27 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
         return;
       }
 
-      await punishHeistMembersWithPolice(
+      const members = getHeistMembersList(heist);
+      clearBankHeist(msg.chat.id);
+
+      for (const user of members) {
+        await sendUserToJail(user.id, POLICE_JAIL_MS);
+        await changeWantedLevel(user.id, 1);
+        await updateCooldownColumnNow(user.id, "last_bank_at");
+      }
+
+      await safeSendMessage(
         msg.chat.id,
-        heist,
-        "vault_disaster",
-        "При попытке вскрытия сейфа сработала защита."
+        `🚨 Во время вскрытия сейфа всё пошло очень плохо!
+
+Сработала защита банка и полиция окружила здание.
+
+⛓ Вся команда арестована:
+${members.map((u) => `• ${getUserLink(u)}`).join("\n")}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -7561,28 +8219,85 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
       }
 
       if (heist.stage !== "escape") {
-        await safeSendMessage(msg.chat.id, "❌ Сейчас рано бежать. Сначала нужно дойти до этого этапа.");
+        await safeSendMessage(msg.chat.id, "❌ Сейчас рано бежать.");
         return;
       }
 
-      const wantedAverage = await getAverageWantedForHeist(heist);
-      const outcome = getEscapeOutcome(heist, wantedAverage);
+      const stats = await getHeistTeamStats(heist);
+      const outcome = getBankEscapeOutcome(stats, heist.loot, heist.policeAlert);
       const members = getHeistMembersList(heist);
 
+      for (const user of members) {
+        await updateCooldownColumnNow(user.id, "last_bank_at");
+      }
+
       if (outcome.type === "full_escape") {
-        await rewardHeistMembers(msg.chat.id, heist, heist.loot, {
-          title: "🏃 Побег удался!",
-          subtitle: `Команда смогла унести всю общую добычу: ${heist.loot} монет`
-        });
+        const share = Math.floor(heist.loot / members.length);
+        let leftover = heist.loot - share * members.length;
+        const lines = [];
+
+        for (const user of members) {
+          let amount = share;
+          if (leftover > 0) {
+            amount += 1;
+            leftover -= 1;
+          }
+          const newBalance = await addCoinsToUser(user.id, amount);
+          await changeWantedLevel(user.id, 2);
+          lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
+        }
+
+        clearBankHeist(msg.chat.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🏃 Побег удался!
+
+Команда смогла унести всю общую добычу: ${heist.loot} монет
+
+Раздел добычи:
+${lines.join("\n")}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
         return;
       }
 
       if (outcome.type === "half_escape") {
         const savedLoot = Math.max(1, Math.floor(heist.loot * 0.45));
-        await rewardHeistMembers(msg.chat.id, heist, savedLoot, {
-          title: "🏃 Побег частично удался",
-          subtitle: `Во время побега пришлось бросить часть денег.\nСохранено: ${savedLoot} из ${heist.loot} монет`
-        });
+        const share = Math.floor(savedLoot / members.length);
+        let leftover = savedLoot - share * members.length;
+        const lines = [];
+
+        for (const user of members) {
+          let amount = share;
+          if (leftover > 0) {
+            amount += 1;
+            leftover -= 1;
+          }
+          const newBalance = await addCoinsToUser(user.id, amount);
+          await changeWantedLevel(user.id, 2);
+          lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
+        }
+
+        clearBankHeist(msg.chat.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🏃 Побег частично удался
+
+Во время побега пришлось бросить часть денег.
+Сохранено: ${savedLoot} из ${heist.loot} монет
+
+Раздел добычи:
+${lines.join("\n")}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
         return;
       }
 
@@ -7593,8 +8308,6 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
 
         await sendUserToJail(caught.id, POLICE_JAIL_MS);
         await changeWantedLevel(caught.id, 1);
-        await deactivateLayLow(caught.id);
-        await updateBankHeistCooldownForUsers(members.map((m) => m.id));
 
         const savedLoot = Math.max(1, Math.floor(heist.loot * 0.40));
         let shareText = "";
@@ -7636,11 +8349,519 @@ ${shareText ? `Раздел добычи:\n${shareText}` : "Никто боль�
         return;
       }
 
-      await punishHeistMembersWithPolice(
+      clearBankHeist(msg.chat.id);
+
+      for (const user of members) {
+        await sendUserToJail(user.id, POLICE_JAIL_MS);
+        await changeWantedLevel(user.id, 1);
+      }
+
+      await safeSendMessage(
         msg.chat.id,
-        heist,
-        "all_caught_escape",
-        "На выезде команду уже ждала полиция."
+        `🚔 Побег не удался.
+
+Полиция догнала всю команду.
+
+⛓ В тюрьму отправлены:
+${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
+
+💰 Добыча потеряна.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // VAN HEIST COMMANDS
+    // =========================
+    if (isExactCommand(lowerText, "нападение на инкассацию")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
+        return;
+      }
+
+      const existing = getVanHeist(msg.chat.id);
+      if (existing) {
+        await safeSendMessage(msg.chat.id, "❌ В этом чате уже идёт подготовка к нападению на инкассацию.");
+        return;
+      }
+
+      const cooldown = await getVanHeistCooldown(msg.from.id);
+      if (cooldown > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Нападение на инкассацию снова будет доступно через ${formatRemainingTime(cooldown)}`);
+        return;
+      }
+
+      createVanHeist(msg.chat.id, msg.from);
+
+      let out = `🚚 ${getUserLink(msg.from)} начал(а) подготовку к нападению на инкассацию!
+
+👥 Сейчас в команде: 1/${VAN_HEIST_MAX_MEMBERS}
+🎯 Нужно минимум ${VAN_HEIST_MIN_MEMBERS} игрока
+
+Команды:
+• присоединиться к инкассации
+• начать перехват
+• статус инкассации
+
+💡 Маски, рации и бронежилеты очень важны.`;
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "присоединиться к инкассации")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
+        return;
+      }
+
+      const van = getVanHeist(msg.chat.id);
+      if (!van) {
+        await safeSendMessage(msg.chat.id, "❌ В этом чате нет активной подготовки к инкассации.");
+        return;
+      }
+
+      if (van.stage !== "gathering") {
+        await safeSendMessage(msg.chat.id, "❌ Нападение уже началось.");
+        return;
+      }
+
+      if (isVanParticipant(van, msg.from.id)) {
+        await safeSendMessage(msg.chat.id, "✅ Ты уже в команде.");
+        return;
+      }
+
+      if (getVanMemberCount(van) >= VAN_HEIST_MAX_MEMBERS) {
+        await safeSendMessage(msg.chat.id, `❌ Команда уже полная. Максимум ${VAN_HEIST_MAX_MEMBERS} игроков.`);
+        return;
+      }
+
+      const cooldown = await getVanHeistCooldown(msg.from.id);
+      if (cooldown > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Ты ещё не можешь участвовать в новом нападении.\nОсталось: ${formatRemainingTime(cooldown)}`);
+        return;
+      }
+
+      van.members[String(msg.from.id)] = {
+        id: Number(msg.from.id),
+        first_name: msg.from.first_name || "",
+        last_name: msg.from.last_name || "",
+        username: msg.from.username || ""
+      };
+
+      let out = `👥 ${getUserLink(msg.from)} присоединился(ась) к нападению на инкассацию!
+
+Команда: ${getVanMemberCount(van)}/${VAN_HEIST_MAX_MEMBERS}
+Дальше:
+• начать перехват
+• статус инкассации`;
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "статус инкассации")) {
+      const van = getVanHeist(msg.chat.id);
+      if (!van) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активной подготовки к инкассации.");
+        return;
+      }
+
+      const stats = await getVanTeamStats(van);
+      const membersText = getVanMembersList(van)
+        .map((u, i) => `${i + 1}. ${Number(u.id) === Number(van.leaderId) ? "👑 " : ""}${getUserLink(u)}`)
+        .join("\n");
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚚 Инкассация
+
+Этап: ${escapeHtml(van.stage)}
+👥 Команда: ${stats.members}/${VAN_HEIST_MAX_MEMBERS}
+🎭 Маски: ${stats.masks}
+📡 Рации: ${stats.radios}
+🦺 Бронежилеты: ${stats.armors}
+📴 Глушилки: ${stats.jammers}
+🚨 Полиция: ${van.policeAlert ? "уже настороже" : "пока тихо"}
+💰 Общая добыча: ${Number(van.loot || 0)} монет
+
+Участники:
+${membersText}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "начать перехват")) {
+      const van = getVanHeist(msg.chat.id);
+      if (!van) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активной подготовки к инкассации.");
+        return;
+      }
+
+      if (Number(msg.from.id) !== Number(van.leaderId)) {
+        await safeSendMessage(msg.chat.id, "❌ Только лидер может начать перехват.");
+        return;
+      }
+
+      if (van.stage !== "gathering") {
+        await safeSendMessage(msg.chat.id, "❌ Перехват уже начат.");
+        return;
+      }
+
+      const members = getVanMembersList(van);
+      if (members.length < VAN_HEIST_MIN_MEMBERS) {
+        await safeSendMessage(msg.chat.id, `❌ Для нападения нужно минимум ${VAN_HEIST_MIN_MEMBERS} игрока.`);
+        return;
+      }
+
+      for (const user of members) {
+        const jail = await getJailStatus(user.id);
+        if (jail) {
+          await safeSendMessage(msg.chat.id, `❌ ${getUserLink(user)} сейчас в тюрьме.`, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          });
+          return;
+        }
+
+        const layLow = await getLayLowStatus(user.id);
+        if (layLow && layLow.is_active) {
+          await safeSendMessage(msg.chat.id, `❌ ${getUserLink(user)} сейчас залёг на дно.`, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          });
+          return;
+        }
+      }
+
+      van.stage = "intercept";
+      van.policeAlert = Math.random() < 0.50;
+
+      for (const user of members) {
+        await changeWantedLevel(user.id, 1);
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚚 Машина инкассации замечена.
+
+⚠️ Охрана вооружена
+${van.policeAlert ? "🚨 Полиция уже получила подозрительный сигнал" : "😶 Пока полиция не поднята"}
+
+Следующая команда:
+• атаковать инкассацию`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "атаковать инкассацию")) {
+      const van = getVanHeist(msg.chat.id);
+      if (!van) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активной подготовки к инкассации.");
+        return;
+      }
+
+      if (Number(msg.from.id) !== Number(van.leaderId)) {
+        await safeSendMessage(msg.chat.id, "❌ Только лидер может начать атаку.");
+        return;
+      }
+
+      if (van.stage !== "intercept") {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нельзя атаковать инкассацию.");
+        return;
+      }
+
+      const stats = await getVanTeamStats(van);
+      const outcome = getVanAttackOutcome(stats);
+
+      if (outcome.type === "clean_success") {
+        van.stage = "escape";
+        van.loot = Math.floor(Math.random() * 41) + 55;
+        van.policeAlert = Math.random() < 0.55;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `💰 Нападение на инкассацию удалось!
+
+Добыча: ${van.loot} монет
+${van.policeAlert ? "🚔 Полиция уже знает о нападении" : "😶 Полиция ещё не успела среагировать"}
+
+Следующая команда:
+• уйти с инкассацией`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (outcome.type === "success_alarm") {
+        van.stage = "escape";
+        van.loot = Math.floor(Math.random() * 31) + 32;
+        van.policeAlert = true;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `💰 Нападение на инкассацию частично удалось!
+
+Добыча: ${van.loot} монет
+🚨 Но охрана вызвала полицию.
+
+Следующая команда:
+• уйти с инкассацией`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (outcome.type === "partial_fail") {
+        van.stage = "escape";
+        van.loot = Math.floor(Math.random() * 15) + 10;
+        van.policeAlert = true;
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⚠️ Охрана оказалась слишком сильной.
+
+Удалось забрать только ${van.loot} монет
+🚔 Полиция уже рядом.
+
+Следующая команда:
+• уйти с инкассацией`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      const members = getVanMembersList(van);
+      clearVanHeist(msg.chat.id);
+
+      for (const user of members) {
+        await sendUserToJail(user.id, POLICE_JAIL_MS);
+        await changeWantedLevel(user.id, 1);
+        await updateCooldownColumnNow(user.id, "last_van_heist_at");
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚨 Нападение на инкассацию провалилось!
+
+Охрана отбилась, а полиция быстро окружила место.
+
+⛓ Вся команда арестована:
+${members.map((u) => `• ${getUserLink(u)}`).join("\n")}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "уйти с инкассацией")) {
+      const van = getVanHeist(msg.chat.id);
+      if (!van) {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас нет активного нападения на инкассацию.");
+        return;
+      }
+
+      if (!isVanParticipant(van, msg.from.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в команде.");
+        return;
+      }
+
+      if (van.stage !== "escape") {
+        await safeSendMessage(msg.chat.id, "❌ Сейчас рано уходить.");
+        return;
+      }
+
+      const stats = await getVanTeamStats(van);
+      const outcome = getVanEscapeOutcome(stats, van.loot, van.policeAlert);
+      const members = getVanMembersList(van);
+
+      for (const user of members) {
+        await updateCooldownColumnNow(user.id, "last_van_heist_at");
+      }
+
+      if (outcome.type === "full_escape") {
+        const share = Math.floor(van.loot / members.length);
+        let leftover = van.loot - share * members.length;
+        const lines = [];
+
+        for (const user of members) {
+          let amount = share;
+          if (leftover > 0) {
+            amount += 1;
+            leftover -= 1;
+          }
+          const newBalance = await addCoinsToUser(user.id, amount);
+          await changeWantedLevel(user.id, 2);
+          lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
+        }
+
+        clearVanHeist(msg.chat.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🏃 Команда смогла уйти после нападения на инкассацию!
+
+Общая добыча: ${van.loot} монет
+
+Раздел:
+${lines.join("\n")}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (outcome.type === "partial_escape") {
+        const savedLoot = Math.max(1, Math.floor(van.loot * 0.45));
+        const share = Math.floor(savedLoot / members.length);
+        let leftover = savedLoot - share * members.length;
+        const lines = [];
+
+        for (const user of members) {
+          let amount = share;
+          if (leftover > 0) {
+            amount += 1;
+            leftover -= 1;
+          }
+          const newBalance = await addCoinsToUser(user.id, amount);
+          await changeWantedLevel(user.id, 2);
+          lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
+        }
+
+        clearVanHeist(msg.chat.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🏃 Команда ушла неидеально.
+
+Сохранено только ${savedLoot} из ${van.loot} монет
+
+Раздел:
+${lines.join("\n")}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      if (outcome.type === "one_caught") {
+        const shuffled = [...members].sort(() => Math.random() - 0.5);
+        const caught = shuffled[0];
+        const escaped = shuffled.slice(1);
+
+        await sendUserToJail(caught.id, POLICE_JAIL_MS);
+        await changeWantedLevel(caught.id, 1);
+
+        const savedLoot = Math.max(1, Math.floor(van.loot * 0.40));
+        let shareText = "";
+
+        if (escaped.length) {
+          const share = Math.floor(savedLoot / escaped.length);
+          let leftover = savedLoot - share * escaped.length;
+          const lines = [];
+
+          for (const user of escaped) {
+            let amount = share;
+            if (leftover > 0) {
+              amount += 1;
+              leftover -= 1;
+            }
+            const newBalance = await addCoinsToUser(user.id, amount);
+            await changeWantedLevel(user.id, 2);
+            lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
+          }
+
+          shareText = lines.join("\n");
+        }
+
+        clearVanHeist(msg.chat.id);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🚔 После нападения на инкассацию поймали одного участника.
+
+⛓ Пойман(а): ${getUserLink(caught)}
+💰 Остальные вынесли ${savedLoot} монет
+
+${shareText ? `Раздел:\n${shareText}` : "Никто больше не ушёл с добычей."}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      clearVanHeist(msg.chat.id);
+
+      for (const user of members) {
+        await sendUserToJail(user.id, POLICE_JAIL_MS);
+        await changeWantedLevel(user.id, 1);
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚔 После нападения на инкассацию полиция задержала всю команду.
+
+⛓ Арестованы:
+${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
+
+💰 Добыча потеряна.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
       );
       return;
     }
@@ -7677,7 +8898,6 @@ ${shareText ? `Раздел добычи:\n${shareText}` : "Никто боль�
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       await safeSendMessage(
         msg.chat.id,
@@ -7694,7 +8914,7 @@ ${shareText ? `Раздел добычи:\n${shareText}` : "Никто боль�
     }
 
     // =========================
-    // OTHER GAMES
+    // OTHER / FUN
     // =========================
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
@@ -7749,394 +8969,6 @@ ${shareText ? `Раздел добычи:\n${shareText}` : "Никто боль�
       return;
     }
 
-    if (isExactCommand(lowerText, "брак") || isExactCommand(lowerText, "зарегистрироваться в брак")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: брак");
-        return;
-      }
-
-      await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
-
-      if (sender.id === target.id) {
-        await safeSendMessage(msg.chat.id, "❌ Нельзя зарегистрироваться в брак с самим собой.");
-        return;
-      }
-
-      const senderMarriage = await isUserMarried(sender.id);
-      if (senderMarriage) {
-        await safeSendMessage(msg.chat.id, "❌ Ты уже состоишь в браке.");
-        return;
-      }
-
-      const targetMarriage = await isUserMarried(target.id);
-      if (targetMarriage) {
-        await safeSendMessage(msg.chat.id, "❌ Этот человек уже состоит в браке.");
-        return;
-      }
-
-      const senderAdoption = await getActiveAdoptionByChildId(sender.id);
-      const targetAdoption = await getActiveAdoptionByChildId(target.id);
-
-      if (senderAdoption || targetAdoption) {
-        await safeSendMessage(msg.chat.id, "❌ Игрок в роли ребёнка не может вступить в брак.");
-        return;
-      }
-
-      const existingReq = findMarriageRequestByUser(msg.chat.id, target.id);
-      if (existingReq) {
-        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активное предложение брака.");
-        return;
-      }
-
-      const requestId = generateRequestId("marriage");
-      const request = {
-        requestId,
-        userKey: `${msg.chat.id}:${target.id}`,
-        fromUser: {
-          id: sender.id,
-          first_name: sender.first_name || "",
-          last_name: sender.last_name || "",
-          username: sender.username || ""
-        },
-        targetUser: {
-          id: target.id,
-          first_name: target.first_name || "",
-          last_name: target.last_name || "",
-          username: target.username || ""
-        },
-        createdAt: Date.now()
-      };
-
-      saveMarriageRequest(request);
-
-      const sent = await safeSendMessage(
-        msg.chat.id,
-        `💍 ${getUserLink(sender)} сделал(а) предложение ${getUserLink(target)}!
-
-${getUserLink(target)}, выбери ниже:
-✅ Да
-❌ Нет
-
-⌛ У вас есть 10 минут.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true,
-          reply_markup: getMarriageDecisionKeyboard(requestId)
-        }
-      );
-
-      if (sent) request.requestMessageId = sent.message_id;
-      return;
-    }
-
-    if (isExactCommand(lowerText, "развод")) {
-      const marriagePartner = await getMarriagePartner(msg.from.id);
-
-      if (!marriagePartner) {
-        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в браке.");
-        return;
-      }
-
-      const partnerUser = await getStoredUser(marriagePartner.partnerId);
-
-      await divorceMarriageByUserId(msg.from.id);
-
-      await safeSendMessage(
-        msg.chat.id,
-        `💔 ${getUserLink(msg.from)} развёлся(ась) с ${getUserLink(partnerUser)}.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "усыновить")) {
-      const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: усыновить");
-        return;
-      }
-
-      await initUser(child);
-      await saveSeenUser(msg.chat.id, child);
-
-      const validation = await canAdoptUser(parent.id, child.id);
-      if (!validation.ok) {
-        await safeSendMessage(msg.chat.id, validation.text);
-        return;
-      }
-
-      const existingReq = findAdoptionRequestByUser(msg.chat.id, child.id);
-      if (existingReq) {
-        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активный запрос на усыновление.");
-        return;
-      }
-
-      const requestId = generateRequestId("adoption");
-      const request = {
-        requestId,
-        userKey: `${msg.chat.id}:${child.id}`,
-        parentUser: {
-          id: parent.id,
-          first_name: parent.first_name || "",
-          last_name: parent.last_name || "",
-          username: parent.username || ""
-        },
-        childUser: {
-          id: child.id,
-          first_name: child.first_name || "",
-          last_name: child.last_name || "",
-          username: child.username || ""
-        },
-        createdAt: Date.now()
-      };
-
-      saveAdoptionRequest(request);
-
-      const spouseInfo = await getMarriagePartner(parent.id);
-      const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
-
-      let requestText = `👶 ${getUserLink(parent)}`;
-      if (spouseUser) requestText += ` и ${getUserLink(spouseUser)}`;
-      requestText += ` хотят усыновить ${getUserLink(child)}!
-
-${getUserLink(child)}, выбери ниже:
-✅ Да
-❌ Нет
-
-⌛ У вас есть 10 минут.`;
-
-      const sent = await safeSendMessage(msg.chat.id, requestText, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup: getAdoptionDecisionKeyboard(requestId)
-      });
-
-      if (sent) request.requestMessageId = sent.message_id;
-      return;
-    }
-
-    if (isExactCommand(lowerText, "отказаться от ребенка")) {
-      const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение ребёнка и напиши: отказаться от ребенка");
-        return;
-      }
-
-      const removed = await removeChildFromParent(parent.id, child.id);
-
-      if (!removed) {
-        await safeSendMessage(msg.chat.id, "❌ Этот игрок не является твоим ребёнком.");
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `💔 ${getUserLink(parent)} отказался(ась) от ребёнка ${getUserLink(child)}.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "сбежать из семьи")) {
-      const child = msg.from;
-      const activeAdoption = await getActiveAdoptionByChildId(child.id);
-
-      if (!activeAdoption) {
-        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье как ребёнок.");
-        return;
-      }
-
-      const parentUser = await getStoredUser(Number(activeAdoption.parent_user_id));
-      await childEscapeFamily(child.id);
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🏃 ${getUserLink(child)} сбежал(а) из семьи ${getUserLink(parentUser)}.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "любимый ребенок")) {
-      const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
-
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: любимый ребенок");
-        return;
-      }
-
-      const isChild = await isChildInMyFamily(parent.id, child.id);
-      if (!isChild) {
-        await safeSendMessage(msg.chat.id, "❌ Любимым можно сделать только своего ребёнка.");
-        return;
-      }
-
-      await setFavoriteChild(parent.id, child.id);
-
-      await safeSendMessage(
-        msg.chat.id,
-        `⭐ ${getUserLink(parent)} выбрал(а) ${getUserLink(child)} любимым ребёнком!`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "убрать любимого ребенка")) {
-      const removedFavorite = await removeFavoriteChild(msg.from.id);
-
-      if (!removedFavorite) {
-        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет любимого ребёнка.");
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `⭐ ${getUserLink(msg.from)} убрал(а) любимого ребёнка.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-    if (isExactCommand(lowerText, "семья")) {
-      let targetUser = msg.from;
-
-      if (msg.reply_to_message) {
-        const resolved = await resolveTargetUserFromReply(msg);
-        if (resolved) targetUser = resolved;
-      }
-
-      const partnerInfo = await getMarriagePartner(targetUser.id);
-      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
-
-      if (childInfo) {
-        const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
-        const parentPartnerInfo = await getMarriagePartner(parentUser.id);
-        const secondParent = parentPartnerInfo
-          ? await getStoredUser(Number(parentPartnerInfo.partnerId))
-          : null;
-        const punishment = await getActivePunishment(targetUser.id);
-        const obedience = await getChildObedience(targetUser.id);
-
-        let textFamily = `🏡 Семья
-
-👶 Ребёнок: ${getUserLink(targetUser)}
-👨 Родитель: ${getUserLink(parentUser)}`;
-
-        if (secondParent) {
-          textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
-        }
-
-        textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
-        textFamily += `\n📈 Послушание: ${Number(obedience?.value || 0)}/100`;
-
-        if (punishment) {
-          const remaining = new Date(punishment.until_at).getTime() - Date.now();
-          textFamily += `\n\n⛔ Наказание: активно`;
-          textFamily += `\n🕒 До: ${formatDateTime(punishment.until_at)}`;
-          textFamily += `\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
-        } else {
-          textFamily += `\n\n⛔ Наказание: нет`;
-        }
-
-        await safeSendMessage(msg.chat.id, textFamily, {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        });
-        return;
-      }
-
-      const parentIds = await getFamilyParentIds(targetUser.id);
-      const children = await getChildrenByParentIds(parentIds);
-
-      if (!partnerInfo && !children.length) {
-        await safeSendMessage(
-          msg.chat.id,
-          `${getUserLink(targetUser)} пока не состоит в семье.`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      let familyText = `🏡 Семья
-
-👤 Игрок: ${getUserLink(targetUser)}`;
-
-      if (partnerInfo) {
-        const partnerUser = await getStoredUser(partnerInfo.partnerId);
-        const coupleState = await getCoupleState(targetUser.id, partnerInfo.partnerId);
-        familyText += `\n💍 Супруг(а): ${getUserLink(partnerUser)}`;
-        familyText += `\n📅 Брак с: ${formatDate(partnerInfo.marriage.created_at)}`;
-        familyText += `\n💚 Ревность: ${Number(coupleState?.jealousy || 0)}/100`;
-      }
-
-      if (children.length) {
-        const favoriteChild = await getFavoriteChild(targetUser.id);
-        const favoriteChildId = favoriteChild ? Number(favoriteChild.child_user_id) : null;
-
-        const childLines = [];
-        for (const childRow of children) {
-          const childUser = await getStoredUser(Number(childRow.child_user_id));
-          const childId = Number(childRow.child_user_id);
-          const punishment = await getActivePunishment(childId);
-          const obedience = await getChildObedience(childId);
-
-          let line = "";
-          if (favoriteChildId && favoriteChildId === childId) {
-            line += `⭐ ${getUserLink(childUser)} — любимый`;
-          } else {
-            line += `• ${getUserLink(childUser)}`;
-          }
-
-          line += `\n   📈 Послушание: ${Number(obedience?.value || 0)}/100`;
-
-          if (punishment) {
-            const remaining = new Date(punishment.until_at).getTime() - Date.now();
-            line += `\n   ⛔ Наказан(а)`;
-            line += `\n   ⏳ Осталось: ${formatRemainingTime(remaining)}`;
-          }
-
-          childLines.push(line);
-        }
-
-        familyText += `\n\n👶 Дети:\n${childLines.join("\n")}`;
-      } else {
-        familyText += `\n\n👶 Дети: нет`;
-      }
-
-      await safeSendMessage(msg.chat.id, familyText, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
-
     if (
       isExactCommand(lowerText, "он врет?") ||
       isExactCommand(lowerText, "врет?") ||
@@ -8176,7 +9008,6 @@ ${escapeHtml(result.text)}`,
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await safeSendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
@@ -8204,12 +9035,28 @@ ${escapeHtml(result.text)}`,
     }
 
     if (isExactCommand(lowerText, "пара")) {
-      const pair = await getRandomPairMembersFromDb(msg.chat.id);
+      const result = await pool.query(
+        `
+        SELECT user_id, first_name, last_name, username
+        FROM chat_seen_users
+        WHERE chat_id = $1
+        ORDER BY RANDOM()
+        LIMIT 2
+        `,
+        [msg.chat.id]
+      );
 
-      if (!pair) {
+      if (result.rows.length < 2) {
         await safeSendMessage(msg.chat.id, "Нужно хотя бы 2 человека, которых бот уже видел в этом чате 💞");
         return;
       }
+
+      const pair = result.rows.map((row) => ({
+        id: Number(row.user_id),
+        first_name: row.first_name || "",
+        last_name: row.last_name || "",
+        username: row.username || ""
+      }));
 
       const [firstUser, secondUser] = pair;
       const percent = Math.floor(Math.random() * 101);
@@ -8306,7 +9153,6 @@ ${escapeHtml(prediction)}`,
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await safeSendMessage(
@@ -8346,7 +9192,6 @@ ${escapeHtml(prediction)}`,
       }
 
       await initUser(target);
-      await saveSeenUser(msg.chat.id, target);
 
       if (sender.id === target.id) {
         await safeSendMessage(
@@ -8385,7 +9230,6 @@ ${escapeHtml(prediction)}`,
     }
 
     await initUser(target);
-    await saveSeenUser(msg.chat.id, target);
 
     if (sender.id === target.id) {
       await safeSendMessage(
