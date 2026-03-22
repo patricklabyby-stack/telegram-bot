@@ -4824,7 +4824,7 @@ bot.onText(/^черный рынок$/i, async (msg) => {
 ${lines.join("\n\n")}
 
 Напиши, например:
-купить маску`,
+купить маска`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
