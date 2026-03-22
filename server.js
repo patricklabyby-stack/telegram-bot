@@ -133,12 +133,27 @@ const ITEMS = {
 
 const ITEM_ALIASES = {
   "маска": "mask",
+  "mask": "mask",
+
   "отмычка": "lockpick",
+  "отмычки": "lockpick",
+  "lockpick": "lockpick",
+
   "рация": "radio",
+  "radio": "radio",
+
   "бронежилет": "armor",
+  "броня": "armor",
+  "armor": "armor",
+
   "фальшивый паспорт": "fake_passport",
+  "фальшивыйпаспорт": "fake_passport",
+  "поддельный паспорт": "fake_passport",
   "паспорт": "fake_passport",
-  "глушилка": "jammer"
+  "fake_passport": "fake_passport",
+
+  "глушилка": "jammer",
+  "jammer": "jammer"
 };
 
 // =========================
@@ -165,6 +180,7 @@ function escapeHtml(text) {
 function normalizeText(text) {
   return String(text || "")
     .toLowerCase()
+    .replace(/ё/g, "е")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -1354,8 +1370,13 @@ async function buyBlackMarketItem(userId, itemKey) {
 }
 
 function resolveItemKey(raw) {
-  const normalized = normalizeText(raw);
-  return ITEM_ALIASES[normalized] || null;
+  const normalized = normalizeText(raw).replace(/\s+/g, " ");
+  if (ITEM_ALIASES[normalized]) return ITEM_ALIASES[normalized];
+
+  const compact = normalized.replace(/\s+/g, "");
+  if (ITEM_ALIASES[compact]) return ITEM_ALIASES[compact];
+
+  return null;
 }
 
 // =========================
@@ -3658,6 +3679,7 @@ async function getHeistTeamStats(heist) {
   let armors = 0;
   let jammers = 0;
   let passports = 0;
+  let lockpicks = 0;
   let wantedSum = 0;
 
   for (const user of members) {
@@ -3667,6 +3689,7 @@ async function getHeistTeamStats(heist) {
     if (Number(inv.armor || 0) > 0) armors++;
     if (Number(inv.jammer || 0) > 0) jammers++;
     if (Number(inv.fake_passport || 0) > 0) passports++;
+    if (Number(inv.lockpick || 0) > 0) lockpicks++;
 
     const wanted = await getWantedRow(user.id);
     wantedSum += Number(wanted?.level || 0);
@@ -3679,6 +3702,7 @@ async function getHeistTeamStats(heist) {
     armors,
     jammers,
     passports,
+    lockpicks,
     avgWanted: members.length ? wantedSum / members.length : 0
   };
 }
@@ -3707,7 +3731,7 @@ function getVaultOutcome(stats, policeAlert) {
   let mediumChance = 0.20;
   let smallChance = 0.25;
 
-  fullChance += stats.lockpicksBonus || 0;
+  fullChance += stats.lockpicks * 0.02;
   fullChance += stats.jammers * 0.02;
   mediumChance += stats.radios * 0.02;
   mediumChance += stats.masks * 0.01;
@@ -7913,6 +7937,7 @@ ${coinsLine}
 📡 Рации: ${stats.radios}
 🦺 Бронежилеты: ${stats.armors}
 📴 Глушилки: ${stats.jammers}
+🔑 Отмычки: ${stats.lockpicks}
 🚨 Полиция: ${heist.policeAlert ? "уже настороже" : "пока тихо"}
 💰 Общая добыча: ${Number(heist.loot || 0)} монет
 
