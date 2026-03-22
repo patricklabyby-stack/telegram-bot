@@ -70,6 +70,10 @@ const BANK_MASK_COST = 35;
 const MAX_LEVEL = 50;
 const MAX_WANTED_LEVEL = 5;
 
+const LAY_LOW_DURATION_MS = 6 * 60 * 60 * 1000;
+const LAY_LOW_REDUCE_STEP_MS = 3 * 60 * 60 * 1000;
+const WANTED_PASSIVE_DECAY_MS = 12 * 60 * 60 * 1000;
+
 // =========================
 // SERVER
 // =========================
@@ -586,7 +590,7 @@ async function appendLevelUpIfNeeded(text, userId, xpAmount) {
 }
 
 // =========================
-// WANTED / ROZYSK
+// WANTED / ROZYSK / LAY LOW
 // =========================
 function getWantedStatusText(level) {
   const val = Number(level || 0);
@@ -665,6 +669,172 @@ async function setWantedLevel(userId, level) {
   return result.rows[0] || null;
 }
 
+async function ensureLayLowRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO lay_low_status (user_id, until_at, last_reduce_at, created_at, updated_at, is_active)
+    VALUES ($1, NOW(), NOW(), NOW(), NOW(), FALSE)
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getLayLowStatus(userId) {
+  await ensureLayLowRow(userId);
+
+  const result = await pool.query(
+    `
+    SELECT user_id, until_at, last_reduce_at, created_at, updated_at, is_active
+    FROM lay_low_status
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  const row = result.rows[0] || null;
+  if (!row) return null;
+
+  if (row.is_active && new Date(row.until_at).getTime() <= Date.now()) {
+    await deactivateLayLow(userId);
+    return {
+      ...row,
+      is_active: false
+    };
+  }
+
+  return row;
+}
+
+async function activateLayLow(userId) {
+  await ensureLayLowRow(userId);
+
+  const result = await pool.query(
+    `
+    UPDATE lay_low_status
+    SET until_at = NOW() + ($2 || ' milliseconds')::interval,
+        last_reduce_at = NOW(),
+        updated_at = NOW(),
+        created_at = NOW(),
+        is_active = TRUE
+    WHERE user_id = $1
+    RETURNING user_id, until_at, last_reduce_at, created_at, updated_at, is_active
+    `,
+    [userId, String(LAY_LOW_DURATION_MS)]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deactivateLayLow(userId) {
+  await ensureLayLowRow(userId);
+
+  const result = await pool.query(
+    `
+    UPDATE lay_low_status
+    SET is_active = FALSE,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING user_id, until_at, last_reduce_at, created_at, updated_at, is_active
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getLayLowBlockText(userId) {
+  const status = await getLayLowStatus(userId);
+  if (!status || !status.is_active) return null;
+
+  const remain = new Date(status.until_at).getTime() - Date.now();
+  return `❌ Ты сейчас залёг на дно.\n⏳ Осталось: ${formatRemainingTime(remain)}\nПока скрытность активна, преступления запрещены.`;
+}
+
+async function processLayLowReductions() {
+  const result = await pool.query(`
+    SELECT user_id, until_at, last_reduce_at, is_active
+    FROM lay_low_status
+    WHERE is_active = TRUE
+  `);
+
+  for (const row of result.rows) {
+    const userId = Number(row.user_id);
+    const untilMs = new Date(row.until_at).getTime();
+    const lastReduceMs = row.last_reduce_at ? new Date(row.last_reduce_at).getTime() : Date.now();
+    const now = Date.now();
+
+    if (untilMs <= now) {
+      await deactivateLayLow(userId);
+      continue;
+    }
+
+    const steps = Math.floor((now - lastReduceMs) / LAY_LOW_REDUCE_STEP_MS);
+    if (steps <= 0) continue;
+
+    const wanted = await getWantedRow(userId);
+    const currentWanted = Number(wanted?.level || 0);
+    const newWanted = Math.max(0, currentWanted - steps);
+
+    await pool.query(
+      `
+      UPDATE wanted_status
+      SET level = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+      `,
+      [userId, newWanted]
+    );
+
+    const newLastReduce = new Date(lastReduceMs + steps * LAY_LOW_REDUCE_STEP_MS);
+
+    await pool.query(
+      `
+      UPDATE lay_low_status
+      SET last_reduce_at = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+      `,
+      [userId, newLastReduce.toISOString()]
+    );
+  }
+}
+
+async function processPassiveWantedDecay() {
+  const result = await pool.query(`
+    SELECT w.user_id, w.level, w.updated_at, COALESCE(l.is_active, FALSE) AS lay_low_active
+    FROM wanted_status w
+    LEFT JOIN lay_low_status l ON l.user_id = w.user_id
+    WHERE w.level > 0
+  `);
+
+  for (const row of result.rows) {
+    const userId = Number(row.user_id);
+    const isLayLow = row.lay_low_active === true || row.lay_low_active === "t";
+    if (isLayLow) continue;
+
+    const updatedMs = row.updated_at ? new Date(row.updated_at).getTime() : Date.now();
+    const now = Date.now();
+    const steps = Math.floor((now - updatedMs) / WANTED_PASSIVE_DECAY_MS);
+
+    if (steps <= 0) continue;
+
+    const currentWanted = Number(row.level || 0);
+    const newWanted = Math.max(0, currentWanted - steps);
+
+    await pool.query(
+      `
+      UPDATE wanted_status
+      SET level = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+      `,
+      [userId, newWanted]
+    );
+  }
+}
+
 // =========================
 // CLEANUP
 // =========================
@@ -687,6 +857,15 @@ function cleanupPendingRequests() {
 }
 
 setInterval(cleanupPendingRequests, 60 * 1000);
+
+setInterval(async () => {
+  try {
+    await processLayLowReductions();
+    await processPassiveWantedDecay();
+  } catch (error) {
+    console.error("Ошибка периодической обработки lay low / wanted:", error);
+  }
+}, 60 * 1000);
 
 // =========================
 // BOMB
@@ -1324,6 +1503,17 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS lay_low_status (
+      user_id BIGINT PRIMARY KEY,
+      until_at TIMESTAMPTZ NOT NULL,
+      last_reduce_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT FALSE
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS profile_messages (
       message_id BIGINT PRIMARY KEY,
       target_user_id BIGINT NOT NULL
@@ -1514,6 +1704,7 @@ async function initUser(user) {
   );
 
   await ensureWantedRow(user.id);
+  await ensureLayLowRow(user.id);
 }
 
 async function saveSeenUser(chatId, user) {
@@ -3034,6 +3225,12 @@ async function getProfileText(user) {
   const shield = await getShieldRow(user.id);
   const levelInfo = getLevelInfoByXp(Number(stats.xp || 0));
   const wanted = await getWantedRow(user.id);
+  const layLow = await getLayLowStatus(user.id);
+
+  const layLowText =
+    layLow && layLow.is_active
+      ? `✅ Да (${formatRemainingTime(new Date(layLow.until_at).getTime() - Date.now())})`
+      : "❌ Нет";
 
   return `👤 Профиль пользователя
 
@@ -3045,6 +3242,7 @@ ID: ${user.id}
 🛡 Щиты: ${Number(shield?.count || 0)}/${MAX_SHIELDS}
 ⭐ Уровень: ${Number(stats.level || 1)}
 🚨 Розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
+🕶 Скрытность: ${layLowText}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
@@ -3955,6 +4153,9 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • розыск
 • топ розыска
 • сдаться
+• залечь на дно
+• скрытность
+• выйти из тени
 
 <b>🚔 Тюрьма</b>
 • тюрьма
@@ -4150,6 +4351,15 @@ bot.onText(/^розыск$/i, async (msg) => {
 
     await initUser(targetUser);
     const wanted = await getWantedRow(targetUser.id);
+    const layLow = await getLayLowStatus(targetUser.id);
+
+    let extra = "";
+    if (layLow && layLow.is_active) {
+      const remain = new Date(layLow.until_at).getTime() - Date.now();
+      extra = `\n\n🕶 Сейчас залёг на дно
+⏳ Осталось: ${formatRemainingTime(remain)}
+📉 Розыск снижается каждые ${formatRemainingTime(LAY_LOW_REDUCE_STEP_MS)}`;
+    }
 
     await safeSendMessage(
       msg.chat.id,
@@ -4159,7 +4369,7 @@ bot.onText(/^розыск$/i, async (msg) => {
 Статус: ${escapeHtml(getWantedStatusText(wanted?.level || 0))}
 
 Эффекты:
-${escapeHtml(getWantedEffectText(wanted?.level || 0))}`,
+${escapeHtml(getWantedEffectText(wanted?.level || 0))}${extra}`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
@@ -4225,6 +4435,7 @@ bot.onText(/^сдаться$/i, async (msg) => {
     await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
     const reduced = Math.max(0, current - 2);
     await setWantedLevel(msg.from.id, reduced);
+    await deactivateLayLow(msg.from.id);
 
     await safeSendMessage(
       msg.chat.id,
@@ -4240,6 +4451,116 @@ bot.onText(/^сдаться$/i, async (msg) => {
   } catch (error) {
     console.error("Ошибка команды сдаться:", error);
     await safeSendMessage(msg.chat.id, "Ошибка при сдаче полиции.");
+  }
+});
+
+bot.onText(/^залечь на дно$/i, async (msg) => {
+  try {
+    const wanted = await getWantedRow(msg.from.id);
+    const currentWanted = Number(wanted?.level || 0);
+
+    if (currentWanted <= 0) {
+      await safeSendMessage(msg.chat.id, "❌ У тебя нет розыска. Залегать на дно сейчас не нужно.");
+      return;
+    }
+
+    const jailText = await getJailBlockText(msg.from.id);
+    if (jailText) {
+      await safeSendMessage(msg.chat.id, `${jailText}\nВ тюрьме нельзя залечь на дно.`);
+      return;
+    }
+
+    const status = await getLayLowStatus(msg.from.id);
+    if (status && status.is_active) {
+      const remain = new Date(status.until_at).getTime() - Date.now();
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ Ты уже залёг на дно.\n⏳ Осталось: ${formatRemainingTime(remain)}`
+      );
+      return;
+    }
+
+    const activated = await activateLayLow(msg.from.id);
+
+    await safeSendMessage(
+      msg.chat.id,
+      `🕶 ${getUserLink(msg.from)} залёг на дно.
+
+⏳ Время скрытности: ${formatRemainingTime(new Date(activated.until_at).getTime() - Date.now())}
+🚨 Розыск сейчас: ${currentWanted}/${MAX_WANTED_LEVEL}
+
+Пока режим активен:
+• нельзя грабить игроков
+• нельзя участвовать в ограблении банка
+• розыск будет спадать быстрее`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка команды залечь на дно:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка скрытности.");
+  }
+});
+
+bot.onText(/^скрытность$/i, async (msg) => {
+  try {
+    const status = await getLayLowStatus(msg.from.id);
+    const wanted = await getWantedRow(msg.from.id);
+
+    if (!status || !status.is_active) {
+      await safeSendMessage(
+        msg.chat.id,
+        `🕶 Скрытность не активна.\n🚨 Розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}`
+      );
+      return;
+    }
+
+    const remain = new Date(status.until_at).getTime() - Date.now();
+
+    await safeSendMessage(
+      msg.chat.id,
+      `🕶 Скрытность активна
+
+⏳ Осталось: ${formatRemainingTime(remain)}
+🚨 Текущий розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
+📉 Каждые ${formatRemainingTime(LAY_LOW_REDUCE_STEP_MS)} розыск снижается на 1`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка команды скрытность:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка при получении скрытности.");
+  }
+});
+
+bot.onText(/^выйти из тени$/i, async (msg) => {
+  try {
+    const status = await getLayLowStatus(msg.from.id);
+
+    if (!status || !status.is_active) {
+      await safeSendMessage(msg.chat.id, "❌ Ты и так не в скрытности.");
+      return;
+    }
+
+    await deactivateLayLow(msg.from.id);
+
+    await safeSendMessage(
+      msg.chat.id,
+      `👣 ${getUserLink(msg.from)} вышел из тени.
+
+Теперь преступные команды снова доступны.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка команды выйти из тени:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка выхода из скрытности.");
   }
 });
 
@@ -6308,6 +6629,12 @@ ${lines.join("\n")}`,
         return;
       }
 
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
+        return;
+      }
+
       const childPunishment = await getPunishedBlockText(msg.from.id);
       if (childPunishment) {
         await safeSendMessage(msg.chat.id, `${childPunishment}\nВо время наказания нельзя грабить других.`);
@@ -6397,6 +6724,7 @@ ${lines.join("\n")}`,
         if (police.type === "jail") {
           const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
           await changeWantedLevel(msg.from.id, 1);
+          await deactivateLayLow(msg.from.id);
           resultText += `\n🚔 ${getUserLink(msg.from)} арестован(а) и отправлен(а) в тюрьму!`;
           resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
         }
@@ -6456,6 +6784,7 @@ ${lines.join("\n")}`,
       if (police.type === "jail") {
         const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
         await changeWantedLevel(msg.from.id, 1);
+        await deactivateLayLow(msg.from.id);
         resultText += `\n🚔 Полиция задержала ${getUserLink(msg.from)}!`;
         resultText += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
       }
@@ -6712,6 +7041,12 @@ ${coinsLine}
         return;
       }
 
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
+        return;
+      }
+
       const existingHeist = getBankHeist(msg.chat.id);
       if (existingHeist) {
         await safeSendMessage(
@@ -6764,6 +7099,12 @@ ${coinsLine}
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
         await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
         return;
       }
 
@@ -6954,6 +7295,20 @@ ${coinsLine}
           await safeSendMessage(
             msg.chat.id,
             `❌ ${getUserLink(user)} сейчас в тюрьме. Команда не может начать штурм.`,
+            {
+              parse_mode: "HTML",
+              disable_web_page_preview: true
+            }
+          );
+          return;
+        }
+
+        const layLow = await getLayLowStatus(user.id);
+        if (layLow && layLow.is_active) {
+          const remain = new Date(layLow.until_at).getTime() - Date.now();
+          await safeSendMessage(
+            msg.chat.id,
+            `❌ ${getUserLink(user)} сейчас залёг на дно.\n⏳ Осталось: ${formatRemainingTime(remain)}\nКоманда не может начать штурм.`,
             {
               parse_mode: "HTML",
               disable_web_page_preview: true
@@ -7238,6 +7593,7 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
 
         await sendUserToJail(caught.id, POLICE_JAIL_MS);
         await changeWantedLevel(caught.id, 1);
+        await deactivateLayLow(caught.id);
         await updateBankHeistCooldownForUsers(members.map((m) => m.id));
 
         const savedLoot = Math.max(1, Math.floor(heist.loot * 0.40));
@@ -8073,6 +8429,8 @@ bot.on("polling_error", (error) => {
     await clampAllShieldsToMax();
     await cleanupExpiredPunishments();
     await cleanupExpiredJail();
+    await processLayLowReductions();
+    await processPassiveWantedDecay();
 
     console.log("✅ Shields clamped to max =", MAX_SHIELDS);
     console.log("✅ Bot started");
