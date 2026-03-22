@@ -39,6 +39,7 @@ const ROBBERY_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 const BANK_HEIST_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const ATM_HACK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 const VAN_HEIST_COOLDOWN_MS = 8 * 60 * 60 * 1000;
+const PAWNSHOP_HEIST_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
 const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -536,6 +537,9 @@ function getCooldownColumnAndMsByName(rawName) {
   if (["инкассация", "нападение на инкассацию", "van"].includes(name)) {
     return { column: "last_van_heist_at", cooldownMs: VAN_HEIST_COOLDOWN_MS, title: "нападение на инкассацию" };
   }
+  if (["ломбард", "ограбление ломбарда", "pawnshop"].includes(name)) {
+    return { column: "last_pawnshop_at", cooldownMs: PAWNSHOP_HEIST_COOLDOWN_MS, title: "ограбление ломбарда" };
+  }
   if (["баскетбол", "basketball"].includes(name)) {
     return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
   }
@@ -709,6 +713,7 @@ async function initDb() {
       last_bank_at TIMESTAMPTZ,
       last_atm_hack_at TIMESTAMPTZ,
       last_van_heist_at TIMESTAMPTZ,
+      last_pawnshop_at TIMESTAMPTZ,
       last_basketball_at TIMESTAMPTZ,
       last_knb_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
@@ -909,6 +914,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bank_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_atm_hack_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_van_heist_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_pawnshop_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
 
@@ -3047,6 +3053,10 @@ async function getVanHeistCooldown(userId) {
   return getGenericCooldown(userId, "last_van_heist_at", VAN_HEIST_COOLDOWN_MS);
 }
 
+async function getPawnshopCooldown(userId) {
+  return getGenericCooldown(userId, "last_pawnshop_at", PAWNSHOP_HEIST_COOLDOWN_MS);
+}
+
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
   const info = getCooldownColumnAndMsByName(cooldownName);
   if (!info) throw new Error("UNKNOWN_COOLDOWN_TYPE");
@@ -3106,6 +3116,7 @@ async function getCooldownText(userId) {
 🏦 Ограбление банка: ${getRemaining(stats.last_bank_at, BANK_HEIST_COOLDOWN_MS)}
 🏧 Взлом банкомата: ${getRemaining(stats.last_atm_hack_at, ATM_HACK_COOLDOWN_MS)}
 🚚 Инкассация: ${getRemaining(stats.last_van_heist_at, VAN_HEIST_COOLDOWN_MS)}
+💍 Ломбард: ${getRemaining(stats.last_pawnshop_at, PAWNSHOP_HEIST_COOLDOWN_MS)}
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
 }
@@ -3529,6 +3540,51 @@ function getRandomRobberyResult(targetBalance, wantedLevel, bonuses) {
   return {
     type: isBig ? "big" : "small",
     amount
+  };
+}
+
+function getPawnshopHeistOutcome(wantedLevel, bonuses) {
+  const wanted = Number(wantedLevel || 0);
+
+  let successChance = 0.20;
+  let jackpotChance = 0.04;
+
+  if (bonuses.mask) successChance += 0.05;
+  if (bonuses.lockpick) successChance += 0.07;
+  if (bonuses.jammer) successChance += 0.04;
+  if (bonuses.radio) successChance += 0.02;
+  if (bonuses.armor) successChance += 0.02;
+  if (bonuses.fakePassport) successChance += 0.02;
+
+  successChance -= wanted * 0.04;
+  jackpotChance -= wanted * 0.005;
+
+  successChance = clamp(successChance, 0.08, 0.48);
+  jackpotChance = clamp(jackpotChance, 0.01, 0.05);
+
+  const roll = Math.random();
+
+  if (roll > successChance) {
+    return { type: "fail", loot: 0 };
+  }
+
+  if (Math.random() < jackpotChance) {
+    return {
+      type: "jackpot",
+      loot: Math.floor(Math.random() * 41) + 90
+    };
+  }
+
+  if (Math.random() < 0.45) {
+    return {
+      type: "big",
+      loot: Math.floor(Math.random() * 31) + 45
+    };
+  }
+
+  return {
+    type: "small",
+    loot: Math.floor(Math.random() * 21) + 18
   };
 }
 
@@ -4299,6 +4355,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • снайпер
 • ограбить
 • взлом банкомата
+• ограбление ломбарда
 • нападение на инкассацию
 • присоединиться к инкассации
 • начать перехват
@@ -4713,6 +4770,7 @@ bot.onText(/^залечь на дно$/i, async (msg) => {
 • нельзя участвовать в ограблении банка
 • нельзя участвовать в инкассации
 • нельзя взламывать банкомат
+• нельзя грабить ломбард
 • розыск будет спадать быстрее`,
       {
         parse_mode: "HTML",
@@ -5073,7 +5131,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     if (deltaMs === null) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа"
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ломбард -2 часа"
       );
       return;
     }
@@ -5112,7 +5170,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, баскетбол, кнб");
+      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ломбард, баскетбол, кнб");
       return;
     }
 
@@ -5353,9 +5411,6 @@ bot.on("message", async (msg) => {
 
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
 
-    // =========================
-    // CUSTOM COMMAND CREATION
-    // =========================
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
 
@@ -5430,9 +5485,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    // =========================
-    // PENDING YES / NO
-    // =========================
     const pendingMarriage = findMarriageRequestByUser(msg.chat.id, msg.from.id);
     if (pendingMarriage && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
       if (isExactCommand(lowerText, "нет")) {
@@ -7798,6 +7850,126 @@ ${coinsLine}
     }
 
     // =========================
+    // PAWNSHOP HEIST
+    // =========================
+    if (isExactCommand(lowerText, "ограбление ломбарда")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const layLowBlock = await getLayLowBlockText(msg.from.id);
+      if (layLowBlock) {
+        await safeSendMessage(msg.chat.id, layLowBlock);
+        return;
+      }
+
+      const punishmentBlock = await getPunishedBlockText(msg.from.id);
+      if (punishmentBlock) {
+        await safeSendMessage(msg.chat.id, `${punishmentBlock}\nВо время наказания нельзя грабить ломбард.`);
+        return;
+      }
+
+      const cooldown = await getPawnshopCooldown(msg.from.id);
+      if (cooldown > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Ограбление ломбарда снова будет доступно через ${formatRemainingTime(cooldown)}`);
+        return;
+      }
+
+      const bonuses = await getCrimeBonuses(msg.from.id);
+      const wanted = await getWantedRow(msg.from.id);
+
+      await updateCooldownColumnNow(msg.from.id, "last_pawnshop_at");
+
+      const outcome = getPawnshopHeistOutcome(wanted?.level || 0, bonuses);
+
+      if (outcome.type === "fail") {
+        await changeWantedLevel(msg.from.id, 1);
+
+        let out = `💍 ${getUserLink(msg.from)} попытался ограбить ломбард, но всё пошло не по плану.
+
+🚨 Сработала сигнализация
+📹 Камеры записали нападение`;
+
+        const failFine = await deductCoinsSafe(msg.from.id, Math.floor(Math.random() * 11) + 10);
+        if (failFine.deducted > 0) {
+          out += `\n💸 Потери на провале: ${failFine.deducted} монет`;
+        }
+
+        const police = getRandomPoliceOutcome(wanted?.level || 0);
+
+        if (police.type === "fine") {
+          const fine = await deductCoinsSafe(msg.from.id, police.amount + 5);
+          if (fine.deducted > 0) {
+            out += `\n🚓 Полиция выписала штраф: ${fine.deducted} монет`;
+          }
+        }
+
+        if (police.type === "jail") {
+          const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
+          await changeWantedLevel(msg.from.id, 1);
+          await deactivateLayLow(msg.from.id);
+          out += `\n🚔 Нападавший арестован.`;
+          out += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+        }
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      await changeWantedLevel(msg.from.id, 1);
+      const newBalance = await addCoinsToUser(msg.from.id, outcome.loot);
+
+      let lootText = "💰 Небольшая добыча";
+      if (outcome.type === "big") lootText = "💎 Хорошая добыча";
+      if (outcome.type === "jackpot") lootText = "👑 Редкая крупная добыча";
+
+      let out = `💍 ${getUserLink(msg.from)} ограбил(а) ломбард!
+
+${lootText}
+💰 Получено: ${outcome.loot} монет
+🚨 Розыск +1
+👛 Баланс: ${newBalance}`;
+
+      const police = getRandomPoliceOutcome(wanted?.level || 0);
+
+      if (police.type === "fine") {
+        const fine = await deductCoinsSafe(msg.from.id, police.amount);
+        if (fine.deducted > 0) {
+          out += `\n🚓 Позже полиция вышла на след.`;
+          out += `\n💸 Штраф: ${fine.deducted} монет`;
+        }
+      }
+
+      if (police.type === "return" && outcome.loot > 0) {
+        const takeBack = await deductCoinsSafe(msg.from.id, Math.min(outcome.loot, Math.floor(outcome.loot * 0.7)));
+        if (takeBack.deducted > 0) {
+          out += `\n🚓 Часть добычи удалось вернуть ломбарду: ${takeBack.deducted} монет`;
+        }
+      }
+
+      if (police.type === "jail") {
+        const jail = await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
+        await changeWantedLevel(msg.from.id, 1);
+        await deactivateLayLow(msg.from.id);
+        out += `\n🚔 После ограбления преступника всё же поймали.`;
+        out += `\n🕒 До: ${formatDateTime(jail.until_at)}`;
+      }
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 11);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    // =========================
     // BANK HEIST COMMANDS
     // =========================
     if (isExactCommand(lowerText, "ограбление банка")) {
@@ -9203,9 +9375,6 @@ ${escapeHtml(prediction)}`,
       return;
     }
 
-    // =========================
-    // CUSTOM COMMANDS
-    // =========================
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
@@ -9240,9 +9409,6 @@ ${escapeHtml(prediction)}`,
       return;
     }
 
-    // =========================
-    // RP COMMANDS
-    // =========================
     const command = rpCommands[lowerText];
     if (!command) return;
 
