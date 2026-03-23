@@ -20,6 +20,9 @@ const pool = new Pool({
 
 const OWNER_ID = 7837011810;
 
+// =========================
+// CONFIG
+// =========================
 const chatMembers = {};
 const recentActiveUsers = {};
 const activeBombs = {};
@@ -61,17 +64,19 @@ const POLICE_JAIL_MS = 60 * 60 * 1000;
 const SHIELD_COST = 250;
 const MAX_SHIELDS = 3;
 
+// ===== ТЮРЬМА СДЕЛАНА НЕ СЛОЖНОЙ И НЕ ЛЁГКОЙ =====
 const JAIL_ESCAPE_COOLDOWN_MS = 15 * 60 * 1000;
-const JAIL_LAWYER_COOLDOWN_MS = 20 * 60 * 1000;
-const JAIL_BRIBE_COOLDOWN_MS = 20 * 60 * 1000;
-const JAIL_LAWYER_COST = 250;
-const JAIL_BRIBE_COST = 400;
+const JAIL_LAWYER_COOLDOWN_MS = 15 * 60 * 1000;
+const JAIL_BRIBE_COOLDOWN_MS = 15 * 60 * 1000;
+const JAIL_LAWYER_COST = 220;
+const JAIL_BRIBE_COST = 300;
 
 const TIME_EDIT_MAX_MINUTES = 10080;
 
 const MAX_LEVEL = 50;
 const MAX_WANTED_LEVEL = 5;
 
+// ===== СКРЫТНОСТЬ: -1 РОЗЫСК КАЖДЫЕ 2 ЧАСА =====
 const LAY_LOW_DURATION_MS = 6 * 60 * 60 * 1000;
 const LAY_LOW_REDUCE_STEP_MS = 2 * 60 * 60 * 1000;
 const WANTED_PASSIVE_DECAY_MS = 12 * 60 * 60 * 1000;
@@ -135,24 +140,19 @@ const ITEMS = {
 const ITEM_ALIASES = {
   "маска": "mask",
   "mask": "mask",
-
   "отмычка": "lockpick",
   "отмычки": "lockpick",
   "lockpick": "lockpick",
-
   "рация": "radio",
   "radio": "radio",
-
   "бронежилет": "armor",
   "броня": "armor",
   "armor": "armor",
-
   "фальшивый паспорт": "fake_passport",
   "фальшивыйпаспорт": "fake_passport",
   "поддельный паспорт": "fake_passport",
   "паспорт": "fake_passport",
   "fake_passport": "fake_passport",
-
   "глушилка": "jammer",
   "jammer": "jammer"
 };
@@ -313,7 +313,6 @@ function getCoupleKeyByUserIds(user1Id, user2Id) {
 function parseCreateCommandInput(text) {
   const cleaned = String(text || "").trim().replace(/\s+/g, " ");
   const parts = cleaned.split(" ");
-
   if (parts.length < 2) return null;
 
   const trigger = parts[0].trim().toLowerCase();
@@ -386,7 +385,7 @@ function getHuntResult() {
 
   if (Math.random() < 0.25) {
     return {
-      text: "🐻 Ты нашёл медведя... Он тебя съел!",
+      text: "🐻 Ты нашёл медведя... Он тебя прогнал!",
       coins: -getRandomHuntCoins()
     };
   }
@@ -460,7 +459,6 @@ function getKnbBotChoiceRareWin(playerChoice) {
   };
 
   const roll = Math.random();
-
   if (roll < 0.12) return beats[playerChoice];
   if (roll < 0.40) return playerChoice;
   return losesTo[playerChoice];
@@ -468,11 +466,7 @@ function getKnbBotChoiceRareWin(playerChoice) {
 
 function resolveKnb(playerChoice, botChoice) {
   if (playerChoice === botChoice) {
-    return {
-      type: "draw",
-      text: "🤝 Ничья.",
-      coins: 0
-    };
+    return { type: "draw", text: "🤝 Ничья.", coins: 0 };
   }
 
   const wins = {
@@ -1011,8 +1005,8 @@ async function getProfileOwnerByMessageId(messageId) {
 
 async function addXpToUser(userId, amount) {
   const safeAmount = Math.max(0, Number(amount || 0));
-
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
 
@@ -1496,10 +1490,7 @@ async function getLayLowStatus(userId) {
 
   if (row.is_active && new Date(row.until_at).getTime() <= Date.now()) {
     await deactivateLayLow(userId);
-    return {
-      ...row,
-      is_active: false
-    };
+    return { ...row, is_active: false };
   }
 
   return row;
@@ -2615,7 +2606,6 @@ async function breakPiggyBank(childUserId) {
   if (!existing) throw new Error("NO_PIGGY_BANK");
 
   const amount = Number(existing.balance || 0);
-
   const client = await pool.connect();
 
   try {
@@ -2986,48 +2976,55 @@ function getRandomPoliceOutcome(wantedLevel = 0) {
   return { type: "jail" };
 }
 
+// ===== НОВАЯ ЛОГИКА ТЮРЬМЫ =====
+// Побег: примерно 50/50
 function getRandomEscapeOutcome(wantedLevel = 0, hasArmor = false, hasPassport = false) {
   const wanted = Number(wantedLevel || 0);
 
-  let successChance = 0.34;
-  if (wanted >= 1) successChance -= 0.03;
-  if (wanted >= 2) successChance -= 0.03;
-  if (wanted >= 3) successChance -= 0.04;
-  if (wanted >= 4) successChance -= 0.04;
-  if (wanted >= 5) successChance -= 0.03;
-
-  if (hasArmor) successChance += 0.04;
+  let successChance = 0.50;
+  successChance -= wanted * 0.04;
+  if (hasArmor) successChance += 0.03;
   if (hasPassport) successChance += 0.03;
 
-  successChance = clamp(successChance, 0.18, 0.44);
+  successChance = clamp(successChance, 0.35, 0.60);
 
-  const hardFailChance = clamp(0.16 + wanted * 0.03 - (hasArmor ? 0.03 : 0) - (hasPassport ? 0.02 : 0), 0.10, 0.32);
   const roll = Math.random();
 
-  if (roll < successChance) return { type: "success" };
-  if (roll < successChance + (1 - successChance - hardFailChance)) return { type: "fail" };
+  if (roll < successChance) {
+    return { type: "success" };
+  }
+
+  if (roll < successChance + 0.30) {
+    return { type: "fail" };
+  }
+
   return { type: "caught_more_time", extraMs: 20 * 60 * 1000 };
 }
 
+// Адвокат: чаще помогает уменьшить срок
 function getRandomLawyerOutcome() {
   const roll = Math.random();
-  if (roll < 0.18) return { type: "free" };
-  if (roll < 0.74) return { type: "reduce", reduceMs: (20 + Math.floor(Math.random() * 26)) * 60 * 1000 };
+
+  if (roll < 0.20) return { type: "free" };
+  if (roll < 0.75) return { type: "reduce", reduceMs: (15 + Math.floor(Math.random() * 21)) * 60 * 1000 };
   return { type: "fail" };
 }
 
+// Подкуп: нормальный шанс, но не халява
 function getRandomBribeOutcome(wantedLevel = 0, hasPassport = false) {
   const wanted = Number(wantedLevel || 0);
-  let freeChance = 0.30 - wanted * 0.03;
-  if (hasPassport) freeChance += 0.05;
-  freeChance = clamp(freeChance, 0.12, 0.38);
 
-  const badChance = clamp(0.18 + wanted * 0.03 - (hasPassport ? 0.03 : 0), 0.10, 0.30);
+  let freeChance = 0.38;
+  freeChance -= wanted * 0.04;
+  if (hasPassport) freeChance += 0.04;
+
+  freeChance = clamp(freeChance, 0.20, 0.50);
+
   const roll = Math.random();
 
   if (roll < freeChance) return { type: "free" };
-  if (roll < 1 - badChance) return { type: "fail" };
-  return { type: "caught_more_time", extraMs: 30 * 60 * 1000 };
+  if (roll < freeChance + 0.35) return { type: "fail" };
+  return { type: "caught_more_time", extraMs: 25 * 60 * 1000 };
 }
 
 // =========================
@@ -3624,23 +3621,14 @@ function getAtmHackOutcome(wantedLevel, bonuses) {
   const roll = Math.random();
 
   if (roll > successChance) {
-    return {
-      type: "fail",
-      coins: 0
-    };
+    return { type: "fail", coins: 0 };
   }
 
   if (Math.random() < jackpotChance) {
-    return {
-      type: "jackpot",
-      coins: Math.floor(Math.random() * 21) + 25
-    };
+    return { type: "jackpot", coins: Math.floor(Math.random() * 21) + 25 };
   }
 
-  return {
-    type: "success",
-    coins: Math.floor(Math.random() * 12) + 8
-  };
+  return { type: "success", coins: Math.floor(Math.random() * 12) + 8 };
 }
 
 // =========================
@@ -3672,23 +3660,14 @@ function getJewelryHeistOutcome(wantedLevel, bonuses) {
   }
 
   if (Math.random() < jackpotChance) {
-    return {
-      type: "jackpot",
-      coins: Math.floor(Math.random() * 51) + 80
-    };
+    return { type: "jackpot", coins: Math.floor(Math.random() * 51) + 80 };
   }
 
   if (Math.random() < 0.35) {
-    return {
-      type: "big",
-      coins: Math.floor(Math.random() * 31) + 35
-    };
+    return { type: "big", coins: Math.floor(Math.random() * 31) + 35 };
   }
 
-  return {
-    type: "small",
-    coins: Math.floor(Math.random() * 16) + 15
-  };
+  return { type: "small", coins: Math.floor(Math.random() * 16) + 15 };
 }
 
 // =========================
@@ -4774,7 +4753,7 @@ bot.onText(/^залечь на дно$/i, async (msg) => {
 • нельзя участвовать в инкассации
 • нельзя взламывать банкомат
 • нельзя грабить ювелирку
-• розыск будет спадать на 1 каждые ${formatRemainingTime(LAY_LOW_REDUCE_STEP_MS)}`,
+• розыск снижается на 1 каждые 2 часа`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
@@ -4807,7 +4786,7 @@ bot.onText(/^скрытность$/i, async (msg) => {
 
 ⏳ Осталось: ${formatRemainingTime(remain)}
 🚨 Текущий розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
-📉 Каждые ${formatRemainingTime(LAY_LOW_REDUCE_STEP_MS)} розыск снижается на 1`,
+📉 Каждые 2 часа розыск снижается на 1`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
@@ -5414,20 +5393,17 @@ bot.on("message", async (msg) => {
 
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
 
+    // CUSTOM COMMAND CREATION
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
 
       const parsed = parseCreateCommandInput(text);
-
       if (!parsed) {
-        await safeSendMessage(
-          msg.chat.id,
-          `❌ Напиши в формате:
+        await safeSendMessage(msg.chat.id, `❌ Напиши в формате:
 команда действие
 
 Пример:
-облил облил водой`
-        );
+облил облил водой`);
         return;
       }
 
@@ -5488,6 +5464,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
+    // PENDING YES / NO
     const pendingMarriage = findMarriageRequestByUser(msg.chat.id, msg.from.id);
     if (pendingMarriage && (isExactCommand(lowerText, "да") || isExactCommand(lowerText, "нет"))) {
       if (isExactCommand(lowerText, "нет")) {
@@ -5510,6 +5487,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
+    // RELATIONSHIP COMMANDS
     if (isExactCommand(lowerText, "ревновать")) {
       const target = await resolveTargetUserFromReply(msg);
       if (!target) {
@@ -5611,6 +5589,7 @@ ${mood}`;
       return;
     }
 
+    // SHIELDS
     if (isExactCommand(lowerText, "купить щит")) {
       const shield = await getShieldRow(msg.from.id);
 
@@ -5681,6 +5660,7 @@ ${mood}`;
       return;
     }
 
+    // FAMILY COMMANDS
     if (lowerText.startsWith("наказать ребенка")) {
       const parent = msg.from;
       const child = await resolveTargetUserFromReply(msg);
@@ -7071,6 +7051,7 @@ ${getUserLink(child)}, выбери ниже:
       return;
     }
 
+    // JAIL COMMANDS
     if (isExactCommand(lowerText, "тюрьма")) {
       let targetUser = msg.from;
 
@@ -7164,7 +7145,7 @@ ${getUserLink(child)}, выбери ниже:
 
         let out = `🏃 ${getUserLink(msg.from)} совершил(а) побег из тюрьмы!
 
-🔓 Ему удалось скрыться.`;
+🔓 Побег удался. Шанс был примерно 50 на 50.`;
         out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
 
         await safeSendMessage(msg.chat.id, out, {
@@ -7179,7 +7160,8 @@ ${getUserLink(child)}, выбери ниже:
           msg.chat.id,
           `🚫 Побег не удался.
 
-👮 Охрана заметила попытку, но срок не изменился.`,
+👮 Охрана заметила попытку, но срок не увеличился.
+Попробовать снова можно позже.`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
@@ -7344,7 +7326,7 @@ ${getUserLink(child)}, выбери ниже:
         msg.chat.id,
         `🚨 Попытка подкупа раскрыта.
 
-⛓ Срок увеличен на 30 минут.
+⛓ Срок увеличен на 25 минут.
 🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
         {
           parse_mode: "HTML",
@@ -7354,6 +7336,7 @@ ${getUserLink(child)}, выбери ниже:
       return;
     }
 
+    // MONEY GAMES
     if (isExactCommand(lowerText, "деньги") || isExactCommand(lowerText, "монеты")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -7584,6 +7567,7 @@ ${coinsLine}
       return;
     }
 
+    // ROBBERY
     if (isExactCommand(lowerText, "ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -7755,6 +7739,7 @@ ${coinsLine}
       return;
     }
 
+    // ATM HACK
     if (isExactCommand(lowerText, "взлом банкомата")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -7831,6 +7816,7 @@ ${coinsLine}
       return;
     }
 
+    // JEWELRY HEIST
     if (isExactCommand(lowerText, "ограбление ювелирки")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -7937,6 +7923,7 @@ ${coinsLine}
       return;
     }
 
+    // BANK HEIST COMMANDS
     if (isExactCommand(lowerText, "ограбление банка")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -7962,7 +7949,7 @@ ${coinsLine}
         return;
       }
 
-      const heist = createBankHeist(msg.chat.id, msg.from);
+      createBankHeist(msg.chat.id, msg.from);
 
       let out = `🏦 ${getUserLink(msg.from)} начал(а) подготовку к ограблению банка!
 
@@ -8536,6 +8523,7 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
       return;
     }
 
+    // VAN HEIST COMMANDS
     if (isExactCommand(lowerText, "нападение на инкассацию")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
@@ -9025,6 +9013,7 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
       return;
     }
 
+    // SHOP
     if (isExactCommand(lowerText, "купить монеты")) {
       await safeSendMessage(
         msg.chat.id,
@@ -9069,6 +9058,7 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
       return;
     }
 
+    // OTHER / FUN
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
@@ -9331,6 +9321,7 @@ ${escapeHtml(prediction)}`,
       return;
     }
 
+    // CUSTOM COMMANDS
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
@@ -9365,6 +9356,7 @@ ${escapeHtml(prediction)}`,
       return;
     }
 
+    // RP COMMANDS
     const command = rpCommands[lowerText];
     if (!command) return;
 
