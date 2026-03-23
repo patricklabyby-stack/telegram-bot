@@ -68,6 +68,7 @@ const MAX_SHIELDS = 3;
 const JAIL_ESCAPE_COOLDOWN_MS = 15 * 60 * 1000;
 const JAIL_LAWYER_COOLDOWN_MS = 15 * 60 * 1000;
 const JAIL_BRIBE_COOLDOWN_MS = 15 * 60 * 1000;
+const JAIL_PRAY_COOLDOWN_MS = 7 * 60 * 1000;
 const JAIL_LAWYER_COST = 220;
 const JAIL_BRIBE_COST = 300;
 
@@ -878,6 +879,7 @@ async function initDb() {
       last_escape_at TIMESTAMPTZ,
       last_lawyer_at TIMESTAMPTZ,
       last_bribe_at TIMESTAMPTZ,
+      last_pray_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
@@ -913,6 +915,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_jewelry_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS last_pray_at TIMESTAMPTZ`);
 
   console.log("✅ Database ready");
 }
@@ -2929,7 +2932,7 @@ async function getJailActionRow(userId) {
   await ensureJailActionRow(userId);
   const result = await pool.query(
     `
-    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, updated_at
+    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, last_pray_at, updated_at
     FROM jail_actions
     WHERE user_id = $1
     LIMIT 1
@@ -2940,7 +2943,7 @@ async function getJailActionRow(userId) {
 }
 
 async function setJailActionUsed(userId, actionField) {
-  const allowed = ["last_escape_at", "last_lawyer_at", "last_bribe_at"];
+  const allowed = ["last_escape_at", "last_lawyer_at", "last_bribe_at", "last_pray_at"];
   if (!allowed.includes(actionField)) return;
 
   await ensureJailActionRow(userId);
@@ -2977,7 +2980,6 @@ function getRandomPoliceOutcome(wantedLevel = 0) {
 }
 
 // ===== НОВАЯ ЛОГИКА ТЮРЬМЫ =====
-// Побег: примерно 50/50
 function getRandomEscapeOutcome(wantedLevel = 0, hasArmor = false, hasPassport = false) {
   const wanted = Number(wantedLevel || 0);
 
@@ -3001,7 +3003,6 @@ function getRandomEscapeOutcome(wantedLevel = 0, hasArmor = false, hasPassport =
   return { type: "caught_more_time", extraMs: 20 * 60 * 1000 };
 }
 
-// Адвокат: чаще помогает уменьшить срок
 function getRandomLawyerOutcome() {
   const roll = Math.random();
 
@@ -3010,7 +3011,6 @@ function getRandomLawyerOutcome() {
   return { type: "fail" };
 }
 
-// Подкуп: нормальный шанс, но не халява
 function getRandomBribeOutcome(wantedLevel = 0, hasPassport = false) {
   const wanted = Number(wantedLevel || 0);
 
@@ -4386,6 +4386,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • сбежать из тюрьмы
 • адвокат
 • подкупить охрану
+• молиться
 • отсидеть
 
 <b>👤 Профиль</b>
@@ -7087,7 +7088,76 @@ ${getUserLink(child)}, выбери ниже:
 • сбежать из тюрьмы
 • адвокат
 • подкупить охрану
+• молиться
 • отсидеть`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "молиться")) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "🙏 Молиться можно только в тюрьме.");
+        return;
+      }
+
+      const row = await getJailActionRow(msg.from.id);
+      const remainingCd = getActionRemaining(row?.last_pray_at, JAIL_PRAY_COOLDOWN_MS);
+      if (remainingCd > 0) {
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ Снова молиться можно через ${formatRemainingTime(remainingCd)}`
+        );
+        return;
+      }
+
+      await setJailActionUsed(msg.from.id, "last_pray_at");
+
+      const roll = Math.random();
+
+      if (roll < 0.15) {
+        await removeUserFromJail(msg.from.id);
+        await changeWantedLevel(msg.from.id, -1);
+
+        let out = `🙏 ${getUserLink(msg.from)} долго молился в камере...
+
+✨ Произошло чудо — игрок освобождён из тюрьмы.`;
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      if (roll < 0.65) {
+        const reduceMs = (8 + Math.floor(Math.random() * 11)) * 60 * 1000;
+        const updatedJail = await reduceJailTime(msg.from.id, reduceMs);
+
+        let out = `🙏 ${getUserLink(msg.from)} молился в тюрьме...
+
+⏳ Срок уменьшен на ${formatRemainingTime(reduceMs)}
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🙏 ${getUserLink(msg.from)} молился в тюрьме...
+
+Ничего не произошло, но стало чуть спокойнее.`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
