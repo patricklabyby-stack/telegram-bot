@@ -72,7 +72,6 @@ const JAIL_LAWYER_COST = 220;
 const JAIL_BRIBE_COST = 300;
 
 const TIME_EDIT_MAX_MINUTES = 10080;
-
 const MAX_LEVEL = 50;
 const MAX_WANTED_LEVEL = 5;
 
@@ -91,7 +90,6 @@ const ITEMS = {
     title: "Маска",
     emoji: "🎭",
     price: 35,
-    criminalOnly: true,
     description: "Улучшает шансы на преступления"
   },
   lockpick: {
@@ -99,7 +97,6 @@ const ITEMS = {
     title: "Отмычка",
     emoji: "🗝️",
     price: 50,
-    criminalOnly: true,
     description: "Нужна для банкоматов и помогает в ограблениях"
   },
   radio: {
@@ -107,7 +104,6 @@ const ITEMS = {
     title: "Рация",
     emoji: "📡",
     price: 80,
-    criminalOnly: true,
     description: "Помогает команде координироваться"
   },
   armor: {
@@ -115,7 +111,6 @@ const ITEMS = {
     title: "Бронежилет",
     emoji: "🦺",
     price: 120,
-    criminalOnly: true,
     description: "Снижает шанс провала и ареста"
   },
   fake_passport: {
@@ -123,7 +118,6 @@ const ITEMS = {
     title: "Фальшивый паспорт",
     emoji: "🪪",
     price: 200,
-    criminalOnly: true,
     description: "Иногда снижает последствия полиции"
   },
   jammer: {
@@ -131,7 +125,6 @@ const ITEMS = {
     title: "Глушилка",
     emoji: "📴",
     price: 160,
-    criminalOnly: true,
     description: "Помогает против сигнализации"
   }
 };
@@ -4997,6 +4990,280 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
       return;
+    }
+
+    // =========================
+    // WANTED / STEALTH COMMANDS
+    // =========================
+    if (isExactCommand(lowerText, "розыск")) {
+      let targetUser = msg.from;
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const wanted = await getWantedRow(targetUser.id);
+      const layLow = await getLayLowStatus(targetUser.id);
+
+      const layLowText =
+        layLow && layLow.is_active
+          ? `✅ Да, осталось: ${formatRemainingTime(new Date(layLow.until_at).getTime() - Date.now())}`
+          : "❌ Нет";
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚨 Розыск
+
+Игрок: ${getUserLink(targetUser)}
+Уровень: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
+Статус: ${escapeHtml(getWantedStatusText(wanted?.level || 0))}
+Скрытность: ${layLowText}
+
+${escapeHtml(getWantedEffectText(wanted?.level || 0))}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "топ розыска")) {
+      const result = await pool.query(`
+        SELECT u.user_id, u.first_name, u.last_name, u.username, w.level
+        FROM wanted_status w
+        JOIN users u ON u.user_id = w.user_id
+        WHERE w.level > 0
+        ORDER BY w.level DESC, w.updated_at DESC
+        LIMIT 10
+      `);
+
+      if (!result.rows.length) {
+        await safeSendMessage(msg.chat.id, "✅ Сейчас в розыске никого нет.");
+        return;
+      }
+
+      const lines = result.rows.map((row, index) => {
+        const user = {
+          id: Number(row.user_id),
+          first_name: row.first_name || "",
+          last_name: row.last_name || "",
+          username: row.username || ""
+        };
+        return `${index + 1}. ${getUserLink(user)} — ${Number(row.level || 0)}/${MAX_WANTED_LEVEL} (${escapeHtml(getWantedStatusText(row.level || 0))})`;
+      });
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚨 Топ розыска
+
+${lines.join("\n")}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "сдаться")) {
+      const wanted = await getWantedRow(msg.from.id);
+      const level = Number(wanted?.level || 0);
+
+      if (level <= 0) {
+        await safeSendMessage(msg.chat.id, "✅ Ты и так не в розыске.");
+        return;
+      }
+
+      const jailTime = Math.max(20, level * 20) * 60 * 1000;
+      const jail = await sendUserToJail(msg.from.id, jailTime);
+      await setWantedLevel(msg.from.id, Math.max(0, level - 2));
+      await deactivateLayLow(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🚔 ${getUserLink(msg.from)} сдался полиции.
+
+⛓ Ты отправлен в тюрьму
+🕒 До: ${formatDateTime(jail.until_at)}
+📉 Розыск немного снижен`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "залечь на дно")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const wanted = await getWantedRow(msg.from.id);
+      const level = Number(wanted?.level || 0);
+
+      if (level <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Залечь на дно можно только если у тебя есть розыск.");
+        return;
+      }
+
+      const layLow = await getLayLowStatus(msg.from.id);
+      if (layLow?.is_active) {
+        const remain = new Date(layLow.until_at).getTime() - Date.now();
+        await safeSendMessage(msg.chat.id, `🕶 Ты уже в скрытности.\n⏳ Осталось: ${formatRemainingTime(remain)}`);
+        return;
+      }
+
+      const activated = await activateLayLow(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🕶 ${getUserLink(msg.from)} залёг(ла) на дно.
+
+⏳ Скрытность активна: ${formatRemainingTime(new Date(activated.until_at).getTime() - Date.now())}
+📉 Во время скрытности розыск будет постепенно снижаться
+❌ Преступления временно запрещены`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "скрытность")) {
+      const layLow = await getLayLowStatus(msg.from.id);
+
+      if (!layLow || !layLow.is_active) {
+        await safeSendMessage(msg.chat.id, "🕶 Скрытность сейчас не активна.");
+        return;
+      }
+
+      const remain = new Date(layLow.until_at).getTime() - Date.now();
+      await safeSendMessage(
+        msg.chat.id,
+        `🕶 Скрытность активна
+
+Игрок: ${getUserLink(msg.from)}
+⏳ Осталось: ${formatRemainingTime(remain)}
+🕒 Запущена: ${formatDateTime(layLow.created_at)}
+
+❌ Пока скрытность активна, преступления запрещены.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "выйти из тени")) {
+      const layLow = await getLayLowStatus(msg.from.id);
+      if (!layLow || !layLow.is_active) {
+        await safeSendMessage(msg.chat.id, "❌ Ты и так не в скрытности.");
+        return;
+      }
+
+      await deactivateLayLow(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `☀️ ${getUserLink(msg.from)} вышел(вышла) из тени.
+
+Теперь преступления снова доступны.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    // =========================
+    // INVENTORY / BLACK MARKET
+    // =========================
+    if (isExactCommand(lowerText, "инвентарь")) {
+      const inventory = await getFullInventory(msg.from.id);
+
+      const lines = Object.keys(ITEMS).map((key) => {
+        const item = ITEMS[key];
+        const count = Number(inventory[key] || 0);
+        return `${item.emoji} ${escapeHtml(item.title)} — ${count}`;
+      });
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎒 Инвентарь игрока ${getUserLink(msg.from)}
+
+${lines.join("\n")}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "черный рынок") || isExactCommand(lowerText, "чёрный рынок")) {
+      const lines = Object.values(ITEMS).map((item) =>
+        `${item.emoji} ${escapeHtml(item.title)} — ${item.price} монет\n${escapeHtml(item.description)}`
+      );
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🕶 Чёрный рынок
+
+${lines.join("\n\n")}
+
+Купить:
+• купить маска
+• купить отмычка
+• купить рация
+• купить бронежилет
+• купить фальшивый паспорт
+• купить глушилка`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("купить ")) {
+      const rawItem = originalText.slice("купить ".length).trim();
+      const itemKey = resolveItemKey(rawItem);
+
+      if (itemKey && ITEMS[itemKey]) {
+        try {
+          const result = await buyBlackMarketItem(msg.from.id, itemKey);
+          const item = ITEMS[itemKey];
+
+          let out = `🛒 ${getUserLink(msg.from)} купил(а) ${item.emoji} ${escapeHtml(item.title)}
+
+📦 Теперь у тебя: ${result.itemCount}
+👛 Баланс: ${result.balance}`;
+
+          out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
+
+          await safeSendMessage(msg.chat.id, out, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          });
+        } catch (error) {
+          if (error.message === "NOT_ENOUGH_MONEY") {
+            await safeSendMessage(msg.chat.id, "❌ Недостаточно монет.");
+            return;
+          }
+
+          console.error("Ошибка покупки предмета:", error);
+          await safeSendMessage(msg.chat.id, "❌ Ошибка покупки предмета.");
+        }
+        return;
+      }
     }
 
     // RELATIONSHIP COMMANDS
