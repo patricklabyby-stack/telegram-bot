@@ -64,7 +64,6 @@ const POLICE_JAIL_MS = 60 * 60 * 1000;
 const SHIELD_COST = 250;
 const MAX_SHIELDS = 3;
 
-// ===== ТЮРЬМА СДЕЛАНА НЕ СЛОЖНОЙ И НЕ ЛЁГКОЙ =====
 const JAIL_ESCAPE_COOLDOWN_MS = 15 * 60 * 1000;
 const JAIL_LAWYER_COOLDOWN_MS = 15 * 60 * 1000;
 const JAIL_BRIBE_COOLDOWN_MS = 15 * 60 * 1000;
@@ -77,7 +76,6 @@ const TIME_EDIT_MAX_MINUTES = 10080;
 const MAX_LEVEL = 50;
 const MAX_WANTED_LEVEL = 5;
 
-// ===== СКРЫТНОСТЬ: -1 РОЗЫСК КАЖДЫЕ 2 ЧАСА =====
 const LAY_LOW_DURATION_MS = 6 * 60 * 60 * 1000;
 const LAY_LOW_REDUCE_STEP_MS = 2 * 60 * 60 * 1000;
 const WANTED_PASSIVE_DECAY_MS = 12 * 60 * 60 * 1000;
@@ -204,7 +202,7 @@ function getUserName(user) {
   const fullName = `${firstName} ${lastName}`.trim();
 
   if (fullName && fullName !== ".") return fullName;
-  if (username) return username;
+  if (username) return `@${username}`;
   if (firstName) return firstName;
   return user.id ? `ID ${user.id}` : "Пользователь";
 }
@@ -669,6 +667,114 @@ function getRecentActiveCandidates(chatId, excludeUserIds = []) {
     if (excludeUserIds.includes(user.id)) return false;
     return now - (user.last_seen_at || 0) <= ACTIVE_WINDOW_MS;
   });
+}
+
+// =========================
+// MENTION / TARGET RESOLVE
+// =========================
+function extractMentionUsername(text) {
+  const match = String(text || "").match(/(^|\s)@([A-Za-z0-9_]{4,32})(?=\s|$)/);
+  return match ? String(match[2]).toLowerCase() : null;
+}
+
+function cleanupTextWithoutMention(text) {
+  return String(text || "")
+    .replace(/(^|\s)@([A-Za-z0-9_]{4,32})(?=\s|$)/, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildStoredUser(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.user_id || row.id),
+    first_name: row.first_name || "",
+    last_name: row.last_name || "",
+    username: row.username || ""
+  };
+}
+
+async function findUserByUsername(chatId, username) {
+  const uname = String(username || "").replace(/^@/, "").trim().toLowerCase();
+  if (!uname) return null;
+
+  const chatKey = String(chatId);
+
+  const liveChatMembers = Object.values(chatMembers[chatKey] || {});
+  const liveMember = liveChatMembers.find(
+    (u) => String(u.username || "").toLowerCase() === uname
+  );
+  if (liveMember) return liveMember;
+
+  const liveActiveMembers = Object.values(recentActiveUsers[chatKey] || {});
+  const liveActiveMember = liveActiveMembers.find(
+    (u) => String(u.username || "").toLowerCase() === uname
+  );
+  if (liveActiveMember) return liveActiveMember;
+
+  const seen = await pool.query(
+    `
+    SELECT user_id, first_name, last_name, username
+    FROM chat_seen_users
+    WHERE chat_id = $1
+      AND LOWER(username) = LOWER($2)
+    LIMIT 1
+    `,
+    [chatId, uname]
+  );
+  if (seen.rows[0]) return buildStoredUser(seen.rows[0]);
+
+  const users = await pool.query(
+    `
+    SELECT user_id, first_name, last_name, username
+    FROM users
+    WHERE LOWER(username) = LOWER($1)
+    LIMIT 1
+    `,
+    [uname]
+  );
+  if (users.rows[0]) return buildStoredUser(users.rows[0]);
+
+  return null;
+}
+
+async function resolveTargetUserFromReply(msg) {
+  if (!msg.reply_to_message) return null;
+
+  const replyMsg = msg.reply_to_message;
+
+  if (replyMsg.from && !replyMsg.from.is_bot && replyMsg.from.id) {
+    await initUser(replyMsg.from);
+    await saveSeenUser(msg.chat.id, replyMsg.from);
+
+    return {
+      id: Number(replyMsg.from.id),
+      first_name: replyMsg.from.first_name || "",
+      last_name: replyMsg.from.last_name || "",
+      username: replyMsg.from.username || ""
+    };
+  }
+
+  const profileOwnerId = await getProfileOwnerByMessageId(replyMsg.message_id);
+  if (profileOwnerId) {
+    const storedUser = await getStoredUser(profileOwnerId);
+    if (storedUser) return storedUser;
+  }
+
+  return null;
+}
+
+async function resolveTargetUserUniversal(msg) {
+  const byReply = await resolveTargetUserFromReply(msg);
+  if (byReply) return byReply;
+
+  const mentionedUsername = extractMentionUsername(msg.text || "");
+  if (mentionedUsername) {
+    const byMention = await findUserByUsername(msg.chat.id, mentionedUsername);
+    if (byMention) return byMention;
+  }
+
+  return null;
 }
 
 // =========================
@@ -2979,7 +3085,6 @@ function getRandomPoliceOutcome(wantedLevel = 0) {
   return { type: "jail" };
 }
 
-// ===== НОВАЯ ЛОГИКА ТЮРЬМЫ =====
 function getRandomEscapeOutcome(wantedLevel = 0, hasArmor = false, hasPassport = false) {
   const wanted = Number(wantedLevel || 0);
 
@@ -3190,32 +3295,6 @@ async function sendProfile(chatId, targetUser, replyToMessageId = undefined) {
 
   await saveProfileMessage(sent.message_id, targetUser.id);
   return sent;
-}
-
-async function resolveTargetUserFromReply(msg) {
-  if (!msg.reply_to_message) return null;
-
-  const replyMsg = msg.reply_to_message;
-
-  if (replyMsg.from && !replyMsg.from.is_bot && replyMsg.from.id) {
-    await initUser(replyMsg.from);
-    await saveSeenUser(msg.chat.id, replyMsg.from);
-
-    return {
-      id: Number(replyMsg.from.id),
-      first_name: replyMsg.from.first_name || "",
-      last_name: replyMsg.from.last_name || "",
-      username: replyMsg.from.username || ""
-    };
-  }
-
-  const profileOwnerId = await getProfileOwnerByMessageId(replyMsg.message_id);
-  if (profileOwnerId) {
-    const storedUser = await getStoredUser(profileOwnerId);
-    if (storedUser) return storedUser;
-  }
-
-  return null;
 }
 
 // =========================
@@ -4361,12 +4440,12 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • нападение на инкассацию
 • ограбление ювелирки
 • взлом банкомата
-• ограбить
+• ограбить @username
 
 <b>🎒 Инвентарь</b>
 • инвентарь
 • черный рынок
-• купить маску
+• купить маска
 • купить отмычку
 • купить рацию
 • купить бронежилет
@@ -4391,7 +4470,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 
 <b>👤 Профиль</b>
 • /profile
-• /profile ответом
 • /balance
 • /cooldowns
 • уровень
@@ -4400,24 +4478,24 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • респект
 
 <b>🎭 RP команды</b>
-• убить
-• обнять
-• поцеловать
-• ударить
-• укусить
-• погладить
-• пнуть
-• шлепнуть
-• врезать
-• лизнуть
-• украсть
-• заскамить
-• уничтожить
-• разбудить
-• заморозить
-• спасти
-• подарок
-• кинуть снежок
+• убить @username
+• обнять @username
+• поцеловать @username
+• ударить @username
+• укусить @username
+• погладить @username
+• пнуть @username
+• шлепнуть @username
+• врезать @username
+• лизнуть @username
+• украсть @username
+• заскамить @username
+• уничтожить @username
+• разбудить @username
+• заморозить @username
+• спасти @username
+• подарок @username
+• кинуть снежок @username
 
 <b>🛠 Свои команды</b>
 • /createcommand
@@ -4432,10 +4510,10 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • оценка
 • прогноз
 • он врет?
-• врет?
 
 <b>ℹ️ Подсказка</b>
-Многие команды работают <b>ответом на сообщение</b> игрока.`,
+Теперь команды работают не только <b>ответом</b>, но и через <b>@username</b>.
+Бот будет показывать <b>реальное имя аккаунта</b>, а не просто @username.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -4597,573 +4675,6 @@ ${lines.join("\n")}`,
   } catch (error) {
     console.error("Ошибка команды топ богачей:", error);
     await safeSendMessage(msg.chat.id, "Ошибка при получении топа богачей.");
-  }
-});
-
-bot.onText(/^розыск$/i, async (msg) => {
-  try {
-    let targetUser = msg.from;
-    if (msg.reply_to_message) {
-      const resolved = await resolveTargetUserFromReply(msg);
-      if (resolved) targetUser = resolved;
-    }
-
-    await initUser(targetUser);
-    const wanted = await getWantedRow(targetUser.id);
-    const layLow = await getLayLowStatus(targetUser.id);
-
-    let extra = "";
-    if (layLow && layLow.is_active) {
-      const remain = new Date(layLow.until_at).getTime() - Date.now();
-      extra = `\n\n🕶 Сейчас залёг на дно
-⏳ Осталось: ${formatRemainingTime(remain)}
-📉 Розыск снижается каждые ${formatRemainingTime(LAY_LOW_REDUCE_STEP_MS)}`;
-    }
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🚨 Розыск игрока ${getUserLink(targetUser)}
-
-Уровень розыска: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
-Статус: ${escapeHtml(getWantedStatusText(wanted?.level || 0))}
-
-Эффекты:
-${escapeHtml(getWantedEffectText(wanted?.level || 0))}${extra}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка команды розыск:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка при получении розыска.");
-  }
-});
-
-bot.onText(/^топ розыска$/i, async (msg) => {
-  try {
-    const result = await pool.query(`
-      SELECT u.user_id, u.first_name, u.last_name, u.username, w.level
-      FROM wanted_status w
-      JOIN users u ON u.user_id = w.user_id
-      ORDER BY w.level DESC, w.updated_at DESC
-      LIMIT 10
-    `);
-
-    if (!result.rows.length) {
-      await safeSendMessage(msg.chat.id, "Пока нет игроков в розыске.");
-      return;
-    }
-
-    const lines = result.rows.map((row, index) => {
-      const user = {
-        id: Number(row.user_id),
-        first_name: row.first_name || "",
-        last_name: row.last_name || "",
-        username: row.username || ""
-      };
-      return `${index + 1}. ${getUserLink(user)} — ${Number(row.level || 0)}/${MAX_WANTED_LEVEL}`;
-    });
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🚨 Топ розыска
-
-${lines.join("\n")}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка команды топ розыска:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка при получении топа розыска.");
-  }
-});
-
-bot.onText(/^сдаться$/i, async (msg) => {
-  try {
-    const wanted = await getWantedRow(msg.from.id);
-    const current = Number(wanted?.level || 0);
-
-    if (current <= 0) {
-      await safeSendMessage(msg.chat.id, "✅ У тебя нет активного розыска.");
-      return;
-    }
-
-    await sendUserToJail(msg.from.id, POLICE_JAIL_MS);
-    const reduced = Math.max(0, current - 2);
-    await setWantedLevel(msg.from.id, reduced);
-    await deactivateLayLow(msg.from.id);
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🚔 ${getUserLink(msg.from)} добровольно сдался полиции.
-
-⛓ Игрок отправлен в тюрьму
-🚨 Новый уровень розыска: ${reduced}/${MAX_WANTED_LEVEL}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка команды сдаться:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка при сдаче полиции.");
-  }
-});
-
-bot.onText(/^залечь на дно$/i, async (msg) => {
-  try {
-    const wanted = await getWantedRow(msg.from.id);
-    const currentWanted = Number(wanted?.level || 0);
-
-    if (currentWanted <= 0) {
-      await safeSendMessage(msg.chat.id, "❌ У тебя нет розыска. Залегать на дно сейчас не нужно.");
-      return;
-    }
-
-    const jailText = await getJailBlockText(msg.from.id);
-    if (jailText) {
-      await safeSendMessage(msg.chat.id, `${jailText}\nВ тюрьме нельзя залечь на дно.`);
-      return;
-    }
-
-    const status = await getLayLowStatus(msg.from.id);
-    if (status && status.is_active) {
-      const remain = new Date(status.until_at).getTime() - Date.now();
-      await safeSendMessage(
-        msg.chat.id,
-        `✅ Ты уже залёг на дно.\n⏳ Осталось: ${formatRemainingTime(remain)}`
-      );
-      return;
-    }
-
-    const activated = await activateLayLow(msg.from.id);
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🕶 ${getUserLink(msg.from)} залёг на дно.
-
-⏳ Время скрытности: ${formatRemainingTime(new Date(activated.until_at).getTime() - Date.now())}
-🚨 Розыск сейчас: ${currentWanted}/${MAX_WANTED_LEVEL}
-
-Пока режим активен:
-• нельзя грабить игроков
-• нельзя участвовать в ограблении банка
-• нельзя участвовать в инкассации
-• нельзя взламывать банкомат
-• нельзя грабить ювелирку
-• розыск снижается на 1 каждые 2 часа`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка команды залечь на дно:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка скрытности.");
-  }
-});
-
-bot.onText(/^скрытность$/i, async (msg) => {
-  try {
-    const status = await getLayLowStatus(msg.from.id);
-    const wanted = await getWantedRow(msg.from.id);
-
-    if (!status || !status.is_active) {
-      await safeSendMessage(
-        msg.chat.id,
-        `🕶 Скрытность не активна.\n🚨 Розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}`
-      );
-      return;
-    }
-
-    const remain = new Date(status.until_at).getTime() - Date.now();
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🕶 Скрытность активна
-
-⏳ Осталось: ${formatRemainingTime(remain)}
-🚨 Текущий розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
-📉 Каждые 2 часа розыск снижается на 1`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка команды скрытность:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка при получении скрытности.");
-  }
-});
-
-bot.onText(/^выйти из тени$/i, async (msg) => {
-  try {
-    const status = await getLayLowStatus(msg.from.id);
-
-    if (!status || !status.is_active) {
-      await safeSendMessage(msg.chat.id, "❌ Ты и так не в скрытности.");
-      return;
-    }
-
-    await deactivateLayLow(msg.from.id);
-
-    await safeSendMessage(
-      msg.chat.id,
-      `👣 ${getUserLink(msg.from)} вышел из тени.
-
-Теперь преступные команды снова доступны.`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка команды выйти из тени:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка выхода из скрытности.");
-  }
-});
-
-bot.onText(/^инвентарь$/i, async (msg) => {
-  try {
-    await initUser(msg.from);
-    const inv = await getFullInventory(msg.from.id);
-
-    const lines = Object.values(ITEMS).map((item) => {
-      const count = Number(inv[item.key] || 0);
-      return `• ${item.emoji} ${item.title} — ${count}`;
-    });
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🎒 Инвентарь ${getUserLink(msg.from)}
-
-${lines.join("\n")}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка инвентаря:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка инвентаря.");
-  }
-});
-
-bot.onText(/^черный рынок$/i, async (msg) => {
-  try {
-    const lines = Object.values(ITEMS).map((item) =>
-      `• ${item.emoji} ${item.title} — ${item.price} монет\n  ${escapeHtml(item.description)}`
-    );
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🕶 Чёрный рынок
-
-${lines.join("\n\n")}
-
-Напиши, например:
-купить маска`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка чёрного рынка:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка чёрного рынка.");
-  }
-});
-
-bot.onText(/^купить\s+(.+)$/i, async (msg, match) => {
-  try {
-    const rawItem = String(match?.[1] || "").trim();
-    const itemKey = resolveItemKey(rawItem);
-
-    if (!itemKey) return;
-
-    await initUser(msg.from);
-
-    const result = await buyBlackMarketItem(msg.from.id, itemKey);
-    const item = ITEMS[itemKey];
-
-    let out = `${item.emoji} ${getUserLink(msg.from)} купил(а) предмет: ${escapeHtml(item.title)}
-
-💸 Цена: ${item.price}
-🎒 Теперь у тебя: ${result.itemCount}
-👛 Баланс: ${result.balance}`;
-
-    out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
-
-    await safeSendMessage(msg.chat.id, out, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
-  } catch (error) {
-    if (error.message === "NOT_ENOUGH_MONEY") {
-      await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
-      return;
-    }
-
-    console.error("Ошибка покупки предмета:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка покупки предмета.");
-  }
-});
-
-bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
-  try {
-    await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
-
-    const count = await getUserCustomCommandCount(msg.from.id);
-    if (count >= MAX_CUSTOM_COMMANDS) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`
-      );
-      return;
-    }
-
-    const stats = await getUserStats(msg.from.id);
-    if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`
-      );
-      return;
-    }
-
-    const key = getPendingKey(msg.chat.id, msg.from.id);
-    pendingCommandCreation[key] = true;
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🛠 Создание команды
-
-Цена: ${CUSTOM_COMMAND_COST} монет
-Максимум: ${MAX_CUSTOM_COMMANDS} команд
-
-Напиши в формате:
-команда действие
-
-Пример:
-облил облил водой`
-    );
-  } catch (error) {
-    console.error("Ошибка /createcommand:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка создания команды.");
-  }
-});
-
-async function getUserCustomCommandCount(userId) {
-  const result = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`,
-    [userId]
-  );
-  return result.rows[0]?.count || 0;
-}
-
-async function getUserCustomCommands(userId) {
-  const result = await pool.query(
-    `
-    SELECT trigger, action_text
-    FROM custom_commands
-    WHERE user_id = $1
-    ORDER BY created_at ASC
-    `,
-    [userId]
-  );
-  return result.rows;
-}
-
-async function getCustomCommandByTrigger(trigger) {
-  const result = await pool.query(
-    `
-    SELECT id, user_id, trigger, action_text
-    FROM custom_commands
-    WHERE LOWER(trigger) = LOWER($1)
-    LIMIT 1
-    `,
-    [trigger]
-  );
-  return result.rows[0] || null;
-}
-
-async function createCustomCommand(userId, trigger, actionText) {
-  await pool.query(
-    `INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`,
-    [userId, trigger, actionText]
-  );
-}
-
-async function deleteCustomCommand(userId, trigger) {
-  const result = await pool.query(
-    `
-    DELETE FROM custom_commands
-    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
-    RETURNING trigger
-    `,
-    [userId, trigger]
-  );
-  return result.rows[0] || null;
-}
-
-bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
-  try {
-    await initUser(msg.from);
-    const commands = await getUserCustomCommands(msg.from.id);
-
-    if (!commands.length) {
-      await safeSendMessage(msg.chat.id, "📜 У тебя пока нет своих команд.");
-      return;
-    }
-
-    const lines = commands.map((cmd, index) =>
-      `${index + 1}. ${escapeHtml(cmd.trigger)} — бот пишет: ${escapeHtml(cmd.action_text)}`
-    );
-
-    await safeSendMessage(
-      msg.chat.id,
-      `📜 Твои команды:\n\n${lines.join("\n")}`,
-      { parse_mode: "HTML" }
-    );
-  } catch (error) {
-    console.error("Ошибка /mycommands:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка при получении команд.");
-  }
-});
-
-bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
-  try {
-    await initUser(msg.from);
-
-    const trigger = normalizeText(match?.[2] || "");
-    if (!trigger) {
-      await safeSendMessage(msg.chat.id, "❌ Напиши так:\n/deletecommand облил");
-      return;
-    }
-
-    const deleted = await deleteCustomCommand(msg.from.id, trigger);
-    if (!deleted) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ У тебя нет команды "${escapeHtml(trigger)}".`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🗑 Команда "${escapeHtml(deleted.trigger)}" удалена.`,
-      { parse_mode: "HTML" }
-    );
-  } catch (error) {
-    console.error("Ошибка /deletecommand:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка удаления команды.");
-  }
-});
-
-bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
-  try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
-
-    const target = await resolveTargetUserFromReply(msg);
-    const amount = Number(match?.[2] || 0);
-
-    if (!target) {
-      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: /givemoney 1000");
-      return;
-    }
-
-    if (!Number.isInteger(amount) || amount <= 0) {
-      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /givemoney 1000");
-      return;
-    }
-
-    await initUser(target);
-    const newBalance = await addCoinsToUser(target.id, amount);
-
-    await safeSendMessage(
-      msg.chat.id,
-      `💸 ${getUserLink(target)} получил(а) ${amount} монет.
-
-Новый баланс: ${newBalance}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    console.error("Ошибка /givemoney:", error);
-    await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
-  }
-});
-
-bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/, async (msg, match) => {
-  try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
-
-    const cooldownName = String(match?.[2] || "").trim();
-    const rawValue = String(match?.[3] || "").trim();
-    const rawUnit = String(match?.[4] || "").trim();
-
-    const deltaMs = parseTimeEditAmount(rawValue, rawUnit);
-    if (deltaMs === null) {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
-      );
-      return;
-    }
-
-    const deltaMinutes = Math.abs(Math.trunc(deltaMs / 60000));
-    if (deltaMinutes > TIME_EDIT_MAX_MINUTES) {
-      await safeSendMessage(msg.chat.id, `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`);
-      return;
-    }
-
-    let targetUser = null;
-    if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
-    if (!targetUser) targetUser = msg.from;
-
-    await initUser(targetUser);
-
-    const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
-    const signText =
-      Math.abs(deltaMs) % (60 * 60 * 1000) === 0
-        ? `${Number(rawValue)} ч`
-        : `${Number(rawValue)} мин`;
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🕒 Время кулдауна изменено
-
-👤 Игрок: ${getUserLink(targetUser)}
-⏱ Кулдаун: ${escapeHtml(result.title)}
-🔧 Изменение: ${signText}
-📅 Новое время отсчёта: ${formatDateTime(result.newDate)}
-⌛ Осталось до готовности: ${formatRemainingTime(result.remainingMs)}`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-  } catch (error) {
-    if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, кнб");
-      return;
-    }
-
-    if (error.message === "COOLDOWN_NOT_USED_YET") {
-      await safeSendMessage(msg.chat.id, "❌ У игрока этот кулдаун ещё не запускался.");
-      return;
-    }
-
-    console.error("Ошибка /timeedit:", error);
-    await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
   }
 });
 
@@ -5387,8 +4898,8 @@ bot.on("message", async (msg) => {
     await initUser(msg.from);
     await saveSeenUser(msg.chat.id, msg.from);
 
-    const text = (msg.text || "").trim();
-    const lowerText = normalizeText(text);
+    const originalText = (msg.text || "").trim();
+    const lowerText = normalizeText(originalText);
 
     if (lowerText.startsWith("/")) return;
 
@@ -5398,7 +4909,7 @@ bot.on("message", async (msg) => {
     if (pendingCommandCreation[pendingKey]) {
       delete pendingCommandCreation[pendingKey];
 
-      const parsed = parseCreateCommandInput(text);
+      const parsed = parseCreateCommandInput(originalText);
       if (!parsed) {
         await safeSendMessage(msg.chat.id, `❌ Напиши в формате:
 команда действие
@@ -5490,9 +5001,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
     // RELATIONSHIP COMMANDS
     if (isExactCommand(lowerText, "ревновать")) {
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) и напиши: ревновать");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) или напиши: ревновать @username");
         return;
       }
 
@@ -5562,9 +5073,9 @@ ${mood}`;
     }
 
     if (isExactCommand(lowerText, "помириться")) {
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) и напиши: помириться");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение супруга(и) или напиши: помириться @username");
         return;
       }
 
@@ -5664,14 +5175,14 @@ ${mood}`;
     // FAMILY COMMANDS
     if (lowerText.startsWith("наказать ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наказать ребенка 1");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: наказать ребенка 1 @username");
         return;
       }
 
-      const match = lowerText.match(/^наказать ребенка\s+(\d+)$/);
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^наказать ребенка\s+(\d+)$/);
       const days = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
@@ -5708,10 +5219,10 @@ ${mood}`;
 
     if (isExactCommand(lowerText, "снять наказание")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: снять наказание");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: снять наказание @username");
         return;
       }
 
@@ -5779,10 +5290,10 @@ ${mood}`;
 
     if (isExactCommand(lowerText, "похвалить ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: похвалить ребенка");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: похвалить ребенка @username");
         return;
       }
 
@@ -5809,14 +5320,14 @@ ${mood}`;
 
     if (lowerText.startsWith("наградить ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: наградить ребенка 20");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: наградить ребенка 20 @username");
         return;
       }
 
-      const match = lowerText.match(/^наградить ребенка\s+(\d+)$/);
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^наградить ребенка\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
@@ -5861,10 +5372,10 @@ ${mood}`;
 
     if (lowerText.startsWith("добавить доброе дело")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: добавить доброе дело помог по дому");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: добавить доброе дело помог по дому @username");
         return;
       }
 
@@ -5874,9 +5385,10 @@ ${mood}`;
         return;
       }
 
-      const deedText = text.slice("добавить доброе дело".length).trim();
+      const cleanedNoMention = cleanupTextWithoutMention(originalText);
+      const deedText = cleanedNoMention.slice("добавить доброе дело".length).trim();
       if (!deedText || deedText.length < 2) {
-        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nдобавить доброе дело помог по дому");
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nдобавить доброе дело помог по дому @username");
         return;
       }
 
@@ -5939,10 +5451,10 @@ ${lines.join("\n")}`,
 
     if (lowerText.startsWith("удалить доброе дело")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: удалить доброе дело 1");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: удалить доброе дело 1 @username");
         return;
       }
 
@@ -5952,7 +5464,7 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const match = lowerText.match(/^удалить доброе дело\s+(\d+)$/);
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^удалить доброе дело\s+(\d+)$/);
       const index = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(index) || index <= 0) {
@@ -5981,10 +5493,10 @@ ${lines.join("\n")}`,
 
     if (isExactCommand(lowerText, "очистить добрые дела")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: очистить добрые дела");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: очистить добрые дела @username");
         return;
       }
 
@@ -6303,7 +5815,7 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const dreamText = text.slice("загадать мечту".length).trim();
+      const dreamText = originalText.slice("загадать мечту".length).trim();
       if (!dreamText || dreamText.length < 2) {
         await safeSendMessage(msg.chat.id, "❌ Напиши так:\nзагадать мечту айфон");
         return;
@@ -6437,14 +5949,14 @@ ${lines.join("\n")}`,
     }
 
     if (lowerText.startsWith("на мечту")) {
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: на мечту 5");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: на мечту 5 @username");
         return;
       }
 
-      const match = lowerText.match(/^на мечту\s+(\d+)$/);
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^на мечту\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
@@ -6474,7 +5986,7 @@ ${lines.join("\n")}`,
         }
 
         if (error.message === "NOT_MY_CHILD") {
-          await safeSendMessage(msg.chat.id, "❌ Это не ваш ребёнок. Ответь на сообщение именно своего ребёнка.");
+          await safeSendMessage(msg.chat.id, "❌ Это не ваш ребёнок.");
           return;
         }
 
@@ -6544,14 +6056,14 @@ ${lines.join("\n")}`,
         return;
       }
 
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка и напиши: дать ребенку 5");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: дать ребенку 5 @username");
         return;
       }
 
-      const match = lowerText.match(/^дать ребенку\s+(\d+)$/);
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^дать ребенку\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
@@ -6606,14 +6118,14 @@ ${lines.join("\n")}`,
       }
 
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: карманные деньги 50");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка или напиши: карманные деньги 50 @username");
         return;
       }
 
-      const match = lowerText.match(/^карманные деньги\s+(\d+)$/);
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^карманные деньги\s+(\d+)$/);
       const amount = match ? Number(match[1]) : NaN;
 
       if (!Number.isInteger(amount) || amount <= 0) {
@@ -6662,10 +6174,10 @@ ${lines.join("\n")}`,
 
     if (isExactCommand(lowerText, "брак") || isExactCommand(lowerText, "зарегистрироваться в брак")) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: брак");
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: брак @username");
         return;
       }
 
@@ -6768,10 +6280,10 @@ ${getUserLink(target)}, выбери ниже:
 
     if (isExactCommand(lowerText, "усыновить")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: усыновить");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или напиши: усыновить @username");
         return;
       }
 
@@ -6835,10 +6347,10 @@ ${getUserLink(child)}, выбери ниже:
 
     if (isExactCommand(lowerText, "отказаться от ребенка")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение ребёнка и напиши: отказаться от ребенка");
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение ребёнка или напиши: отказаться от ребенка @username");
         return;
       }
 
@@ -6891,10 +6403,10 @@ ${getUserLink(child)}, выбери ниже:
 
     if (isExactCommand(lowerText, "любимый ребенок")) {
       const parent = msg.from;
-      const child = await resolveTargetUserFromReply(msg);
+      const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка и напиши: любимый ребенок");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка или напиши: любимый ребенок @username");
         return;
       }
 
@@ -7638,7 +7150,7 @@ ${coinsLine}
     }
 
     // ROBBERY
-    if (isExactCommand(lowerText, "ограбить")) {
+    if (lowerText.startsWith("ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
         await safeSendMessage(msg.chat.id, jailText);
@@ -7657,9 +7169,9 @@ ${coinsLine}
         return;
       }
 
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: ограбить");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или напиши: ограбить @username");
         return;
       }
 
@@ -9100,10 +8612,10 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
     }
 
     if (isExactCommand(lowerText, "купить монеты другу")) {
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока и напиши: купить монеты другу");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или напиши: купить монеты другу @username");
         return;
       }
 
@@ -9188,10 +8700,10 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
       isExactCommand(lowerText, "он врёт?") ||
       isExactCommand(lowerText, "врёт?")
     ) {
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: он врет?");
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: он врет? @username");
         return;
       }
 
@@ -9213,10 +8725,10 @@ ${escapeHtml(result.text)}`,
 
     if (isExactCommand(lowerText, "респект")) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: респект");
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: респект @username");
         return;
       }
 
@@ -9309,7 +8821,7 @@ ${escapeHtml(prediction)}`,
       if (msg.reply_to_message && msg.reply_to_message.from) {
         target = msg.reply_to_message.from;
       } else {
-        const parts = text.split(" ");
+        const parts = originalText.split(" ");
         if (parts.length > 1) {
           target = { first_name: parts.slice(1).join(" ") };
         } else {
@@ -9331,7 +8843,7 @@ ${escapeHtml(prediction)}`,
     }
 
     if (lowerText.startsWith("кто ")) {
-      const subject = text.slice(4).trim();
+      const subject = originalText.slice(4).trim();
 
       if (!subject) {
         await safeSendMessage(msg.chat.id, "Напиши, например: кто лучший");
@@ -9356,12 +8868,12 @@ ${escapeHtml(prediction)}`,
       return;
     }
 
-    if (isExactCommand(lowerText, "подарок")) {
+    if (lowerText.startsWith("подарок")) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека и напиши: подарок");
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: подарок @username");
         return;
       }
 
@@ -9395,10 +8907,10 @@ ${escapeHtml(prediction)}`,
     const customCommand = await getCustomCommandByTrigger(lowerText);
     if (customCommand) {
       const sender = msg.from;
-      const target = await resolveTargetUserFromReply(msg);
+      const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
         return;
       }
 
@@ -9426,43 +8938,310 @@ ${escapeHtml(prediction)}`,
       return;
     }
 
-    // RP COMMANDS
-    const command = rpCommands[lowerText];
-    if (!command) return;
-
-    const sender = msg.from;
-    const target = await resolveTargetUserFromReply(msg);
-
-    if (!target) {
-      await safeSendMessage(msg.chat.id, "Ответь на сообщение человека этой командой.");
-      return;
+    // RP COMMANDS + @username SUPPORT
+    let matchedRpKey = null;
+    for (const key of Object.keys(rpCommands)) {
+      if (lowerText === key || lowerText.startsWith(`${key} `)) {
+        matchedRpKey = key;
+        break;
+      }
     }
 
-    await initUser(target);
+    if (matchedRpKey) {
+      const command = rpCommands[matchedRpKey];
+      const sender = msg.from;
+      const target = await resolveTargetUserUniversal(msg);
 
-    if (sender.id === target.id) {
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
+        return;
+      }
+
+      await initUser(target);
+
+      if (sender.id === target.id) {
+        await safeSendMessage(
+          msg.chat.id,
+          `😅 ${getUserLink(sender)} ${command.text} самого себя`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await incrementStat(target.id, command.stat);
+
+      let out = `${command.emoji} ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`;
+      out = await appendLevelUpIfNeeded(out, sender.id, command.xp);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+  } catch (error) {
+    console.error("Ошибка обработки сообщения:", error);
+  }
+});
+
+// =========================
+// CUSTOM COMMAND DB HELPERS
+// =========================
+async function getUserCustomCommandCount(userId) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`,
+    [userId]
+  );
+  return result.rows[0]?.count || 0;
+}
+
+async function getUserCustomCommands(userId) {
+  const result = await pool.query(
+    `
+    SELECT trigger, action_text
+    FROM custom_commands
+    WHERE user_id = $1
+    ORDER BY created_at ASC
+    `,
+    [userId]
+  );
+  return result.rows;
+}
+
+async function getCustomCommandByTrigger(trigger) {
+  const result = await pool.query(
+    `
+    SELECT id, user_id, trigger, action_text
+    FROM custom_commands
+    WHERE LOWER(trigger) = LOWER($1)
+    LIMIT 1
+    `,
+    [trigger]
+  );
+  return result.rows[0] || null;
+}
+
+async function createCustomCommand(userId, trigger, actionText) {
+  await pool.query(
+    `INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`,
+    [userId, trigger, actionText]
+  );
+}
+
+async function deleteCustomCommand(userId, trigger) {
+  const result = await pool.query(
+    `
+    DELETE FROM custom_commands
+    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
+    RETURNING trigger
+    `,
+    [userId, trigger]
+  );
+  return result.rows[0] || null;
+}
+
+bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    await saveSeenUser(msg.chat.id, msg.from);
+
+    const count = await getUserCustomCommandCount(msg.from.id);
+    if (count >= MAX_CUSTOM_COMMANDS) {
       await safeSendMessage(
         msg.chat.id,
-        `😅 ${getUserLink(sender)} ${command.text} самого себя`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
+        `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`
       );
       return;
     }
 
-    await incrementStat(target.id, command.stat);
+    const stats = await getUserStats(msg.from.id);
+    if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
+      await safeSendMessage(
+        msg.chat.id,
+        `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`
+      );
+      return;
+    }
 
-    let out = `${command.emoji} ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`;
-    out = await appendLevelUpIfNeeded(out, sender.id, command.xp);
+    const key = getPendingKey(msg.chat.id, msg.from.id);
+    pendingCommandCreation[key] = true;
 
-    await safeSendMessage(msg.chat.id, out, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
+    await safeSendMessage(
+      msg.chat.id,
+      `🛠 Создание команды
+
+Цена: ${CUSTOM_COMMAND_COST} монет
+Максимум: ${MAX_CUSTOM_COMMANDS} команд
+
+Напиши в формате:
+команда действие
+
+Пример:
+облил облил водой`
+    );
   } catch (error) {
-    console.error("Ошибка обработки сообщения:", error);
+    console.error("Ошибка /createcommand:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка создания команды.");
+  }
+});
+
+bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    const commands = await getUserCustomCommands(msg.from.id);
+
+    if (!commands.length) {
+      await safeSendMessage(msg.chat.id, "📜 У тебя пока нет своих команд.");
+      return;
+    }
+
+    const lines = commands.map((cmd, index) =>
+      `${index + 1}. ${escapeHtml(cmd.trigger)} — бот пишет: ${escapeHtml(cmd.action_text)}`
+    );
+
+    await safeSendMessage(
+      msg.chat.id,
+      `📜 Твои команды:\n\n${lines.join("\n")}`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("Ошибка /mycommands:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка при получении команд.");
+  }
+});
+
+bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
+  try {
+    await initUser(msg.from);
+
+    const trigger = normalizeText(match?.[2] || "");
+    if (!trigger) {
+      await safeSendMessage(msg.chat.id, "❌ Напиши так:\n/deletecommand облил");
+      return;
+    }
+
+    const deleted = await deleteCustomCommand(msg.from.id, trigger);
+    if (!deleted) {
+      await safeSendMessage(
+        msg.chat.id,
+        `❌ У тебя нет команды "${escapeHtml(trigger)}".`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    await safeSendMessage(
+      msg.chat.id,
+      `🗑 Команда "${escapeHtml(deleted.trigger)}" удалена.`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("Ошибка /deletecommand:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка удаления команды.");
+  }
+});
+
+bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
+  try {
+    if (Number(msg.from.id) !== OWNER_ID) return;
+
+    const target = await resolveTargetUserUniversal(msg);
+    const amount = Number(match?.[2] || 0);
+
+    if (!target) {
+      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /givemoney 1000");
+      return;
+    }
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /givemoney 1000");
+      return;
+    }
+
+    await initUser(target);
+    const newBalance = await addCoinsToUser(target.id, amount);
+
+    await safeSendMessage(
+      msg.chat.id,
+      `💸 ${getUserLink(target)} получил(а) ${amount} монет.
+
+Новый баланс: ${newBalance}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка /givemoney:", error);
+    await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
+  }
+});
+
+bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/, async (msg, match) => {
+  try {
+    if (Number(msg.from.id) !== OWNER_ID) return;
+
+    const cooldownName = String(match?.[2] || "").trim();
+    const rawValue = String(match?.[3] || "").trim();
+    const rawUnit = String(match?.[4] || "").trim();
+
+    const deltaMs = parseTimeEditAmount(rawValue, rawUnit);
+    if (deltaMs === null) {
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
+      );
+      return;
+    }
+
+    const deltaMinutes = Math.abs(Math.trunc(deltaMs / 60000));
+    if (deltaMinutes > TIME_EDIT_MAX_MINUTES) {
+      await safeSendMessage(msg.chat.id, `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`);
+      return;
+    }
+
+    let targetUser = null;
+    if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
+    if (!targetUser) targetUser = msg.from;
+
+    await initUser(targetUser);
+
+    const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
+    const signText =
+      Math.abs(deltaMs) % (60 * 60 * 1000) === 0
+        ? `${Number(rawValue)} ч`
+        : `${Number(rawValue)} мин`;
+
+    await safeSendMessage(
+      msg.chat.id,
+      `🕒 Время кулдауна изменено
+
+👤 Игрок: ${getUserLink(targetUser)}
+⏱ Кулдаун: ${escapeHtml(result.title)}
+🔧 Изменение: ${signText}
+📅 Новое время отсчёта: ${formatDateTime(result.newDate)}
+⌛ Осталось до готовности: ${formatRemainingTime(result.remainingMs)}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
+      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, кнб");
+      return;
+    }
+
+    if (error.message === "COOLDOWN_NOT_USED_YET") {
+      await safeSendMessage(msg.chat.id, "❌ У игрока этот кулдаун ещё не запускался.");
+      return;
+    }
+
+    console.error("Ошибка /timeedit:", error);
+    await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
   }
 });
 
