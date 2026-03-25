@@ -44,6 +44,7 @@ const ATM_HACK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 const VAN_HEIST_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const JEWELRY_HEIST_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
+const BOWLING_COOLDOWN_MS = 60 * 60 * 1000;
 const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 
 const BOMB_TIMER_MS = 5000;
@@ -438,6 +439,56 @@ function getBasketballResult() {
   };
 }
 
+function getBowlingResultByDiceValue(value) {
+  const dice = Number(value || 0);
+
+  if (dice === 6) {
+    return {
+      type: "jackpot",
+      text: "🎳 Страйк! Ты снёс все кегли!",
+      coins: Math.floor(Math.random() * 6) + 10
+    };
+  }
+
+  if (dice === 5) {
+    return {
+      type: "great",
+      text: "🎳 Почти страйк! Очень мощный бросок.",
+      coins: Math.floor(Math.random() * 5) + 8
+    };
+  }
+
+  if (dice === 4) {
+    return {
+      type: "good",
+      text: "🎳 Хороший бросок!",
+      coins: Math.floor(Math.random() * 4) + 5
+    };
+  }
+
+  if (dice === 3) {
+    return {
+      type: "normal",
+      text: "🎳 Неплохо, но можно лучше.",
+      coins: Math.floor(Math.random() * 3) + 2
+    };
+  }
+
+  if (dice === 2) {
+    return {
+      type: "bad",
+      text: "😬 Слабый бросок.",
+      coins: -(Math.floor(Math.random() * 4) + 2)
+    };
+  }
+
+  return {
+    type: "fail",
+    text: "💀 Полный промах!",
+    coins: -(Math.floor(Math.random() * 6) + 5)
+  };
+}
+
 function getKnbBotChoiceRareWin(playerChoice) {
   const beats = {
     камень: "ножницы",
@@ -528,6 +579,9 @@ function getCooldownColumnAndMsByName(rawName) {
   }
   if (["баскетбол", "basketball"].includes(name)) {
     return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
+  }
+  if (["боулинг", "bowling"].includes(name)) {
+    return { column: "last_bowling_at", cooldownMs: BOWLING_COOLDOWN_MS, title: "боулинг" };
   }
   if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
     return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
@@ -810,6 +864,7 @@ async function initDb() {
       last_van_heist_at TIMESTAMPTZ,
       last_jewelry_at TIMESTAMPTZ,
       last_basketball_at TIMESTAMPTZ,
+      last_bowling_at TIMESTAMPTZ,
       last_knb_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
@@ -1013,6 +1068,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_van_heist_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_jewelry_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bowling_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS last_pray_at TIMESTAMPTZ`);
 
@@ -3223,6 +3279,7 @@ async function getCooldownText(userId) {
 🚚 Инкассация: ${getRemaining(stats.last_van_heist_at, VAN_HEIST_COOLDOWN_MS)}
 💎 Ювелирка: ${getRemaining(stats.last_jewelry_at, JEWELRY_HEIST_COOLDOWN_MS)}
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
+🎳 Боулинг: ${getRemaining(stats.last_bowling_at, BOWLING_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
 }
 
@@ -4178,6 +4235,28 @@ async function runBasketball(userId) {
   };
 }
 
+async function runBowling(userId) {
+  const result = await pool.query(
+    `SELECT balance, last_bowling_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastAt = row.last_bowling_at ? new Date(row.last_bowling_at) : null;
+
+  if (lastAt) {
+    const nextTime = new Date(lastAt.getTime() + BOWLING_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  return { ok: true };
+}
+
 async function runKnb(userId, playerChoice) {
   const result = await pool.query(`SELECT balance, last_knb_at FROM users WHERE user_id = $1`, [userId]);
   if (!result.rows[0]) return { ok: false, reason: "not_found" };
@@ -4420,6 +4499,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • охота
 • снайпер
 • баскетбол
+• боулинг
 • кнб камень
 • кнб ножницы
 • кнб бумага
@@ -7362,6 +7442,71 @@ ${coinsLine}
       return;
     }
 
+    if (isExactCommand(lowerText, "боулинг")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const precheck = await runBowling(msg.from.id);
+
+      if (!precheck.ok) {
+        if (precheck.reason === "not_found") {
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, боулинг снова будет доступен через ${escapeHtml(formatRemainingTime(precheck.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      await updateCooldownColumnNow(msg.from.id, "last_bowling_at");
+
+      const diceMessage = await bot.sendDice(msg.chat.id, {
+        emoji: "🎳",
+        reply_to_message_id: msg.message_id
+      });
+
+      const diceValue = Number(diceMessage?.dice?.value || 0);
+      const game = getBowlingResultByDiceValue(diceValue);
+
+      const stats = await getUserStats(msg.from.id);
+      let newBalance = Number(stats?.balance || 0) + Number(game.coins || 0);
+      if (newBalance < 0) newBalance = 0;
+
+      const updated = await pool.query(
+        `UPDATE users SET balance = $2 WHERE user_id = $1 RETURNING balance`,
+        [msg.from.id, newBalance]
+      );
+
+      let coinsLine = "😐 0 монет";
+      if (game.coins > 0) coinsLine = `💰 +${game.coins} монет`;
+      if (game.coins < 0) coinsLine = `💸 ${game.coins} монет`;
+
+      let out = `🎳 ${getUserLink(msg.from)} сыграл(а) в боулинг
+
+${escapeHtml(game.text)}
+${coinsLine}
+
+Баланс: ${Number(updated.rows[0]?.balance || 0)} монет`;
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
     if (
       lowerText === "кнб камень" ||
       lowerText === "кнб ножницы" ||
@@ -9498,7 +9643,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, кнб");
+      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб");
       return;
     }
 
