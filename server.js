@@ -9592,6 +9592,43 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
   }
 });
 
+bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
+  try {
+    if (Number(msg.from.id) !== OWNER_ID) return;
+
+    const target = await resolveTargetUserUniversal(msg);
+    const amount = Number(match?.[2] || 0);
+
+    if (!target) {
+      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /takemoney 100");
+      return;
+    }
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /takemoney 100");
+      return;
+    }
+
+    await initUser(target);
+
+    const result = await deductCoinsSafe(target.id, amount);
+
+    await safeSendMessage(
+      msg.chat.id,
+      `💸 У игрока ${getUserLink(target)} забрано ${result.deducted} монет.
+
+Новый баланс: ${result.balance}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка /takemoney:", error);
+    await safeSendMessage(msg.chat.id, "❌ Ошибка снятия монет.");
+  }
+});
+
 bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/, async (msg, match) => {
   try {
     if (Number(msg.from.id) !== OWNER_ID) return;
