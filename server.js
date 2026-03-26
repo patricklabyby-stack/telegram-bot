@@ -4611,9 +4611,6 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • прогноз
 • он врет?
 
-<b>ℹ️ Подсказка</b>
-Теперь команды работают не только <b>ответом</b>, но и через <b>@username</b>.
-Бот будет показывать <b>реальное имя аккаунта</b>, а не просто @username.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
