@@ -4477,8 +4477,8 @@ const rpCommands = {
 // =========================
 bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   await safeSendMessage(
-    msg.chat.id,
-    `🔥 <b>Мини Модератор — бот для Telegram групп</b>
+  msg.chat.id,
+  `🔥 <b>Мини Модератор — бот для Telegram групп</b>
 
 <b>📚 Разделы бота:</b>
 
@@ -4609,13 +4609,12 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • кто ...
 • оценка
 • прогноз
-• он врет?
-
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
+• он врет?`,
+  {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  }
+);
 });
 
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
