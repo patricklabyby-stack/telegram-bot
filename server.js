@@ -3188,13 +3188,24 @@ async function updateCooldownColumnNow(userId, column) {
   await pool.query(`UPDATE users SET ${column} = NOW() WHERE user_id = $1`, [userId]);
 }
 
+function isOwner(userId) {
+  return Number(userId) === Number(OWNER_ID);
+}
+
 async function getGenericCooldown(userId, column, cooldownMs) {
-  const result = await pool.query(`SELECT ${column} AS value FROM users WHERE user_id = $1`, [userId]);
+  if (isOwner(userId)) return 0;
+
+  const result = await pool.query(
+    `SELECT ${column} AS value FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
   const row = result.rows[0];
   if (!row || !row.value) return 0;
 
   const nextTime = new Date(new Date(row.value).getTime() + cooldownMs);
   const diff = nextTime.getTime() - Date.now();
+
   return diff > 0 ? diff : 0;
 }
 
@@ -3255,6 +3266,22 @@ async function adjustUserCooldown(userId, cooldownName, deltaMs) {
 async function getCooldownText(userId) {
   const stats = await getUserStats(userId);
   if (!stats) return "Профиль не найден.";
+
+  if (isOwner(userId)) {
+    return `⏱ Кулдауны
+
+💰 Деньги: ✅ Уже доступно
+🏹 Охота: ✅ Уже доступно
+🎯 Снайпер: ✅ Уже доступно
+🕵️ Ограбление: ✅ Уже доступно
+🏦 Ограбление банка: ✅ Уже доступно
+🏧 Взлом банкомата: ✅ Уже доступно
+🚚 Инкассация: ✅ Уже доступно
+💎 Ювелирка: ✅ Уже доступно
+🏀 Баскетбол: ✅ Уже доступно
+🎳 Боулинг: ✅ Уже доступно
+✂️ КНБ: ✅ Уже доступно`;
+  }
 
   const now = new Date();
 
