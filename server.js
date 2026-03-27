@@ -263,6 +263,20 @@ function formatDateTime(dateValue) {
   return `${day}.${month}.${year} ${hours}:${mins}`;
 }
 
+function formatDurationLong(ms) {
+  const totalSeconds = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  const parts = [];
+  if (days > 0) parts.push(`${days} д`);
+  if (hours > 0) parts.push(`${hours} ч`);
+  if (minutes > 0) parts.push(`${minutes} мин`);
+  if (!parts.length) parts.push("0 мин");
+  return parts.join(" ");
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -1058,6 +1072,33 @@ async function initDb() {
     )
   `);
 
+  // =========================
+  // REPUTATION
+  // =========================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_reputation (
+      user_id BIGINT PRIMARY KEY,
+      jail_entries INTEGER DEFAULT 0,
+      jail_time_ms_total BIGINT DEFAULT 0,
+      successful_escapes INTEGER DEFAULT 0,
+      failed_escapes INTEGER DEFAULT 0,
+      lawyer_uses INTEGER DEFAULT 0,
+      bribe_uses INTEGER DEFAULT 0,
+      prayers_count INTEGER DEFAULT 0,
+      successful_robberies INTEGER DEFAULT 0,
+      failed_robberies INTEGER DEFAULT 0,
+      successful_bank_heists INTEGER DEFAULT 0,
+      failed_bank_heists INTEGER DEFAULT 0,
+      successful_van_heists INTEGER DEFAULT 0,
+      failed_van_heists INTEGER DEFAULT 0,
+      successful_jewelry_heists INTEGER DEFAULT 0,
+      failed_jewelry_heists INTEGER DEFAULT 0,
+      successful_atm_hacks INTEGER DEFAULT 0,
+      failed_atm_hacks INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS xp INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
@@ -1099,6 +1140,7 @@ async function initUser(user) {
   await ensureWantedRow(user.id);
   await ensureLayLowRow(user.id);
   await ensureShieldRow(user.id);
+  await ensureReputationRow(user.id);
 }
 
 async function saveSeenUser(chatId, user) {
@@ -1357,6 +1399,112 @@ async function incrementStat(targetUserId, statField) {
     `,
     [targetUserId]
   );
+}
+
+// =========================
+// REPUTATION
+// =========================
+async function ensureReputationRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO user_reputation (user_id, updated_at)
+    VALUES ($1, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getUserReputation(userId) {
+  await ensureReputationRow(userId);
+  const result = await pool.query(
+    `SELECT * FROM user_reputation WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function incrementReputationField(userId, field, amount = 1) {
+  const allowed = [
+    "jail_entries",
+    "successful_escapes",
+    "failed_escapes",
+    "lawyer_uses",
+    "bribe_uses",
+    "prayers_count",
+    "successful_robberies",
+    "failed_robberies",
+    "successful_bank_heists",
+    "failed_bank_heists",
+    "successful_van_heists",
+    "failed_van_heists",
+    "successful_jewelry_heists",
+    "failed_jewelry_heists",
+    "successful_atm_hacks",
+    "failed_atm_hacks"
+  ];
+
+  if (!allowed.includes(field)) return;
+  await ensureReputationRow(userId);
+
+  await pool.query(
+    `
+    UPDATE user_reputation
+    SET ${field} = ${field} + $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, amount]
+  );
+}
+
+async function addJailTimeToReputation(userId, ms) {
+  await ensureReputationRow(userId);
+  await pool.query(
+    `
+    UPDATE user_reputation
+    SET jail_time_ms_total = COALESCE(jail_time_ms_total, 0) + $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, Number(ms || 0)]
+  );
+}
+
+async function getReputationText(user) {
+  await initUser(user);
+  const rep = await getUserReputation(user.id);
+  const wanted = await getWantedRow(user.id);
+  const stats = await getUserStats(user.id);
+
+  return `😈 Репутация игрока
+
+Игрок: ${getUserLink(user)}
+💰 Баланс: ${Number(stats?.balance || 0)}
+🚨 Розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
+
+🚔 Тюрьма:
+• Посадок: ${Number(rep?.jail_entries || 0)}
+• Всего отсидел: ${formatDurationLong(rep?.jail_time_ms_total || 0)}
+• Удачных побегов: ${Number(rep?.successful_escapes || 0)}
+• Неудачных побегов: ${Number(rep?.failed_escapes || 0)}
+
+🕵️ Преступления:
+• Успешных ограблений: ${Number(rep?.successful_robberies || 0)}
+• Провальных ограблений: ${Number(rep?.failed_robberies || 0)}
+• Успешных взломов банкомата: ${Number(rep?.successful_atm_hacks || 0)}
+• Провальных взломов банкомата: ${Number(rep?.failed_atm_hacks || 0)}
+• Успешных ограблений ювелирки: ${Number(rep?.successful_jewelry_heists || 0)}
+• Провальных ограблений ювелирки: ${Number(rep?.failed_jewelry_heists || 0)}
+• Успешных ограблений банка: ${Number(rep?.successful_bank_heists || 0)}
+• Провальных ограблений банка: ${Number(rep?.failed_bank_heists || 0)}
+• Успешных нападений на инкассацию: ${Number(rep?.successful_van_heists || 0)}
+• Провальных нападений на инкассацию: ${Number(rep?.failed_van_heists || 0)}
+
+⚖️ Действия в тюрьме:
+• Адвокат: ${Number(rep?.lawyer_uses || 0)}
+• Подкуп охраны: ${Number(rep?.bribe_uses || 0)}
+• Молитвы: ${Number(rep?.prayers_count || 0)}`;
 }
 
 // =========================
@@ -2999,6 +3147,9 @@ async function getJailStatus(userId) {
 }
 
 async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
+  await incrementReputationField(userId, "jail_entries", 1);
+  await addJailTimeToReputation(userId, ms);
+
   const result = await pool.query(
     `
     INSERT INTO police_jail (user_id, until_at, created_at, updated_at)
@@ -3016,6 +3167,8 @@ async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
 }
 
 async function extendJailTime(userId, ms) {
+  await addJailTimeToReputation(userId, ms);
+
   const result = await pool.query(
     `
     UPDATE police_jail
@@ -4477,8 +4630,8 @@ const rpCommands = {
 // =========================
 bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   await safeSendMessage(
-  msg.chat.id,
-  `🔥 <b>Мини Модератор — бот для Telegram групп</b>
+    msg.chat.id,
+    `🔥 <b>Мини Модератор — бот для Telegram групп</b>
 
 <b>📚 Разделы бота:</b>
 
@@ -4562,6 +4715,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 
 <b>🚔 Тюрьма</b>
 • тюрьма
+• репутация
 • сбежать из тюрьмы
 • адвокат
 • подкупить охрану
@@ -4610,11 +4764,11 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • оценка
 • прогноз
 • он врет?`,
-  {
-    parse_mode: "HTML",
-    disable_web_page_preview: true
-  }
-);
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
 });
 
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
@@ -5092,6 +5246,24 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
+      return;
+    }
+
+    // =========================
+    // REPUTATION
+    // =========================
+    if (isExactCommand(lowerText, "репутация")) {
+      let targetUser = msg.from;
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const text = await getReputationText(targetUser);
+      await safeSendMessage(msg.chat.id, text, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
       return;
     }
 
@@ -6967,6 +7139,7 @@ ${getUserLink(child)}, выбери ниже:
 ⏳ Осталось: ${formatRemainingTime(remainingMs)}
 
 Доступно:
+• репутация
 • сбежать из тюрьмы
 • адвокат
 • подкупить охрану
@@ -6998,6 +7171,7 @@ ${getUserLink(child)}, выбери ниже:
       }
 
       await setJailActionUsed(msg.from.id, "last_pray_at");
+      await incrementReputationField(msg.from.id, "prayers_count", 1);
 
       const roll = Math.random();
 
@@ -7094,6 +7268,7 @@ ${getUserLink(child)}, выбери ниже:
       if (outcome.type === "success") {
         await removeUserFromJail(msg.from.id);
         await changeWantedLevel(msg.from.id, 1);
+        await incrementReputationField(msg.from.id, "successful_escapes", 1);
 
         let out = `🏃 ${getUserLink(msg.from)} совершил(а) побег из тюрьмы!
 
@@ -7108,6 +7283,8 @@ ${getUserLink(child)}, выбери ниже:
       }
 
       if (outcome.type === "fail") {
+        await incrementReputationField(msg.from.id, "failed_escapes", 1);
+
         await safeSendMessage(
           msg.chat.id,
           `🚫 Побег не удался.
@@ -7121,6 +7298,8 @@ ${getUserLink(child)}, выбери ниже:
         );
         return;
       }
+
+      await incrementReputationField(msg.from.id, "failed_escapes", 1);
 
       const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
       await changeWantedLevel(msg.from.id, 1);
@@ -7161,6 +7340,7 @@ ${getUserLink(child)}, выбери ниже:
 
       await deductCoinsSafe(msg.from.id, JAIL_LAWYER_COST);
       await setJailActionUsed(msg.from.id, "last_lawyer_at");
+      await incrementReputationField(msg.from.id, "lawyer_uses", 1);
 
       const outcome = getRandomLawyerOutcome();
 
@@ -7236,6 +7416,7 @@ ${getUserLink(child)}, выбери ниже:
 
       await deductCoinsSafe(msg.from.id, JAIL_BRIBE_COST);
       await setJailActionUsed(msg.from.id, "last_bribe_at");
+      await incrementReputationField(msg.from.id, "bribe_uses", 1);
 
       const outcome = getRandomBribeOutcome(wanted?.level || 0, bonuses.fakePassport);
 
@@ -7637,6 +7818,7 @@ ${coinsLine}
             disable_web_page_preview: true
           }
         );
+        await incrementReputationField(msg.from.id, "failed_robberies", 1);
         return;
       }
 
@@ -7654,6 +7836,8 @@ ${coinsLine}
       const robbery = getRandomRobberyResult(Number(targetStats.balance || 0), myWanted?.level || 0, bonuses);
 
       if (robbery.type === "fail") {
+        await incrementReputationField(msg.from.id, "failed_robberies", 1);
+
         let resultText = `🚨 ${getUserLink(msg.from)} попытался ограбить ${getUserLink(target)}, но его спалили!`;
 
         const failFine = Math.floor(Math.random() * 6) + 3;
@@ -7710,6 +7894,7 @@ ${coinsLine}
         return;
       }
 
+      await incrementReputationField(msg.from.id, "successful_robberies", 1);
       await changeWantedLevel(msg.from.id, 1);
 
       let resultText = robbery.type === "small"
@@ -7788,6 +7973,7 @@ ${coinsLine}
       const outcome = getAtmHackOutcome(wanted?.level || 0, bonuses);
 
       if (outcome.type === "fail") {
+        await incrementReputationField(msg.from.id, "failed_atm_hacks", 1);
         await changeWantedLevel(msg.from.id, 1);
 
         let out = `🏧 Попытка взлома банкомата провалилась.
@@ -7815,6 +8001,7 @@ ${coinsLine}
         return;
       }
 
+      await incrementReputationField(msg.from.id, "successful_atm_hacks", 1);
       await changeWantedLevel(msg.from.id, 1);
       const newBalance = await addCoinsToUser(msg.from.id, outcome.coins);
 
@@ -7867,6 +8054,7 @@ ${coinsLine}
       const outcome = getJewelryHeistOutcome(wanted?.level || 0, bonuses);
 
       if (outcome.type === "fail" || outcome.type === "disaster") {
+        await incrementReputationField(msg.from.id, "failed_jewelry_heists", 1);
         await changeWantedLevel(msg.from.id, 2);
 
         let out = `💎 ${getUserLink(msg.from)} попытался(ась) ограбить ювелирку, но всё пошло не по плану.
@@ -7901,6 +8089,7 @@ ${coinsLine}
         return;
       }
 
+      await incrementReputationField(msg.from.id, "successful_jewelry_heists", 1);
       await changeWantedLevel(msg.from.id, 2);
       const newBalance = await addCoinsToUser(msg.from.id, outcome.coins);
 
@@ -8243,6 +8432,7 @@ ${heist.policeAlert ? "🚨 Но скрытая тревога уже отпра
 
       for (const user of members) {
         await updateCooldownColumnNow(user.id, "last_bank_at");
+        await incrementReputationField(user.id, "failed_bank_heists", 1);
       }
 
       const shuffled = [...members].sort(() => Math.random() - 0.5);
@@ -8354,6 +8544,7 @@ ${fined.length ? `\n\n💸 Остальные ушли, но получили к
         await sendUserToJail(user.id, POLICE_JAIL_MS);
         await changeWantedLevel(user.id, 1);
         await updateCooldownColumnNow(user.id, "last_bank_at");
+        await incrementReputationField(user.id, "failed_bank_heists", 1);
       }
 
       await safeSendMessage(
@@ -8410,6 +8601,7 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}`,
           }
           const newBalance = await addCoinsToUser(user.id, amount);
           await changeWantedLevel(user.id, 2);
+          await incrementReputationField(user.id, "successful_bank_heists", 1);
           lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
         }
 
@@ -8445,6 +8637,7 @@ ${lines.join("\n")}`,
           }
           const newBalance = await addCoinsToUser(user.id, amount);
           await changeWantedLevel(user.id, 2);
+          await incrementReputationField(user.id, "successful_bank_heists", 1);
           lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
         }
 
@@ -8474,6 +8667,7 @@ ${lines.join("\n")}`,
 
         await sendUserToJail(caught.id, POLICE_JAIL_MS);
         await changeWantedLevel(caught.id, 1);
+        await incrementReputationField(caught.id, "failed_bank_heists", 1);
 
         const savedLoot = Math.max(1, Math.floor(heist.loot * 0.40));
         let shareText = "";
@@ -8491,6 +8685,7 @@ ${lines.join("\n")}`,
             }
             const newBalance = await addCoinsToUser(user.id, amount);
             await changeWantedLevel(user.id, 2);
+            await incrementReputationField(user.id, "successful_bank_heists", 1);
             lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
           }
 
@@ -8520,6 +8715,7 @@ ${shareText ? `Раздел добычи:\n${shareText}` : "Никто боль�
       for (const user of members) {
         await sendUserToJail(user.id, POLICE_JAIL_MS);
         await changeWantedLevel(user.id, 1);
+        await incrementReputationField(user.id, "failed_bank_heists", 1);
       }
 
       await safeSendMessage(
@@ -8847,6 +9043,7 @@ ${van.policeAlert ? "🚔 Полиция уже знает о нападении
         await sendUserToJail(user.id, POLICE_JAIL_MS);
         await changeWantedLevel(user.id, 1);
         await updateCooldownColumnNow(user.id, "last_van_heist_at");
+        await incrementReputationField(user.id, "failed_van_heists", 1);
       }
 
       await safeSendMessage(
@@ -8903,6 +9100,7 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}`,
           }
           const newBalance = await addCoinsToUser(user.id, amount);
           await changeWantedLevel(user.id, 2);
+          await incrementReputationField(user.id, "successful_van_heists", 1);
           lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
         }
 
@@ -8938,6 +9136,7 @@ ${lines.join("\n")}`,
           }
           const newBalance = await addCoinsToUser(user.id, amount);
           await changeWantedLevel(user.id, 2);
+          await incrementReputationField(user.id, "successful_van_heists", 1);
           lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
         }
 
@@ -8966,6 +9165,7 @@ ${lines.join("\n")}`,
 
         await sendUserToJail(caught.id, POLICE_JAIL_MS);
         await changeWantedLevel(caught.id, 1);
+        await incrementReputationField(caught.id, "failed_van_heists", 1);
 
         const savedLoot = Math.max(1, Math.floor(van.loot * 0.40));
         let shareText = "";
@@ -8983,6 +9183,7 @@ ${lines.join("\n")}`,
             }
             const newBalance = await addCoinsToUser(user.id, amount);
             await changeWantedLevel(user.id, 2);
+            await incrementReputationField(user.id, "successful_van_heists", 1);
             lines.push(`• ${getUserLink(user)} — +${amount} монет (баланс: ${newBalance})`);
           }
 
@@ -9012,6 +9213,7 @@ ${shareText ? `Раздел:\n${shareText}` : "Никто больше не уш
       for (const user of members) {
         await sendUserToJail(user.id, POLICE_JAIL_MS);
         await changeWantedLevel(user.id, 1);
+        await incrementReputationField(user.id, "failed_van_heists", 1);
       }
 
       await safeSendMessage(
