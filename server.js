@@ -564,7 +564,13 @@ function parseTimeEditAmount(rawValue, rawUnit = "") {
   return null;
 }
 
-function getCooldownColumnAndMsByName(rawName) {
+// Добавляем проверку на владельца прямо здесь
+function getCooldownColumnAndMsByName(rawName, userId = null) {
+  // Если это владелец — кулдаун не нужен
+  if (Number(userId) === OWNER_ID) {
+    return { column: null, cooldownMs: 0, title: "для владельца нет кулдауна" };
+  }
+
   const name = normalizeText(rawName);
 
   if (["деньги", "монеты", "money", "daily"].includes(name)) {
