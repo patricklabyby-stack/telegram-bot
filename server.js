@@ -3417,11 +3417,14 @@ async function adjustUserCooldown(userId, cooldownName, deltaMs) {
 }
 
 async function getCooldownText(userId) {
-  const stats = await getUserStats(userId);
-  if (!stats) return "Профиль не найден.";
+    const stats = await getUserStats(userId);
+    if (!stats) return "Профиль не найден.";
 
-  if (isOwner(userId)) {
-    return `⏱ Кулдауны
+    const now = new Date();
+
+    // Если владелец, всё доступно
+    if (isOwner(userId)) {
+        return `⏱ Кулдауны
 
 💰 Деньги: ✅ Уже доступно
 🏹 Охота: ✅ Уже доступно
@@ -3434,21 +3437,20 @@ async function getCooldownText(userId) {
 🏀 Баскетбол: ✅ Уже доступно
 🎳 Боулинг: ✅ Уже доступно
 ✂️ КНБ: ✅ Уже доступно`;
-  }
+    }
 
-  const now = new Date();
+    // Функция расчета оставшегося времени для обычного пользователя
+    function getRemaining(lastAt, cooldownMs) {
+        if (!lastAt) return "✅ Уже доступно";
 
-  function getRemaining(lastAt, cooldownMs) {
-    if (!lastAt) return "✅ Уже доступно";
+        const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+        const diff = nextTime.getTime() - now.getTime();
 
-    const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
-    const diff = nextTime.getTime() - now.getTime();
+        return diff <= 0 ? "✅ Уже доступно" : `⏳ ${formatRemainingTime(diff)}`;
+    }
 
-    if (diff <= 0) return "✅ Уже доступно";
-    return `⏳ ${formatRemainingTime(diff)}`;
-  }
-
-  return `⏱ Кулдауны
+    // Собираем текст с учетом всех игр и действий
+    return `⏱ Кулдауны
 
 💰 Деньги: ${getRemaining(stats.last_daily_at, MONEY_COOLDOWN_MS)}
 🏹 Охота: ${getRemaining(stats.last_hunt_at, HUNT_COOLDOWN_MS)}
