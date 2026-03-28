@@ -3338,6 +3338,8 @@ function getRandomBribeOutcome(wantedLevel = 0, hasPassport = false) {
 // GAME COOLDOWNS
 // =========================
 async function updateCooldownColumnNow(userId, column) {
+  // Если владелец, не обновляем кулдаун
+  if (isOwner(userId)) return;
   await pool.query(`UPDATE users SET ${column} = NOW() WHERE user_id = $1`, [userId]);
 }
 
@@ -3346,7 +3348,7 @@ function isOwner(userId) {
 }
 
 async function getGenericCooldown(userId, column, cooldownMs) {
-  if (isOwner(userId)) return 0;
+  if (isOwner(userId)) return 0; // владелец всегда может играть
 
   const result = await pool.query(
     `SELECT ${column} AS value FROM users WHERE user_id = $1`,
@@ -3383,6 +3385,8 @@ async function getJewelryCooldown(userId) {
 }
 
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
+  if (isOwner(userId)) return { title: cooldownName, newDate: new Date(), remainingMs: 0 };
+
   const info = getCooldownColumnAndMsByName(cooldownName);
   if (!info) throw new Error("UNKNOWN_COOLDOWN_TYPE");
 
@@ -3417,14 +3421,13 @@ async function adjustUserCooldown(userId, cooldownName, deltaMs) {
 }
 
 async function getCooldownText(userId) {
-    const stats = await getUserStats(userId);
-    if (!stats) return "Профиль не найден.";
+  const stats = await getUserStats(userId);
+  if (!stats) return "Профиль не найден.";
 
-    const now = new Date();
+  const now = new Date();
 
-    // Если владелец, всё доступно
-    if (isOwner(userId)) {
-        return `⏱ Кулдауны
+  if (isOwner(userId)) {
+    return `⏱ Кулдауны
 
 💰 Деньги: ✅ Уже доступно
 🏹 Охота: ✅ Уже доступно
@@ -3437,20 +3440,18 @@ async function getCooldownText(userId) {
 🏀 Баскетбол: ✅ Уже доступно
 🎳 Боулинг: ✅ Уже доступно
 ✂️ КНБ: ✅ Уже доступно`;
-    }
+  }
 
-    // Функция расчета оставшегося времени для обычного пользователя
-    function getRemaining(lastAt, cooldownMs) {
-        if (!lastAt) return "✅ Уже доступно";
+  function getRemaining(lastAt, cooldownMs) {
+    if (!lastAt) return "✅ Уже доступно";
 
-        const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
-        const diff = nextTime.getTime() - now.getTime();
+    const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+    const diff = nextTime.getTime() - now.getTime();
 
-        return diff <= 0 ? "✅ Уже доступно" : `⏳ ${formatRemainingTime(diff)}`;
-    }
+    return diff <= 0 ? "✅ Уже доступно" : `⏳ ${formatRemainingTime(diff)}`;
+  }
 
-    // Собираем текст с учетом всех игр и действий
-    return `⏱ Кулдауны
+  return `⏱ Кулдауны
 
 💰 Деньги: ${getRemaining(stats.last_daily_at, MONEY_COOLDOWN_MS)}
 🏹 Охота: ${getRemaining(stats.last_hunt_at, HUNT_COOLDOWN_MS)}
