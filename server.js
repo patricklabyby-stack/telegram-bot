@@ -4757,6 +4757,11 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • оценка
 • прогноз
 • он врет?`,
+
+    <b>🛡 Модерация</b>
+• /admins
+• /antispam on
+• /antispam off
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
