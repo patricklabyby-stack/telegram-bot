@@ -10102,3 +10102,52 @@ bot.onText(/\/admins/, async (msg) => {
     bot.sendMessage(chatId, '❌ Не удалось получить список админов');
   }
 });
+
+// Команда для отправки сообщений в группу
+// Использование: /say Текст сообщения
+// Или с фото: /sayphoto ссылка_на_фото Текст сообщения
+
+bot.onText(/\/say (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const text = match[1];
+
+  // Проверка: только админ или владелец
+  const userId = msg.from.id;
+  let isAdmin = false;
+  if (userId === OWNER_ID) {
+    isAdmin = true;
+  } else if (msg.chat.type !== 'private') {
+    try {
+      const member = await bot.getChatMember(chatId, userId);
+      isAdmin = ['creator', 'administrator'].includes(member.status);
+    } catch {}
+  }
+
+  if (!isAdmin) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+
+  bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+});
+
+// Команда для отправки фото с текстом
+// Использование: /sayphoto ссылка_на_фото Текст сообщения
+bot.onText(/\/sayphoto (\S+) (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const photoUrl = match[1];
+  const caption = match[2];
+
+  // Проверка: только админ или владелец
+  const userId = msg.from.id;
+  let isAdmin = false;
+  if (userId === OWNER_ID) {
+    isAdmin = true;
+  } else if (msg.chat.type !== 'private') {
+    try {
+      const member = await bot.getChatMember(chatId, userId);
+      isAdmin = ['creator', 'administrator'].includes(member.status);
+    } catch {}
+  }
+
+  if (!isAdmin) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+
+  bot.sendPhoto(chatId, photoUrl, { caption: caption, parse_mode: "HTML" });
+});
