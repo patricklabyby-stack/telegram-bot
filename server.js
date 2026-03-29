@@ -10051,3 +10051,33 @@ bot.on('message', async (msg) => {
     userMessageMap.set(userId, []);
   }
 });;
+
+// =========================
+// /admins
+// =========================
+bot.onText(/\/admins/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  // работает только в группе
+  if (msg.chat.type === 'private') {
+    return bot.sendMessage(chatId, '❌ Команда только для группы');
+  }
+
+  try {
+    const admins = await bot.getChatAdministrators(chatId);
+
+    let text = '👮 Админы группы:\n\n';
+
+    for (const admin of admins) {
+      const user = admin.user;
+      const name = user.first_name || 'Без имени';
+      text += `• ${name}\n`;
+    }
+
+    bot.sendMessage(chatId, text);
+
+  } catch (err) {
+    console.error('Ошибка /admins:', err);
+    bot.sendMessage(chatId, '❌ Не удалось получить список админов');
+  }
+});
