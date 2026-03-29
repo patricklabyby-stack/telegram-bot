@@ -10226,16 +10226,35 @@ function parseTime(input) {
     return null;
 }
 
-bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+// Команда /напомни
+bot.onText(/\/напомни (.+)/i, (msg, match) => {
+    const chatId = msg.chat.id;
+    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const input = match[1];
 
-const userName = msg.from.first_name; // берём имя пользователя
+    const splitIndex = input.indexOf(' ');
+    if (splitIndex === -1) {
+        bot.sendMessage(chatId, 'Неверный формат. Пример: /напомни 5мин Поспать');
+        return;
+    }
 
-const timer = setTimeout(() => {
-    bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
-    
-    // удаляем таймер из массива после срабатывания
-    const index = reminders.indexOf(timer);
-    if (index > -1) reminders.splice(index, 1);
-}, delay);
+    const timeStr = input.slice(0, splitIndex);
+    const reminderText = input.slice(splitIndex + 1);
 
-reminders.push(timer);
+    const delay = parseTime(timeStr);
+    if (!delay) {
+        bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
+        return;
+    }
+
+    bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+
+    const timer = setTimeout(() => {
+        bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
+        // удаляем таймер из массива после срабатывания
+        const index = reminders.indexOf(timer);
+        if (index > -1) reminders.splice(index, 1);
+    }, delay);
+
+    reminders.push(timer);
+});
