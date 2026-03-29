@@ -10127,25 +10127,37 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
   bot.sendMessage(chatId, text, { parse_mode: "HTML" });
 });
 
-bot.onText(/\/help/, (msg) => {
+// =========================
+// DELETE MESSAGE IN GROUP (Admins Only)
+// =========================
+bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const userName = msg.from.first_name || 'друг';
+  const userId = msg.from.id;
 
-  bot.onText(/\/help/, (msg) => {
-  const chatId = msg.chat.id;
-  const userName = msg.from.first_name || 'друг';
+  // Проверяем, что это группа
+  if (msg.chat.type === 'private') return;
 
-// Проверяем, что это группа
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const userName = msg.from.first_name || "друг";
+  // Проверяем, что сообщение начинается с "-сообщение"
+  if (!msg.text || !msg.text.startsWith('-сообщение')) return;
 
-  if (msg.chat.type !== 'private') {
-    bot.sendMessage(
-      chatId,
-      `Привет, ${userName}! 👋\n` +
-      `Все команды вы можете посмотреть в чате бота — просто откройте диалог со мной и напишите /help, чтобы увидеть полный список функций.`,
-      { parse_mode: "HTML" }
-    );
+  // Функция проверки: владелец бота или админ группы
+  async function isAdminOrOwner(userId, chatId) {
+    if (userId === OWNER_ID) return true; // владелец бота
+    try {
+      const member = await bot.getChatMember(chatId, userId);
+      return ['creator', 'administrator'].includes(member.status);
+    } catch {
+      return false;
+    }
+  }
+
+  const allowed = await isAdminOrOwner(userId, chatId);
+  if (!allowed) return; // если не админ и не владелец, ничего не делать
+
+  try {
+    await bot.deleteMessage(chatId, msg.message_id);
+    console.log(`Сообщение от ${userId} удалено (только админ/владелец)`);
+  } catch (err) {
+    console.error('Ошибка при удалении сообщения:', err);
   }
 });
