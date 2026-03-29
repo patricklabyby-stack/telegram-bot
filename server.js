@@ -10128,26 +10128,33 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
   bot.sendMessage(chatId, text, { parse_mode: "HTML" });
 });
 
-// Команда для отправки фото с текстом
-// Использование: /sayphoto ссылка_на_фото Текст сообщения
-bot.onText(/\/sayphoto (\S+) (.+)/, async (msg, match) => {
+// =========================
+// Отправка сообщения в чат
+// =========================
+bot.onText(/\/say (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const photoUrl = match[1];
-  const caption = match[2];
+  const text = match[1]; // текст после команды
 
-  // Проверка: только админ или владелец
-  const userId = msg.from.id;
-  let isAdmin = false;
-  if (userId === OWNER_ID) {
-    isAdmin = true;
-  } else if (msg.chat.type !== 'private') {
+  // Если команда использована в ответ на сообщение
+  if (msg.reply_to_message) {
     try {
-      const member = await bot.getChatMember(chatId, userId);
-      isAdmin = ['creator', 'administrator'].includes(member.status);
-    } catch {}
+      if (msg.reply_to_message.photo) {
+        // Отправка фото с подписью
+        const fileId = msg.reply_to_message.photo.slice(-1)[0].file_id;
+        await bot.sendPhoto(chatId, fileId, { caption: text });
+      } else {
+        // Просто пересылаем текст
+        await bot.sendMessage(chatId, text);
+      }
+    } catch (err) {
+      console.error('Ошибка при отправке ответа:', err);
+    }
+  } else {
+    // Просто отправляем текст
+    try {
+      await bot.sendMessage(chatId, text);
+    } catch (err) {
+      console.error('Ошибка при отправке сообщения:', err);
+    }
   }
-
-  if (!isAdmin) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
-
-  bot.sendPhoto(chatId, photoUrl, { caption: caption, parse_mode: "HTML" });
 });
