@@ -10226,78 +10226,37 @@ function parseTime(input) {
     return null;
 }
 
-// Глобальные массивы
-const reminders = []; // для напоминаний
-const birthdays = {}; // { userId: { name, day, month, chatId } }
+bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
 
-// ======= Команда /напомни =======
-bot.onText(/\/напомни (.+)/i, (msg, match) => {
-    const chatId = msg.chat.id;
-    const fromUser = msg.from.first_name; // имя пользователя
-    const input = match[1];
+const userName = msg.from.first_name; // берём имя пользователя
 
-    const splitIndex = input.indexOf(' ');
-    if (splitIndex === -1) {
-        bot.sendMessage(chatId, 'Неверный формат. Пример: /напомни 5мин Поспать');
-        return;
-    }
+const timer = setTimeout(() => {
+    bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
+    
+    // удаляем таймер из массива после срабатывания
+    const index = reminders.indexOf(timer);
+    if (index > -1) reminders.splice(index, 1);
+}, delay);
 
-    const timeStr = input.slice(0, splitIndex);
-    const reminderText = input.slice(splitIndex + 1);
+reminders.push(timer);
 
-    const delay = parseTime(timeStr);
-    if (!delay) {
-        bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
-        return;
-    }
-
-    bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
-
-    const timer = setTimeout(() => {
-        bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
-        // удаляем таймер из массива после срабатывания
-        const index = reminders.indexOf(timer);
-        if (index > -1) reminders.splice(index, 1);
-    }, delay);
-
-    reminders.push(timer);
-});
-
-// ======= Команда /деньрождения =======
+// Команда установить день рождения
 bot.onText(/\/деньрождения (\d{1,2})\.(\d{1,2})/, (msg, match) => {
-    const userId = msg.from.id;
+    const chatId = msg.chat.id;
     const name = msg.from.first_name;
     const day = parseInt(match[1]);
     const month = parseInt(match[2]);
 
     if (day < 1 || day > 31 || month < 1 || month > 12) {
-        bot.sendMessage(msg.chat.id, 'Неверная дата. Используй формат ДД.ММ, например 25.12');
+        bot.sendMessage(chatId, 'Неверная дата. Используй формат ДД.ММ, например 25.12');
         return;
     }
 
-    birthdays[userId] = { name, day, month, chatId: msg.chat.id };
-    bot.sendMessage(msg.chat.id, `✅ День рождения установлен: ${day}.${month}`);
+    bot.sendMessage(chatId, `✅ День рождения установлен: ${day}.${month}`);
+
+    // Для теста: сразу поздравление, если день совпадает с сегодняшним
+    const today = new Date();
+    if (today.getDate() === day && today.getMonth() + 1 === month) {
+        bot.sendMessage(chatId, `🎉 С Днём Рождения, ${name}!`);
+    }
 });
-
-// ======= Проверка дней рождения =======
-function checkBirthdays() {
-    const now = new Date();
-    const todayDay = now.getDate();
-    const todayMonth = now.getMonth() + 1; // getMonth() возвращает 0-11
-
-    for (const userId in birthdays) {
-        const b = birthdays[userId];
-        if (b.day === todayDay && b.month === todayMonth) {
-            bot.sendMessage(b.chatId, `🎉 С Днём Рождения, ${b.name}!`);
-        }
-    }
-}
-
-// ======= Таймер для проверки =======
-// Проверяем каждый день каждые 60 секунд и поздравляем в 9:00 утра
-setInterval(() => {
-    const now = new Date();
-    if (now.getHours() === 9 && now.getMinutes() === 0) {
-        checkBirthdays();
-    }
-}, 60 * 1000);
