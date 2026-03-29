@@ -10150,38 +10150,47 @@ bot.on('message', async (msg) => {
   }
 });
 
+// =========================
+// /addmod
+// =========================
 bot.onText(/\/addmod (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const target = match[1]; // @username или ID
+  const senderId = msg.from.id;
+  const targetUsername = match[1].replace('@', '');
 
-  // Проверяем, что команду выполняет владелец или админ
-  try {
-    const member = await bot.getChatMember(chatId, userId);
-    if (!['creator', 'administrator'].includes(member.status)) {
-      return bot.sendMessage(chatId, '❌ Только админ или владелец может назначать модераторов');
-    }
-  } catch { return; }
-
-  let targetId;
-
-  // Если передан username
-  if (target.startsWith('@')) {
-    try {
-      const chatMembers = await bot.getChatAdministrators(chatId);
-      const found = chatMembers.find(m => m.user.username === target.slice(1));
-      if (found) return bot.sendMessage(chatId, '❌ Этот пользователь уже админ');
-      const chatMember = await bot.getChatMember(chatId, target);
-      targetId = chatMember.user.id;
-    } catch {
-      return bot.sendMessage(chatId, '❌ Не удалось найти пользователя по username');
-    }
+  // Проверяем права отправителя
+  let canPromote = false;
+  if (senderId === OWNER_ID) {
+    canPromote = true; // владелец бота может назначать
   } else {
-    targetId = parseInt(target);
+    try {
+      const member = await bot.getChatMember(chatId, senderId);
+      if (['creator', 'administrator'].includes(member.status)) canPromote = true;
+    } catch {}
   }
 
-  // Назначаем админом
+  if (!canPromote) return bot.sendMessage(chatId, '❌ Только админ или владелец бота может назначать модеров.');
+
   try {
+    // Получаем всех участников группы
+    const chatAdmins = await bot.getChatAdministrators(chatId);
+    const targetAdmin = chatAdmins.find(m => m.user.username === targetUsername);
+
+    // Проверка: цель не владелец
+    if (targetAdmin && targetAdmin.status === 'creator') {
+      return bot.sendMessage(chatId, '❌ Невозможно назначить владельца модером.');
+    }
+
+    // Получаем id пользователя по username
+    let targetId;
+    if (targetAdmin) targetId = targetAdmin.user.id;
+    else {
+      // Если цель не в админах, пробуем найти через getChatMember
+      const member = await bot.getChatMember(chatId, targetUsername);
+      targetId = member.user.id;
+    }
+
+    // Назначаем модератором
     await bot.promoteChatMember(chatId, targetId, {
       can_change_info: false,
       can_delete_messages: true,
@@ -10190,8 +10199,11 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
       can_pin_messages: true,
       can_promote_members: false
     });
-    bot.sendMessage(chatId, `✅ Пользователь ${target} теперь модератор`);
+
+    bot.sendMessage(chatId, `✅ @${targetUsername} теперь модератор.`);
+
   } catch (err) {
-    bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.message}`);
+    console.error('Ошибка при назначении модератора:', err);
+    bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.response?.description || err.message}`);
   }
 });
