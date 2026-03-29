@@ -9944,10 +9944,14 @@ bot.on("polling_error", (error) => {
 })();
 
 // =========================
-// START COMMAND
+// START COMMAND (Private Only)
 // =========================
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
+
+  // Проверяем, что это личный чат
+  if (msg.chat.type !== 'private') return;
+
   const userName = msg.from.first_name || "друг";
 
   bot.sendMessage(
@@ -10132,8 +10136,13 @@ bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   const userName = msg.from.first_name || 'друг';
 
-  bot.sendMessage(chatId, `Привет, ${userName}! 👋
-Все команды вы можете посмотреть в чате бота — просто откройте диалог со мной и напишите /help, чтобы увидеть полный список функций.`, {
-    parse_mode: "HTML"
-  });
+  bot.onText(/\/help/, (msg) => {
+  const chatId = msg.chat.id;
+  const userName = msg.from.first_name || 'друг';
+
+  // Проверяем, что это группа
+  if (msg.chat.type !== 'private') {
+    bot.sendMessage(chatId, `Привет, ${userName}! 👋
+Все команды вы можете посмотреть в чате бота — просто откройте диалог со мной и напишите /help, чтобы увидеть полный список функций.`, { parse_mode: "HTML" });
+  }
 });
