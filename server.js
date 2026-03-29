@@ -10104,9 +10104,9 @@ bot.onText(/\/admins/, async (msg) => {
 });
 
 // =========================
-// WARNS SYSTEM
+// WARN SYSTEM
 // =========================
-const warnsMap = new Map(); // key: userId, value: количество варнов
+const userWarns = new Map(); // key: chatId-userId, value: {count, reasons[]}
 const MAX_WARNS = 3;
 
 // Проверка, является ли админом или владельцем
@@ -10122,85 +10122,88 @@ async function isAdminOrOwner(msg) {
   }
 }
 
-// Дать варн
-bot.onText(/\/warn\s+@(\w+)\s*(.*)?/, async (msg, match) => {
+// Выдать варн
+bot.onText(/\/warn(?:\s+(@\w+))?(?:\s+(.+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const issuerId = msg.from.id;
-  const targetUsername = match[1];
-  const reason = match[2] || 'Без причины';
+  let targetUser;
+  let reason = match[2] || 'Без причины';
 
-  if (issuerId.toString() === targetUsername) {
-    return bot.sendMessage(chatId, `❌ Нельзя дать варн самому себе.`);
+  if (msg.reply_to_message) {
+    targetUser = msg.reply_to_message.from;
+  } else if (match[1]) {
+    const username = match[1].replace('@','');
+    const members = await bot.getChatAdministrators(chatId).catch(()=>[]);
+    try {
+      const member = await bot.getChatMember(chatId, username);
+      targetUser = member.user;
+    } catch {
+      // Ищем по username в чате
+      targetUser = { username }; // Если не найден — покажем сообщение об ошибке
+    }
   }
 
-  const allowed = await isAdminOrOwner(msg);
-  if (!allowed) return bot.sendMessage(chatId, '❌ Только админы и владелец могут выдавать варны.');
+  if (!targetUser) return bot.sendMessage(chatId, '❌ Пользователь не найден.');
 
-  try {
-    const member = await bot.getChatMember(chatId, targetUsername);
-    const targetId = member.user.id;
-    const targetName = member.user.username || member.user.first_name;
+  if (targetUser.id === msg.from.id) return bot.sendMessage(chatId, '❌ Нельзя выдавать варн себе.');
+  if (await isAdminOrOwner({ chat: msg.chat, from: targetUser })) return bot.sendMessage(chatId, '❌ Нельзя выдавать варн админам или владельцам.');
 
-    const current = warnsMap.get(targetId) || 0;
-    const newCount = current + 1;
-    warnsMap.set(targetId, newCount);
+  const key = `${chatId}-${targetUser.id}`;
+  if (!userWarns.has(key)) userWarns.set(key, { count: 0, reasons: [] });
+  const userData = userWarns.get(key);
+  userData.count += 1;
+  userData.reasons.push(reason);
 
-    bot.sendMessage(chatId, `⚠️ ${targetName} получил варн (${newCount}/${MAX_WARNS}). Причина: ${reason}`);
+  bot.sendMessage(chatId, `⚠️ ${targetUser.first_name || targetUser.username} получил варн #${userData.count}\nПричина: ${reason}`);
 
-    if (newCount >= MAX_WARNS) {
-      try {
-        await bot.kickChatMember(chatId, targetId);
-        warnsMap.set(targetId, 0); // сбрасываем варны после кика
-        bot.sendMessage(chatId, `🚨 ${targetName} получил 3 варна и был кикнут из группы.`);
-      } catch {
-        bot.sendMessage(chatId, `❌ Не удалось кикнуть ${targetName}.`);
-      }
+  if (userData.count >= MAX_WARNS) {
+    try {
+      await bot.kickChatMember(chatId, targetUser.id);
+      bot.sendMessage(chatId, `❌ ${targetUser.first_name || targetUser.username} получил ${MAX_WARNS} варна и был кикнут из группы.`);
+      userWarns.delete(key);
+    } catch {
+      bot.sendMessage(chatId, `❌ Не удалось кикнуть ${targetUser.first_name || targetUser.username}. Возможно, бот не админ.`);
     }
-
-  } catch {
-    bot.sendMessage(chatId, `❌ Пользователь @${targetUsername} не найден в чате.`);
   }
 });
 
 // Снять варн
-bot.onText(/\/unwarn\s+@(\w+)/, async (msg, match) => {
+bot.onText(/\/unwarn(?:\s+(@\w+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const allowed = await isAdminOrOwner(msg);
-  if (!allowed) return bot.sendMessage(chatId, '❌ Только админы и владелец могут снимать варны.');
+  if (!await isAdminOrOwner(msg)) return bot.sendMessage(chatId, '❌ Только админы могут снимать варны.');
 
-  const targetUsername = match[1];
-  try {
-    const member = await bot.getChatMember(chatId, targetUsername);
-    const targetId = member.user.id;
-    const targetName = member.user.username || member.user.first_name;
-
-    const current = warnsMap.get(targetId) || 0;
-    if (current <= 0) return bot.sendMessage(chatId, `ℹ️ У ${targetName} нет варнов.`);
-
-    warnsMap.set(targetId, current - 1);
-    bot.sendMessage(chatId, `✅ С варна ${targetName} снят один варн. Сейчас: ${current - 1}/${MAX_WARNS}`);
-
-  } catch {
-    bot.sendMessage(chatId, `❌ Пользователь @${targetUsername} не найден в чате.`);
+  let targetUser;
+  if (msg.reply_to_message) {
+    targetUser = msg.reply_to_message.from;
+  } else if (match[1]) {
+    const username = match[1].replace('@','');
+    // можно искать по username
+    targetUser = { username, id: null }; // просто покажем сообщение
+  } else {
+    return bot.sendMessage(chatId, '❌ Укажите пользователя или ответьте на его сообщение.');
   }
+
+  const key = `${chatId}-${targetUser.id}`;
+  if (!userWarns.has(key)) return bot.sendMessage(chatId, '❌ У пользователя нет варнов.');
+
+  const userData = userWarns.get(key);
+  userData.count -= 1;
+  userData.reasons.pop();
+  if (userData.count <= 0) userWarns.delete(key);
+
+  bot.sendMessage(chatId, `✅ Варн снят. У ${targetUser.first_name || targetUser.username} осталось ${userData.count || 0} варнов.`);
 });
 
 // Посмотреть варны
-bot.onText(/\/warns(?:\s+@(\w+))?/, async (msg, match) => {
+bot.onText(/\/warns(?:\s+(@\w+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
-  let targetId = msg.from.id;
-  let targetName = msg.from.first_name;
+  let targetUser;
+  if (msg.reply_to_message) targetUser = msg.reply_to_message.from;
+  else if (match[1]) targetUser = { username: match[1].replace('@',''), id: null };
+  else targetUser = msg.from;
 
-  if (match[1]) {
-    try {
-      const member = await bot.getChatMember(chatId, match[1]);
-      targetId = member.user.id;
-      targetName = member.user.username || member.user.first_name;
-    } catch {
-      return bot.sendMessage(chatId, `❌ Пользователь @${match[1]} не найден в чате.`);
-    }
-  }
+  const key = `${chatId}-${targetUser.id}`;
+  if (!userWarns.has(key)) return bot.sendMessage(chatId, `${targetUser.first_name || targetUser.username} не имеет варнов.`);
 
-  const count = warnsMap.get(targetId) || 0;
-  bot.sendMessage(chatId, `⚠️ ${targetName} имеет ${count}/${MAX_WARNS} варн(ов).`);
+  const userData = userWarns.get(key);
+  bot.sendMessage(chatId, `⚠️ ${targetUser.first_name || targetUser.username} имеет ${userData.count} варн(ов)\nПричины:\n- ${userData.reasons.join('\n- ')}`);
 });
