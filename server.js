@@ -9942,20 +9942,31 @@ bot.on("polling_error", (error) => {
 // АНТИ-СПАМ С МУТОМ (Node-Telegram-Bot-API)
 // =========================
 const spamSettings = {
-  enabled: true,          // включение/выключение
-  messageLimit: 5,        // сообщений за интервал
-  interval: 5000,         // интервал проверки в мс
-  muteTime: 60000         // длительность мута в мс
+  enabled: true,
+  messageLimit: 5,
+  interval: 5000,
+  muteTime: 60000 // 60 сек
 };
 
 const userMessageMap = new Map();
 const mutedUsers = new Map();
 
-// Проверка, является ли пользователь владельцем или админом группы
+// формат времени (сек/мин/час)
+function formatTime(ms) {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec} сек`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} мин`;
+  const hr = Math.floor(min / 60);
+  return `${hr} ч`;
+}
+
+// Проверка админа/владельца
 async function isOwnerOrAdmin(msg) {
   const userId = msg.from.id;
   if (userId === OWNER_ID) return true;
-  if (msg.chat.type === 'private') return false; // игнор личных чатов
+  if (msg.chat.type === 'private') return false;
+
   try {
     const member = await bot.getChatMember(msg.chat.id, userId);
     return ['creator', 'administrator'].includes(member.status);
@@ -9964,21 +9975,20 @@ async function isOwnerOrAdmin(msg) {
   }
 }
 
-// Команда включения/выключения анти-спама
+// Вкл/выкл антиспам
 bot.onText(/\/antispam (on|off)/, async (msg, match) => {
   const allowed = await isOwnerOrAdmin(msg);
-  if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец бота могут использовать эту команду.');
+  if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
 
-  const arg = match[1];
-  spamSettings.enabled = arg === 'on';
+  spamSettings.enabled = match[1] === 'on';
   bot.sendMessage(msg.chat.id, `✅ Анти-спам ${spamSettings.enabled ? 'включен' : 'выключен'}`);
 });
 
-// Проверка сообщений на спам
+// Проверка сообщений
 bot.on('message', async (msg) => {
   if (!spamSettings.enabled) return;
-  if (msg.chat.type === 'private') return;        // игнор личные чаты
-  if (msg.text && msg.text.startsWith('/')) return; // игнор команд
+  if (msg.chat.type === 'private') return;
+  if (msg.text && msg.text.startsWith('/')) return;
 
   const userId = msg.from.id;
   const chatId = msg.chat.id;
@@ -9990,14 +10000,13 @@ bot.on('message', async (msg) => {
   const timestamps = userMessageMap.get(userId);
   timestamps.push(now);
 
-  // Убираем старые сообщения за предел интервала
   while (timestamps.length && now - timestamps[0] > spamSettings.interval) {
     timestamps.shift();
   }
 
-  // Если превышен лимит сообщений
   if (timestamps.length > spamSettings.messageLimit) {
-    const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+    const userName = msg.from.first_name || "Игрок";
+    const muteText = formatTime(spamSettings.muteTime);
 
     try {
       await bot.restrictChatMember(chatId, userId, {
@@ -10006,9 +10015,11 @@ bot.on('message', async (msg) => {
       });
 
       mutedUsers.set(userId, true);
-      bot.sendMessage(chatId, `🔇 ${userName} лишается права слова. Причина: спам`);
 
-      // Снятие мута по таймеру
+      bot.sendMessage(chatId,
+        `🔇 ${userName} лишается права слова на ${muteText}\n💬 Причина: спам`
+      );
+
       setTimeout(async () => {
         try {
           await bot.restrictChatMember(chatId, userId, {
@@ -10021,8 +10032,13 @@ bot.on('message', async (msg) => {
             can_invite_users: true,
             can_pin_messages: false
           });
+
           mutedUsers.delete(userId);
-          bot.sendMessage(chatId, `✅ ${userName} может снова писать в чате`);
+
+          bot.sendMessage(chatId,
+            `✅ ${userName} снова может писать в чате`
+          );
+
         } catch (err) {
           console.error('Ошибка при снятии мута:', err);
         }
@@ -10034,4 +10050,4 @@ bot.on('message', async (msg) => {
 
     userMessageMap.set(userId, []);
   }
-});
+});;
