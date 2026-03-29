@@ -10124,16 +10124,14 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
 // =========================
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const userId = msg.from.id;
+  const userId = msg.from?.id;
+  if (!userId || msg.chat.type === 'private') return;
 
-  if (msg.chat.type === 'private') return;
-
-  // Инициализация настроек для группы
+  // Инициализация
   if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
   if (!warnCountsPerChat[chatId]) warnCountsPerChat[chatId] = {};
   if (!mutedUsersPerChat[chatId]) mutedUsersPerChat[chatId] = {};
 
-  // Проверка: админ/владелец
   async function isAdminOrOwner(userId, chatId) {
     if (userId === OWNER_ID) return true;
     try {
@@ -10147,7 +10145,7 @@ bot.on('message', async (msg) => {
   const allowed = await isAdminOrOwner(userId, chatId);
 
   // --- Удаление сообщения по -сообщение ---
-  if (msg.text && msg.text.startsWith('-сообщение') && msg.reply_to_message && allowed) {
+  if (msg.text?.startsWith('-сообщение') && msg.reply_to_message && allowed) {
     try {
       await bot.deleteMessage(chatId, msg.reply_to_message.message_id);
       console.log(`Сообщение ${msg.reply_to_message.message_id} удалено по команде от ${userId}`);
