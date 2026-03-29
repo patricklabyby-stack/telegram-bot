@@ -10078,44 +10078,36 @@ bot.on('message', async (msg) => {
 bot.onText(/\/admins/, async (msg) => {
   const chatId = msg.chat.id;
 
-  // работает только в группе
   if (msg.chat.type === 'private') {
     return bot.sendMessage(chatId, '❌ Команда только для группы');
   }
 
   try {
     const admins = await bot.getChatAdministrators(chatId);
-
     let text = '👮 Админы группы:\n\n';
-
     for (const admin of admins) {
       const user = admin.user;
       const name = user.first_name || 'Без имени';
       text += `• ${name}\n`;
     }
-
     bot.sendMessage(chatId, text);
-
   } catch (err) {
     console.error('Ошибка /admins:', err);
     bot.sendMessage(chatId, '❌ Не удалось получить список админов');
   }
 });
 
-// Команда для отправки сообщений в группу
-// Использование: /say Текст сообщения
-// Или с фото: /sayphoto ссылка_на_фото Текст сообщения
-
+// =========================
+// /say
+// =========================
 bot.onText(/\/say (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const text = match[1];
-
-  // Проверка: только админ или владелец
   const userId = msg.from.id;
+
   let isAdmin = false;
-  if (userId === OWNER_ID) {
-    isAdmin = true;
-  } else if (msg.chat.type !== 'private') {
+  if (userId === OWNER_ID) isAdmin = true;
+  else if (msg.chat.type !== 'private') {
     try {
       const member = await bot.getChatMember(chatId, userId);
       isAdmin = ['creator', 'administrator'].includes(member.status);
@@ -10124,57 +10116,24 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
 
   if (!isAdmin) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
 
-  bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+  bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
 });
 
 // =========================
-// DELETE REPLIED MESSAGE (Admins Only)
+// DELETE REPLIED MESSAGE + FILTER + МАТЫ
 // =========================
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // Проверяем, что это группа
   if (msg.chat.type === 'private') return;
 
-  // Сообщение должно начинаться с "-сообщение" и быть ответом
-  if (!msg.text || !msg.text.startsWith('-сообщение') || !msg.reply_to_message) return;
+  // Инициализация настроек для группы
+  if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
+  if (!warnCountsPerChat[chatId]) warnCountsPerChat[chatId] = {};
+  if (!mutedUsersPerChat[chatId]) mutedUsersPerChat[chatId] = {};
 
-  // Проверка: админ, владелец группы или владелец бота
-  async function isAdminOrOwner(userId, chatId) {
-    if (userId === OWNER_ID) return true; // владелец бота
-    try {
-      const member = await bot.getChatMember(chatId, userId);
-      return ['creator', 'administrator'].includes(member.status);
-    } catch {
-      return false;
-    }
-  }
-
-  const allowed = await isAdminOrOwner(userId, chatId);
-  if (!allowed) return; // если не админ и не владелец, ничего не делать
-
-  try {
-    // Удаляем сообщение, на которое был ответ
-    const targetMessageId = msg.reply_to_message.message_id;
-    await bot.deleteMessage(chatId, targetMessageId);
-    console.log(`Сообщение ${targetMessageId} удалено по команде от ${userId}`);
-  } catch (err) {
-    console.error('Ошибка при удалении сообщения:', err);
-  }
-});
-
-// =========================
-// DELETE REPLIED MESSAGE (Admins Only)
-// =========================
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  // Только группы
-  if (msg.chat.type === 'private') return;
-
-  // Проверка админа/владельца
+  // Проверка: админ/владелец
   async function isAdminOrOwner(userId, chatId) {
     if (userId === OWNER_ID) return true;
     try {
@@ -10195,14 +10154,10 @@ bot.on('message', async (msg) => {
     } catch (err) {
       console.error('Ошибка при удалении сообщения:', err);
     }
-    return; // не фильтруем дальше
+    return;
   }
 
   // --- Фильтр матов ---
-  if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
-  if (!warnCountsPerChat[chatId]) warnCountsPerChat[chatId] = {};
-  if (!mutedUsersPerChat[chatId]) mutedUsersPerChat[chatId] = {};
-
   if (await isOwnerOrAdmin(msg)) return; // админы игнорируются
   if (!filterSettingsPerChat[chatId].enabled) return;
   if (!msg.text) return;
