@@ -10102,3 +10102,72 @@ bot.onText(/\/admins/, async (msg) => {
     bot.sendMessage(chatId, '❌ Не удалось получить список админов');
   }
 });
+
+// =========================
+// WARN SYSTEM
+// =========================
+const warnMap = new Map(); // хранение варнов: userId => количество
+
+// Проверка админа или владельца
+async function isAdminOrOwner(msg) {
+  const userId = msg.from.id;
+  if (userId === OWNER_ID) return true;
+  if (msg.chat.type === 'private') return false;
+  try {
+    const member = await bot.getChatMember(msg.chat.id, userId);
+    return ['creator', 'administrator'].includes(member.status);
+  } catch {
+    return false;
+  }
+}
+
+// Выдать варн
+bot.onText(/\/warn (@\w+)\s*(.*)?/, async (msg, match) => {
+  const allowed = await isAdminOrOwner(msg);
+  if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец бота могут выдавать варны.');
+
+  const username = match[1].replace('@', '');
+  const reason = match[2] || 'Не указана';
+  
+  const chatId = msg.chat.id;
+  const members = await bot.getChatAdministrators(chatId);
+  const member = members.find(m => m.user.username === username) || { user: { id: null, first_name: username } };
+  const userId = member.user.id || username;
+
+  const currentWarns = warnMap.get(userId) || 0;
+  const newWarns = currentWarns + 1;
+  warnMap.set(userId, newWarns);
+
+  if (newWarns >= 3) {
+    try {
+      if (userId !== null) await bot.kickChatMember(chatId, userId);
+      bot.sendMessage(chatId, `⚠️ ${username} получил 3 варна и был удалён из группы! Причина последнего варна: ${reason}`);
+      warnMap.delete(userId);
+    } catch {
+      bot.sendMessage(chatId, `⚠️ Не удалось кикнуть ${username}, но он получил 3 варна!`);
+    }
+  } else {
+    bot.sendMessage(chatId, `⚠️ ${username} получил варн. Причина: ${reason}. Сейчас у него ${newWarns} варн(а).`);
+  }
+});
+
+// Снять варн
+bot.onText(/\/unwarn (@\w+)/, async (msg, match) => {
+  const allowed = await isAdminOrOwner(msg);
+  if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец бота могут снимать варны.');
+
+  const username = match[1].replace('@', '');
+  const chatId = msg.chat.id;
+  const members = await bot.getChatAdministrators(chatId);
+  const member = members.find(m => m.user.username === username) || { user: { id: null, first_name: username } };
+  const userId = member.user.id || username;
+
+  const currentWarns = warnMap.get(userId) || 0;
+  if (currentWarns <= 0) return bot.sendMessage(chatId, `ℹ️ У ${username} нет варнов.`);
+
+  const newWarns = currentWarns - 1;
+  if (newWarns === 0) warnMap.delete(userId);
+  else warnMap.set(userId, newWarns);
+
+  bot.sendMessage(chatId, `✅ ${username} потерял 1 варн. Сейчас у него ${newWarns} варн(а).`);
+});
