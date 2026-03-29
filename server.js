@@ -10128,33 +10128,12 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
   bot.sendMessage(chatId, text, { parse_mode: "HTML" });
 });
 
-// =========================
-// Отправка сообщения в чат
-// =========================
-bot.onText(/\/say (.+)/, async (msg, match) => {
+bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
-  const text = match[1]; // текст после команды
+  const userName = msg.from.first_name || 'друг';
 
-  // Если команда использована в ответ на сообщение
-  if (msg.reply_to_message) {
-    try {
-      if (msg.reply_to_message.photo) {
-        // Отправка фото с подписью
-        const fileId = msg.reply_to_message.photo.slice(-1)[0].file_id;
-        await bot.sendPhoto(chatId, fileId, { caption: text });
-      } else {
-        // Просто пересылаем текст
-        await bot.sendMessage(chatId, text);
-      }
-    } catch (err) {
-      console.error('Ошибка при отправке ответа:', err);
-    }
-  } else {
-    // Просто отправляем текст
-    try {
-      await bot.sendMessage(chatId, text);
-    } catch (err) {
-      console.error('Ошибка при отправке сообщения:', err);
-    }
-  }
+  bot.sendMessage(chatId, `Привет, ${userName}! 👋
+Все команды вы можете посмотреть в чате бота — просто откройте диалог со мной и напишите /help, чтобы увидеть полный список функций.`, {
+    parse_mode: "HTML"
+  });
 });
