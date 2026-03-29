@@ -10120,17 +10120,12 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
 });
 
 // =========================
-// DELETE REPLIED MESSAGE + FILTER + МАТЫ
+// DELETE REPLIED MESSAGE
 // =========================
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from?.id;
   if (!userId || msg.chat.type === 'private') return;
-
-  // Инициализация
-  if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
-  if (!warnCountsPerChat[chatId]) warnCountsPerChat[chatId] = {};
-  if (!mutedUsersPerChat[chatId]) mutedUsersPerChat[chatId] = {};
 
   async function isAdminOrOwner(userId, chatId) {
     if (userId === OWNER_ID) return true;
@@ -10152,57 +10147,5 @@ bot.on('message', async (msg) => {
     } catch (err) {
       console.error('Ошибка при удалении сообщения:', err);
     }
-    return;
   }
-
-  // --- Фильтр матов ---
-  if (await isOwnerOrAdmin(msg)) return; // админы игнорируются
-  if (!filterSettingsPerChat[chatId].enabled) return;
-  if (!msg.text) return;
-
-  if (containsBadWord(msg.text)) {
-    try {
-      await bot.deleteMessage(chatId, msg.message_id);
-
-      if (!warnCountsPerChat[chatId][userId]) warnCountsPerChat[chatId][userId] = 0;
-      warnCountsPerChat[chatId][userId] += 1;
-      const warnCount = warnCountsPerChat[chatId][userId];
-      const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
-
-      if (warnCount >= 3) {
-        const muteTime = Math.floor(Math.random() * 5 + 1) * 60;
-        mutedUsersPerChat[chatId][userId] = Date.now() + muteTime * 1000;
-
-        await bot.restrictChatMember(chatId, userId, { can_send_messages: false });
-        await bot.sendMessage(chatId, `⛔ ${userName} получил мут на ${muteTime / 60} минут за мат!`);
-
-        setTimeout(async () => {
-          try {
-            await bot.restrictChatMember(chatId, userId, { can_send_messages: true });
-            delete mutedUsersPerChat[chatId][userId];
-            await bot.sendMessage(chatId, `✅ ${userName} снова может писать, но без матов!`);
-          } catch (err) { console.error(err); }
-        }, muteTime * 1000);
-      } else {
-        await bot.sendMessage(chatId, `⚠️ Плохое слово обнаружено у ${userName}. Варн: ${warnCount}/3`);
-      }
-    } catch (err) {
-      console.error('Ошибка при фильтрации:', err);
-    }
-  }
-});
-
-// =========================
-// COMMAND: МАТЫ ON/OFF
-// =========================
-bot.onText(/\/маты(?:@\w+)? (on|off)/i, async (msg, match) => {
-  if (!await isOwnerOrAdmin(msg)) return;
-
-  const chatId = msg.chat.id;
-  const arg = match[1].toLowerCase();
-
-  if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
-  filterSettingsPerChat[chatId].enabled = arg === 'on';
-
-  bot.sendMessage(chatId, `✅ Фильтр матов ${filterSettingsPerChat[chatId].enabled ? 'включен' : 'выключен'}`);
 });
