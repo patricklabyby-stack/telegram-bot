@@ -10154,23 +10154,22 @@ bot.on('message', async (msg) => {
 // SETTINGS
 // =========================
 const TelegramBot = require('node-telegram-bot-api');
-
-const BOT_TOKEN = 'YOUR_BOT_TOKEN';
-const OWNER_ID = 7837011810; // только один раз
-
+const BOT_TOKEN = 'YOUR_BOT_TOKEN'; // вставь сюда токен
+const OWNER_ID = 7837011810;        // вставь сюда свой ID
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-const filterSettingsPerChat = {};
-const warnCountsPerChat = {};
-const mutedUsersPerChat = {};
+const filterSettingsPerChat = {}; // настройки фильтра для каждой группы
+const warnCountsPerChat = {};     // хранение варнов для каждого пользователя
+const mutedUsersPerChat = {};     // хранение мутов
 
 // =========================
-// HELPER: ПРОВЕРКА МАТОВ
+// HELPER: ПРОВЕРКА ПЛОХИХ СЛОВ
 // =========================
 function containsBadWord(text) {
   if (!text) return false;
+  text = text.toLowerCase();
   const regex = /(х.{0,2}р.{0,2}н)|(бл.{0,2}н)|(иди.{0,2}т)|(пизд.{0,2})|(сука)/i;
-  return regex.test(text.toLowerCase());
+  return regex.test(text);
 }
 
 // =========================
@@ -10178,40 +10177,42 @@ function containsBadWord(text) {
 // =========================
 async function isOwnerOrAdmin(msg) {
   try {
-    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return ['creator', 'administrator'].includes(member.status);
+    const chatMember = await bot.getChatMember(msg.chat.id, msg.from.id);
+    return ['creator', 'administrator'].includes(chatMember.status);
   } catch {
     return false;
   }
 }
 
 // =========================
-// MESSAGE FILTER
+// FILTER MESSAGE
 // =========================
 bot.on('message', async (msg) => {
-  if (msg.chat.type === 'private') return;
   const chatId = msg.chat.id;
   const userId = msg.from?.id;
-  if (!userId) return;
+  if (!userId || msg.chat.type === 'private') return;
 
+  // Инициализация для группы
   if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
   if (!warnCountsPerChat[chatId]) warnCountsPerChat[chatId] = {};
   if (!mutedUsersPerChat[chatId]) mutedUsersPerChat[chatId] = {};
 
-  if (await isOwnerOrAdmin(msg) || userId === OWNER_ID) return;
+  // Игнор админов
+  if (await isOwnerOrAdmin(msg)) return;
   if (!filterSettingsPerChat[chatId].enabled) return;
   if (!msg.text) return;
 
+  // Проверка на мат
   if (containsBadWord(msg.text)) {
     try {
       await bot.deleteMessage(chatId, msg.message_id);
 
       if (!warnCountsPerChat[chatId][userId]) warnCountsPerChat[chatId][userId] = 0;
       warnCountsPerChat[chatId][userId] += 1;
-
       const warnCount = warnCountsPerChat[chatId][userId];
       const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
 
+      // Мут на 1-5 минут при 3 и более варнах
       if (warnCount >= 3) {
         const muteTime = Math.floor(Math.random() * 5 + 1) * 60;
         mutedUsersPerChat[chatId][userId] = Date.now() + muteTime * 1000;
@@ -10224,25 +10225,30 @@ bot.on('message', async (msg) => {
             await bot.restrictChatMember(chatId, userId, { can_send_messages: true });
             delete mutedUsersPerChat[chatId][userId];
             await bot.sendMessage(chatId, `✅ ${userName} снова может писать, но без матов!`);
-          } catch (e) { console.error(e); }
+          } catch (err) {
+            console.error(err);
+          }
         }, muteTime * 1000);
       } else {
         await bot.sendMessage(chatId, `⚠️ Плохое слово обнаружено у ${userName}. Варн: ${warnCount}/3`);
       }
-    } catch (e) { console.error(e); }
+    } catch (err) {
+      console.error('Ошибка при фильтрации:', err);
+    }
   }
 });
 
 // =========================
 // COMMAND: МАТЫ ON/OFF
 // =========================
-bot.onText(/\/маты (on|off)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  if (!(await isOwnerOrAdmin(msg)) && msg.from.id !== OWNER_ID) return;
+bot.onText(/\/маты(?:@\w+)? (on|off)/i, async (msg, match) => {
+  if (!await isOwnerOrAdmin(msg)) return;
 
+  const chatId = msg.chat.id;
   const arg = match[1].toLowerCase();
+
   if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
   filterSettingsPerChat[chatId].enabled = arg === 'on';
 
-  await bot.sendMessage(chatId, `✅ Фильтр матов ${filterSettingsPerChat[chatId].enabled ? 'включен' : 'выключен'}`);
+  bot.sendMessage(chatId, `✅ Фильтр матов ${filterSettingsPerChat[chatId].enabled ? 'включен' : 'выключен'}`);
 });
