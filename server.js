@@ -10207,3 +10207,54 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
     bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.response?.description || err.message}`);
   }
 });
+
+// ======= Напоминания =======
+const reminders = []; // массив для хранения активных таймеров
+
+function parseTime(input) {
+    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
+    const match = input.match(regex);
+    if (!match) return null;
+
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+
+    if (unit.startsWith('сек')) return value * 1000;
+    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
+    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
+    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
+    return null;
+}
+
+// Команда /напомни
+bot.onText(/\/напомни (.+)/i, (msg, match) => {
+    const chatId = msg.chat.id;
+    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const input = match[1];
+
+    const splitIndex = input.indexOf(' ');
+    if (splitIndex === -1) {
+        bot.sendMessage(chatId, 'Неверный формат. Пример: /напомни 5мин Поспать');
+        return;
+    }
+
+    const timeStr = input.slice(0, splitIndex);
+    const reminderText = input.slice(splitIndex + 1);
+
+    const delay = parseTime(timeStr);
+    if (!delay) {
+        bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
+        return;
+    }
+
+    bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+
+    const timer = setTimeout(() => {
+        bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
+        // удаляем таймер из массива после срабатывания
+        const index = reminders.indexOf(timer);
+        if (index > -1) reminders.splice(index, 1);
+    }, delay);
+
+    reminders.push(timer);
+});
