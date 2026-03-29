@@ -4621,9 +4621,11 @@ const rpCommands = {
 // =========================
 // COMMANDS
 // =========================
-bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
-  await safeSendMessage(
-    msg.chat.id,
+bot.onText(/\/help/, (msg) => {
+  const chatId = msg.chat.id;
+
+  bot.sendMessage(
+    chatId,
     `🔥 <b>Мини Модератор — бот для Telegram групп</b>
 
 <b>📚 Разделы бота:</b>
@@ -4756,16 +4758,14 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • кто ...
 • оценка
 • прогноз
-• он врет?`,
+• он врет?
 
 <b>🛡 Модерация</b>
 • /admins
 • /antispam on
 • /antispam off
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
+`,
+    { parse_mode: "HTML", disable_web_page_preview: true }
   );
 });
 
