@@ -10156,7 +10156,7 @@ bot.on('message', async (msg) => {
 const TelegramBot = require('node-telegram-bot-api');
 
 const BOT_TOKEN = 'YOUR_BOT_TOKEN';
-const OWNER_ID = 123456789; // только один раз
+const OWNER_ID = 7837011810; // только один раз
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
