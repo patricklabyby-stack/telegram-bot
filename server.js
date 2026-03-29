@@ -10150,27 +10150,38 @@ bot.on('message', async (msg) => {
   }
 });
 
-// =========================
-// /addmod
-// =========================
 bot.onText(/\/addmod (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const fromId = msg.from.id;
-  const username = match[1].replace('@', '');
+  const userId = msg.from.id;
+  const target = match[1]; // @username или ID
 
+  // Проверяем, что команду выполняет владелец или админ
   try {
-    // Проверяем бота
-    const botMember = await bot.getChatMember(chatId, BOT_ID); // BOT_ID = ID вашего бота
-    if (!['administrator', 'creator'].includes(botMember.status) || !botMember.can_promote_members) {
-      return bot.sendMessage(chatId, '❌ У меня нет прав назначать админов!');
+    const member = await bot.getChatMember(chatId, userId);
+    if (!['creator', 'administrator'].includes(member.status)) {
+      return bot.sendMessage(chatId, '❌ Только админ или владелец может назначать модераторов');
     }
+  } catch { return; }
 
-    // Получаем список участников (Telegram API не позволяет напрямую по username искать, но можно использовать getChatMember если знаем id)
-    // В простом варианте — пусть пользователь сам пишет ID:
-    // /addmod 123456789
-    const targetId = parseInt(username); // если пользователь написал ID
-    if (!targetId) return bot.sendMessage(chatId, '❌ Напишите ID пользователя, а не username');
+  let targetId;
 
+  // Если передан username
+  if (target.startsWith('@')) {
+    try {
+      const chatMembers = await bot.getChatAdministrators(chatId);
+      const found = chatMembers.find(m => m.user.username === target.slice(1));
+      if (found) return bot.sendMessage(chatId, '❌ Этот пользователь уже админ');
+      const chatMember = await bot.getChatMember(chatId, target);
+      targetId = chatMember.user.id;
+    } catch {
+      return bot.sendMessage(chatId, '❌ Не удалось найти пользователя по username');
+    }
+  } else {
+    targetId = parseInt(target);
+  }
+
+  // Назначаем админом
+  try {
     await bot.promoteChatMember(chatId, targetId, {
       can_change_info: false,
       can_delete_messages: true,
@@ -10179,10 +10190,8 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
       can_pin_messages: true,
       can_promote_members: false
     });
-
-    bot.sendMessage(chatId, `✅ Пользователь с ID ${targetId} теперь модератор!`);
+    bot.sendMessage(chatId, `✅ Пользователь ${target} теперь модератор`);
   } catch (err) {
-    console.error('Ошибка при назначении модератора:', err);
-    bot.sendMessage(chatId, '❌ Ошибка при назначении модератора');
+    bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.message}`);
   }
 });
