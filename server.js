@@ -10165,175 +10165,64 @@ bot.on('message', async (msg) => {
 });
 
 // =========================
-// FILTER & SLOWMODE SETTINGS
+// FILTER SETTINGS
 // =========================
 const filterSettings = {
-  enabled: true,
-  warnMessage: '⚠️ Плохое слово обнаружено у',
-  customWords: ['слово1','слово2','дурак','идиот']
-};
-
-const slowModeSettings = {
-  enabled: false,
-  interval: 10 * 1000, // default 10 секунд
-  lastMessageMap: new Map()
+  enabled: true,              // включение/выключения фильтра
+  warnMessage: '⚠️ Плохое слово обнаружено у', 
+  customWords: ['дурак','идиот','слово1','слово2'] // свой список запрещённых слов
 };
 
 // =========================
-// HELPER: CHECK BAD WORDS
+// HELPER: ПРОВЕРКА ПЛОХИХ СЛОВ
 // =========================
 function containsBadWord(text) {
   if (!text) return false;
   text = text.toLowerCase();
 
+  // Проверка по ручному списку
   for (const word of filterSettings.customWords) {
     if (text.includes(word)) return true;
   }
 
+  // Автоматическая проверка обходов (х*р, бл#н и т.д.)
   const regex = /(х.{0,2}р.{0,2}н)|(бл.{0,2}н)|(иди.{0,2}т)/i;
   return regex.test(text);
 }
 
 // =========================
-// MESSAGE HANDLER
-// =========================
-bot.on('message', async (msg) => {
-  if (msg.chat.type === 'private') return; // только группы
-  if (await isOwnerOrAdmin(msg)) return; // админы не ограничены
-
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
-
-  // ===== Фильтр матов =====
-  if (filterSettings.enabled && msg.text && containsBadWord(msg.text)) {
-    try {
-      await bot.deleteMessage(chatId, msg.message_id);
-      await bot.sendMessage(chatId, `${filterSettings.warnMessage} ${userName}`);
-    } catch (err) {
-      console.error('Ошибка фильтра:', err);
-    }
-    return;
-  }
-
-  // ===== Медленный режим =====
-  if (slowModeSettings.enabled) {
-    const lastTime = slowModeSettings.lastMessageMap.get(userId) || 0;
-    const now = Date.now();
-
-    if (now - lastTime < slowModeSettings.interval) {
-      try {
-        await bot.deleteMessage(chatId, msg.message_id);
-        await bot.sendMessage(chatId, `⏱ ${userName}, подожди ${Math.ceil((slowModeSettings.interval - (now - lastTime))/1000)} сек перед следующим сообщением`);
-      } catch (err) {
-        console.error('Ошибка slowmode:', err);
-      }
-      return;
-    }
-
-    slowModeSettings.lastMessageMap.set(userId, now);
-  }
-});
-
-// =========================
-// SETTINGS
-// =========================
-const filterSettings = {
-  enabled: true,
-  warnMessage: '⚠️ Плохое слово обнаружено у',
-  customWords: ['дурак','идиот','слово1','слово2']
-};
-
-const slowModeSettings = {
-  enabled: false,
-  interval: 5000, // милисекунды между сообщениями
-  lastMessage: {} // хранит время последнего сообщения пользователя
-};
-
-const warnData = {}; // { chatId: { userId: count } }
-const muteDuration = 5 * 60 * 1000; // 5 минут
-
-// =========================
-// HELPER: CHECK ADMIN/OWNER
+// HELPER: ПРОВЕРКА АДМИНА
 // =========================
 async function isOwnerOrAdmin(msg) {
-  const chatMember = await bot.getChatMember(msg.chat.id, msg.from.id);
-  return ['creator', 'administrator'].includes(chatMember.status);
+  try {
+    const chatMember = await bot.getChatMember(msg.chat.id, msg.from.id);
+    return ['creator', 'administrator'].includes(chatMember.status);
+  } catch {
+    return false;
+  }
 }
 
 // =========================
-// HELPER: BAD WORD CHECK
-// =========================
-function containsBadWord(text) {
-  if (!text) return false;
-  text = text.toLowerCase();
-  for (const word of filterSettings.customWords) {
-    if (text.includes(word)) return true;
-  }
-  const regex = /(х.{0,2}р.{0,2}н)|(бл.{0,2}н)|(иди.{0,2}т)/i;
-  return regex.test(text);
-}
-
-// =========================
-// SLOW MODE CHECK
-// =========================
-async function handleSlowMode(msg) {
-  if (!slowModeSettings.enabled) return false;
-  const userId = msg.from.id;
-  const now = Date.now();
-  if (!slowModeSettings.lastMessage[msg.chat.id]) {
-    slowModeSettings.lastMessage[msg.chat.id] = {};
-  }
-  const last = slowModeSettings.lastMessage[msg.chat.id][userId] || 0;
-  if (now - last < slowModeSettings.interval) {
-    // удаляем сообщение, если слишком быстро
-    try { await bot.deleteMessage(msg.chat.id, msg.message_id); } catch {}
-    return true;
-  }
-  slowModeSettings.lastMessage[msg.chat.id][userId] = now;
-  return false;
-}
-
-// =========================
-// MESSAGE HANDLER
+// FILTER MESSAGE
 // =========================
 bot.on('message', async (msg) => {
-  if (msg.chat.type === 'private') return; // только для групп
+  // Только для групп
+  if (msg.chat.type === 'private') return;
 
-  if (await isOwnerOrAdmin(msg)) return; // админы не проверяются
-
-  // Проверка медленного режима
-  if (await handleSlowMode(msg)) return;
-
-  // Проверка плохих слов
+  // Игнор админов и владельца бота
+  if (await isOwnerOrAdmin(msg)) return;
   if (!filterSettings.enabled || !msg.text) return;
+
   if (containsBadWord(msg.text)) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+    try {
+      // Удаляем сообщение
+      await bot.deleteMessage(msg.chat.id, msg.message_id);
 
-    // Удаляем сообщение
-    try { await bot.deleteMessage(chatId, msg.message_id); } catch {}
-
-    // Инициализация warnData
-    if (!warnData[chatId]) warnData[chatId] = {};
-    if (!warnData[chatId][userId]) warnData[chatId][userId] = 0;
-
-    warnData[chatId][userId] += 1;
-
-    if (warnData[chatId][userId] >= 2) {
-      // мут на 5 минут
-      try {
-        await bot.restrictChatMember(chatId, userId, {
-          permissions: { can_send_messages: false },
-          until_date: Math.floor(Date.now()/1000) + muteDuration/1000
-        });
-        await bot.sendMessage(chatId, `🔇 ${userName} получил мут на 5 минут за мат.`);
-      } catch {}
-      warnData[chatId][userId] = 0; // сбрасываем
-    } else {
-      // предупреждение
-      await bot.sendMessage(chatId, `${filterSettings.warnMessage} ${userName}. Варн: ${warnData[chatId][userId]}/2`);
+      // Отправляем предупреждение
+      const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+      await bot.sendMessage(msg.chat.id, `${filterSettings.warnMessage} ${userName}`);
+    } catch (err) {
+      console.error('Ошибка при фильтрации:', err);
     }
   }
 });
@@ -10343,21 +10232,8 @@ bot.on('message', async (msg) => {
 // =========================
 bot.onText(/\/filter (on|off)/, async (msg, match) => {
   if (!await isOwnerOrAdmin(msg)) return;
+
   const arg = match[1];
   filterSettings.enabled = arg === 'on';
   bot.sendMessage(msg.chat.id, `✅ Фильтр матов ${filterSettings.enabled ? 'включен' : 'выключен'}`);
-});
-
-// =========================
-// COMMANDS SLOWMODE
-// =========================
-bot.onText(/\/slowmode (on|off)(?: (\d+))?/, async (msg, match) => {
-  if (!await isOwnerOrAdmin(msg)) return;
-  const arg = match[1];
-  const value = match[2];
-
-  slowModeSettings.enabled = arg === 'on';
-  if (value) slowModeSettings.interval = parseInt(value) * 1000;
-
-  bot.sendMessage(msg.chat.id, `✅ Медленный режим ${slowModeSettings.enabled ? 'включен' : 'выключен'}${value ? `, интервал: ${value} сек` : ''}`);
 });
