@@ -10207,3 +10207,114 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
     bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.response?.description || err.message}`);
   }
 });
+
+// =========================
+// SETTINGS
+// =========================
+const BOT_TOKEN = 'YOUR_BOT_TOKEN';
+const OWNER_ID = 123456789; // твой ID
+const TelegramBot = require('node-telegram-bot-api');
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+
+// =========================
+// HELPER: Проверка прав
+// =========================
+async function isAdminOrOwner(userId, chatId) {
+  if (userId === OWNER_ID) return true; // владелец бота
+  try {
+    const member = await bot.getChatMember(chatId, userId);
+    return ['creator', 'administrator'].includes(member.status);
+  } catch {
+    return false;
+  }
+}
+
+// =========================
+// /kick @username
+// =========================
+bot.onText(/\/kick (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const target = match[1];
+
+  if (!await isAdminOrOwner(userId, chatId)) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+
+  try {
+    await bot.kickChatMember(chatId, target);
+    await bot.sendMessage(chatId, `✅ Пользователь ${target} кикнут из группы`);
+  } catch (err) {
+    await bot.sendMessage(chatId, `❌ Не удалось кикнуть: ${err.response?.body?.description || err.message}`);
+  }
+});
+
+// =========================
+// /ban @username
+// =========================
+bot.onText(/\/ban (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const target = match[1];
+
+  if (!await isAdminOrOwner(userId, chatId)) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+
+  try {
+    await bot.restrictChatMember(chatId, target, { can_send_messages: false });
+    await bot.sendMessage(chatId, `⛔ Пользователь ${target} заблокирован`);
+  } catch (err) {
+    await bot.sendMessage(chatId, `❌ Не удалось заблокировать: ${err.response?.body?.description || err.message}`);
+  }
+});
+
+// =========================
+// /unban @username
+// =========================
+bot.onText(/\/unban (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const target = match[1];
+
+  if (!await isAdminOrOwner(userId, chatId)) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+
+  try {
+    await bot.unbanChatMember(chatId, target);
+    await bot.sendMessage(chatId, `✅ Пользователь ${target} разблокирован`);
+  } catch (err) {
+    await bot.sendMessage(chatId, `❌ Не удалось разблокировать: ${err.response?.body?.description || err.message}`);
+  }
+});
+
+// =========================
+// /pin @username
+// =========================
+bot.onText(/\/pin (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const targetMessageId = msg.reply_to_message?.message_id;
+
+  if (!await isAdminOrOwner(userId, chatId)) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+  if (!targetMessageId) return bot.sendMessage(chatId, '❌ Команда должна быть ответом на сообщение');
+
+  try {
+    await bot.pinChatMessage(chatId, targetMessageId);
+    await bot.sendMessage(chatId, `📌 Сообщение закреплено`);
+  } catch (err) {
+    await bot.sendMessage(chatId, `❌ Не удалось закрепить: ${err.response?.body?.description || err.message}`);
+  }
+});
+
+// =========================
+// /unpin
+// =========================
+bot.onText(/\/unpin/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!await isAdminOrOwner(userId, chatId)) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+
+  try {
+    await bot.unpinChatMessage(chatId);
+    await bot.sendMessage(chatId, `📌 Сообщение откреплено`);
+  } catch (err) {
+    await bot.sendMessage(chatId, `❌ Не удалось открепить: ${err.response?.body?.description || err.message}`);
+  }
+});
