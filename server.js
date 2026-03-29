@@ -10172,13 +10172,16 @@ const filterSettings = {
   warnMessage: '⚠️ Плохое слово обнаружено у'
 };
 
+// Хранилище нарушений
+const warnCounts = {}; // { chatId: { userId: count } }
+
 // =========================
-// НОРМАЛИЗАЦИЯ ТЕКСТА (убираем обходы)
+// НОРМАЛИЗАЦИЯ
 // =========================
 function normalizeText(text) {
   return text
     .toLowerCase()
-    .replace(/[^a-zа-я0-9]/gi, '') // убираем символы (*, #, @ и т.д.)
+    .replace(/[^a-zа-я0-9]/gi, '')
     .replace(/1/g, 'и')
     .replace(/3/g, 'е')
     .replace(/4/g, 'а')
@@ -10186,7 +10189,7 @@ function normalizeText(text) {
 }
 
 // =========================
-// УМНЫЙ ФИЛЬТР МАТОВ
+// ПРОВЕРКА МАТОВ
 // =========================
 function containsBadWord(text) {
   if (!text) return false;
@@ -10201,7 +10204,7 @@ function containsBadWord(text) {
     'сук','муд','ганд','шлюх'
   ];
 
-  return patterns.some(word => clean.includes(word));
+  return patterns.some(w => clean.includes(w));
 }
 
 // =========================
@@ -10217,31 +10220,68 @@ async function isOwnerOrAdmin(msg) {
 }
 
 // =========================
-// FILTER MESSAGE
+// ФИЛЬТР
 // =========================
 bot.on('message', async (msg) => {
   if (msg.chat.type === 'private') return;
-
-  if (await isOwnerOrAdmin(msg)) return;
   if (!filterSettings.enabled || !msg.text) return;
+  if (await isOwnerOrAdmin(msg)) return;
+
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
 
   if (containsBadWord(msg.text)) {
     try {
-      await bot.deleteMessage(msg.chat.id, msg.message_id);
+      await bot.deleteMessage(chatId, msg.message_id);
 
-      const userName = msg.from.username
+      const name = msg.from.username
         ? `@${msg.from.username}`
         : msg.from.first_name;
 
-      await bot.sendMessage(msg.chat.id, `${filterSettings.warnMessage} ${userName}`);
+      // создаем счетчик
+      if (!warnCounts[chatId]) warnCounts[chatId] = {};
+      if (!warnCounts[chatId][userId]) warnCounts[chatId][userId] = 0;
+
+      warnCounts[chatId][userId]++;
+
+      const warns = warnCounts[chatId][userId];
+
+      // 1-2 предупреждение
+      if (warns <= 2) {
+        await bot.sendMessage(chatId, `⚠️ ${name}, не матерись (${warns}/3)`);
+      }
+
+      // 3-4 → мут
+      if (warns >= 3) {
+        const muteMinutes = Math.floor(Math.random() * 5) + 1; // 1-5 мин
+        const until = Math.floor(Date.now() / 1000) + (muteMinutes * 60);
+
+        await bot.restrictChatMember(chatId, userId, {
+          permissions: { can_send_messages: false },
+          until_date: until
+        });
+
+        await bot.sendMessage(chatId, `🔇 ${name} получил мут на ${muteMinutes} мин за маты`);
+
+        // сброс варнов
+        warnCounts[chatId][userId] = 0;
+
+        // сообщение после мута
+        setTimeout(async () => {
+          try {
+            await bot.sendMessage(chatId, `✅ ${name}, мут закончился. Можешь писать, но без матов`);
+          } catch {}
+        }, muteMinutes * 60 * 1000);
+      }
+
     } catch (err) {
-      console.error('Ошибка при фильтрации:', err);
+      console.error('Ошибка:', err);
     }
   }
 });
 
 // =========================
-// COMMAND: МАТЫ ON/OFF
+// КОМАНДА /маты
 // =========================
 bot.onText(/\/маты(?:@\w+)? (on|off)/i, async (msg, match) => {
   if (!await isOwnerOrAdmin(msg)) return;
