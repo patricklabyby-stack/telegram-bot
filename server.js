@@ -10129,32 +10129,33 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
 });
 
 // =========================
-// Отправка сообщения в чат
+// SAY COMMAND
 // =========================
-bot.onText(/\/say (.+)/, async (msg, match) => {
+bot.onText(/\/say(?:@YourBotUsername)?(?: (.+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const text = match[1]; // текст после команды
 
-  // Если команда использована в ответ на сообщение
-  if (msg.reply_to_message) {
-    try {
-      if (msg.reply_to_message.photo) {
-        // Отправка фото с подписью
-        const fileId = msg.reply_to_message.photo.slice(-1)[0].file_id;
-        await bot.sendPhoto(chatId, fileId, { caption: text });
-      } else {
-        // Просто пересылаем текст
-        await bot.sendMessage(chatId, text);
-      }
-    } catch (err) {
-      console.error('Ошибка при отправке ответа:', err);
-    }
-  } else {
-    // Просто отправляем текст
-    try {
+  // Проверка: если нет текста и не ответ на сообщение
+  if (!text && !msg.reply_to_message) {
+    return bot.sendMessage(chatId, '❌ Укажите текст или ответьте на сообщение, чтобы отправить.');
+  }
+
+  try {
+    // Если ответ на сообщение с фото
+    if (msg.reply_to_message && msg.reply_to_message.photo) {
+      const fileId = msg.reply_to_message.photo.slice(-1)[0].file_id;
+      await bot.sendPhoto(chatId, fileId, { caption: text || '' });
+    } 
+    // Если ответ на текстовое сообщение
+    else if (msg.reply_to_message && msg.reply_to_message.text && !text) {
+      await bot.sendMessage(chatId, msg.reply_to_message.text);
+    } 
+    // Если текст указан после команды
+    else {
       await bot.sendMessage(chatId, text);
-    } catch (err) {
-      console.error('Ошибка при отправке сообщения:', err);
     }
+  } catch (err) {
+    console.error('Ошибка при отправке сообщения:', err);
+    bot.sendMessage(chatId, '❌ Не удалось отправить сообщение.');
   }
 });
