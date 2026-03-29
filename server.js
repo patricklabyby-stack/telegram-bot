@@ -10152,29 +10152,19 @@ bot.on('message', async (msg) => {
 
 bot.onText(/\/addmod (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const ownerId = msg.from.id;
-  const botId = (await bot.getMe()).id;
-
-  if (ownerId !== OWNER_ID) return;
-
+  const fromId = msg.from.id;
   const username = match[1].replace('@', '');
-  try {
-    const botMember = await bot.getChatMember(chatId, botId);
 
-    // проверка прав бота
-    if (botMember.status !== 'administrator' || !botMember.can_promote_members) {
-      return bot.sendMessage(chatId, '❌ У меня нет прав назначать модеров');
+  try {
+    const botMember = await bot.getChatMember(chatId, BOT_ID); // BOT_ID = id вашего бота
+    if (!['administrator', 'creator'].includes(botMember.status) || !botMember.can_promote_members) {
+      return bot.sendMessage(chatId, '❌ У меня нет прав назначать модеров!');
     }
 
-    // Получаем пользователя
-    const chatMembers = await bot.getChatAdministrators(chatId); // список админов
-    // Здесь лучше получить userId через username через свой способ
-    // Для примера предположим, что есть функция findUserId(username)
-    const userId = await findUserId(username, chatId);
-    if (!userId) return bot.sendMessage(chatId, '❌ Пользователь не найден в чате');
+    const users = await bot.getChatAdministrators(chatId); // для примера, можно получать id по username
+    // Тут лучше получать id через username (можно через ваш кастомный список или методом поиска)
 
-    // Назначаем админом с ограниченными правами
-    await bot.promoteChatMember(chatId, userId, {
+    await bot.promoteChatMember(chatId, targetUserId, {
       can_change_info: false,
       can_delete_messages: true,
       can_invite_users: true,
@@ -10183,14 +10173,9 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
       can_promote_members: false
     });
 
-    // Сохраняем в список модеров
-    if (!moderators[chatId]) moderators[chatId] = [];
-    moderators[chatId].push(userId);
-
-    bot.sendMessage(chatId, `✅ @${username} теперь модератор`);
-
+    bot.sendMessage(chatId, `✅ @${username} теперь модератор!`);
   } catch (err) {
-    console.error(err);
+    console.error('Ошибка при назначении модератора:', err);
     bot.sendMessage(chatId, '❌ Ошибка при назначении модератора');
   }
 });
