@@ -10150,21 +10150,28 @@ bot.on('message', async (msg) => {
   }
 });
 
+// =========================
+// /addmod
+// =========================
 bot.onText(/\/addmod (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const fromId = msg.from.id;
   const username = match[1].replace('@', '');
 
   try {
-    const botMember = await bot.getChatMember(chatId, BOT_ID); // BOT_ID = id вашего бота
+    // Проверяем бота
+    const botMember = await bot.getChatMember(chatId, BOT_ID); // BOT_ID = ID вашего бота
     if (!['administrator', 'creator'].includes(botMember.status) || !botMember.can_promote_members) {
-      return bot.sendMessage(chatId, '❌ У меня нет прав назначать модеров!');
+      return bot.sendMessage(chatId, '❌ У меня нет прав назначать админов!');
     }
 
-    const users = await bot.getChatAdministrators(chatId); // для примера, можно получать id по username
-    // Тут лучше получать id через username (можно через ваш кастомный список или методом поиска)
+    // Получаем список участников (Telegram API не позволяет напрямую по username искать, но можно использовать getChatMember если знаем id)
+    // В простом варианте — пусть пользователь сам пишет ID:
+    // /addmod 123456789
+    const targetId = parseInt(username); // если пользователь написал ID
+    if (!targetId) return bot.sendMessage(chatId, '❌ Напишите ID пользователя, а не username');
 
-    await bot.promoteChatMember(chatId, targetUserId, {
+    await bot.promoteChatMember(chatId, targetId, {
       can_change_info: false,
       can_delete_messages: true,
       can_invite_users: true,
@@ -10173,7 +10180,7 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
       can_promote_members: false
     });
 
-    bot.sendMessage(chatId, `✅ @${username} теперь модератор!`);
+    bot.sendMessage(chatId, `✅ Пользователь с ID ${targetId} теперь модератор!`);
   } catch (err) {
     console.error('Ошибка при назначении модератора:', err);
     bot.sendMessage(chatId, '❌ Ошибка при назначении модератора');
