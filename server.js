@@ -9937,3 +9937,112 @@ bot.on("polling_error", (error) => {
     console.error("❌ Ошибка запуска:", error);
   }
 })();
+
+// --- АНТИ-СПАМ С АВТОМАТИЧЕСКИМ МУТОМ ---
+const spamSettings = {
+  enabled: true,
+  messageLimit: 5,      // количество сообщений за интервал
+  interval: 5000,       // интервал проверки в мс
+  muteTime: 60000,      // время мута в мс (например 60 секунд)
+};
+
+const userMessageMap = new Map();
+const mutedUsers = new Map();
+const botOwnerId = 7837011810;
+
+// Проверка админ или владелец бота
+async function isAdminOrOwner(ctx) {
+  const userId = ctx.from.id;
+  if (userId === botOwnerId) return true;
+  if (!ctx.chat || ctx.chat.type === 'private') return false;
+  try {
+    const member = await ctx.telegram.getChatMember(ctx.chat.id, userId);
+    return ['creator', 'administrator'].includes(member.status);
+  } catch {
+    return false;
+  }
+}
+
+// Команда для включения/выключения анти-спама
+bot.command('antispam', async (ctx) => {
+  if (!(await isAdminOrOwner(ctx))) {
+    return ctx.reply('❌ Только админы или владелец бота могут использовать эту команду.');
+  }
+  const args = ctx.message.text.split(' ');
+  if (args[1] === 'on') {
+    spamSettings.enabled = true;
+    ctx.reply('✅ Анти-спам включен');
+  } else if (args[1] === 'off') {
+    spamSettings.enabled = false;
+    ctx.reply('❌ Анти-спам выключен');
+  } else {
+    ctx.reply('Используй: /antispam on или /antispam off');
+  }
+});
+
+// Проверка сообщений на спам
+bot.on('text', async (ctx) => {
+  if (!spamSettings.enabled) return;
+
+  const userId = ctx.from.id;
+  const chatId = ctx.chat.id;
+  const now = Date.now();
+
+  // Игнорируем уже замученных пользователей
+  if (mutedUsers.has(userId)) return;
+
+  if (!userMessageMap.has(userId)) {
+    userMessageMap.set(userId, []);
+  }
+
+  const timestamps = userMessageMap.get(userId);
+  timestamps.push(now);
+
+  // Удаляем старые сообщения за интервал
+  while (timestamps.length && now - timestamps[0] > spamSettings.interval) {
+    timestamps.shift();
+  }
+
+  // Если сообщений больше лимита — мутим пользователя
+  if (timestamps.length > spamSettings.messageLimit) {
+    const userName = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+
+    try {
+      // Мут пользователя на chat
+      await ctx.telegram.restrictChatMember(chatId, userId, {
+        permissions: { can_send_messages: false },
+        until_date: Math.floor((now + spamSettings.muteTime) / 1000),
+      });
+
+      mutedUsers.set(userId, true);
+      ctx.reply(`🔇 ${userName} лишается права слова. Причина: спам`);
+
+      // Через время снимаем мут и уведомляем чат
+      setTimeout(async () => {
+        try {
+          await ctx.telegram.restrictChatMember(chatId, userId, {
+            permissions: {
+              can_send_messages: true,
+              can_send_media_messages: true,
+              can_send_polls: true,
+              can_send_other_messages: true,
+              can_add_web_page_previews: true,
+              can_change_info: false,
+              can_invite_users: true,
+              can_pin_messages: false,
+            },
+          });
+          mutedUsers.delete(userId);
+          ctx.reply(`✅ ${userName} может снова писать в чате`);
+        } catch (err) {
+          console.error('Ошибка при снятии мута:', err);
+        }
+      }, spamSettings.muteTime);
+    } catch (err) {
+      console.error('Ошибка при муте:', err);
+    }
+
+    // Очищаем историю сообщений после мута
+    userMessageMap.set(userId, []);
+  }
+});
