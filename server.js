@@ -10249,12 +10249,57 @@ bot.onText(/\/напомни (.+)/i, (msg, match) => {
 
     bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
 
-    const timer = setTimeout(() => {
-        bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
-        // удаляем таймер из массива после срабатывания
-        const index = reminders.indexOf(timer);
-        if (index > -1) reminders.splice(index, 1);
-    }, delay);
+const fromUser = msg.from.first_name; // берём имя, а не username
 
-    reminders.push(timer);
+const timer = setTimeout(() => {
+    bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
+    
+    // удаляем таймер из массива после срабатывания
+    const index = reminders.indexOf(timer);
+    if (index > -1) reminders.splice(index, 1);
+}, delay);
+
+reminders.push(timer);
+ 
+  const birthdays = {}; // { userId: { name, day, month } }
+
+// Команда установить день рождения
+bot.onText(/\/деньрождения (\d{1,2})\.(\d{1,2})/, (msg, match) => {
+    const userId = msg.from.id;
+    const name = msg.from.first_name;
+    const day = parseInt(match[1]);
+    const month = parseInt(match[2]);
+
+    if (day < 1 || day > 31 || month < 1 || month > 12) {
+        bot.sendMessage(msg.chat.id, 'Неверная дата. Используй формат ДД.ММ, например 25.12');
+        return;
+    }
+
+    birthdays[userId] = { name, day, month };
+    bot.sendMessage(msg.chat.id, `✅ День рождения установлен: ${day}.${month}`);
 });
+
+// Функция проверки дней рождения каждый день
+function checkBirthdays() {
+    const now = new Date();
+    const todayDay = now.getDate();
+    const todayMonth = now.getMonth() + 1; // getMonth() возвращает 0-11
+
+    for (const userId in birthdays) {
+        const b = birthdays[userId];
+        if (b.day === todayDay && b.month === todayMonth) {
+            bot.sendMessage(
+                userId, // можно в личку или в чат
+                `🎉 С Днём Рождения, ${b.name}!`
+            );
+        }
+    }
+}
+
+// Запуск проверки каждый день в 9:00 утра (например)
+setInterval(() => {
+    const now = new Date();
+    if (now.getHours() === 9 && now.getMinutes() === 0) {
+        checkBirthdays();
+    }
+}, 60 * 1000); // проверяем каждую минуту
