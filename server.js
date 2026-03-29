@@ -10169,27 +10169,43 @@ bot.on('message', async (msg) => {
 // =========================
 const filterSettings = {
   enabled: true,
-  warnMessage: '⚠️ Плохое слово обнаружено у',
-  customWords: ['дурак','идиот','слово1','слово2']
+  warnMessage: '⚠️ Плохое слово обнаружено у'
 };
 
 // =========================
-// HELPER: ПРОВЕРКА ПЛОХИХ СЛОВ
+// НОРМАЛИЗАЦИЯ ТЕКСТА (убираем обходы)
 // =========================
-function containsBadWord(text) {
-  if (!text) return false;
-  text = text.toLowerCase();
-
-  for (const word of filterSettings.customWords) {
-    if (text.includes(word)) return true;
-  }
-
-  const regex = /(х.{0,2}р.{0,2}н)|(бл.{0,2}н)|(иди.{0,2}т)/i;
-  return regex.test(text);
+function normalizeText(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-zа-я0-9]/gi, '') // убираем символы (*, #, @ и т.д.)
+    .replace(/1/g, 'и')
+    .replace(/3/g, 'е')
+    .replace(/4/g, 'а')
+    .replace(/0/g, 'о');
 }
 
 // =========================
-// HELPER: ПРОВЕРКА АДМИНА
+// УМНЫЙ ФИЛЬТР МАТОВ
+// =========================
+function containsBadWord(text) {
+  if (!text) return false;
+
+  const clean = normalizeText(text);
+
+  const patterns = [
+    'хуй','хуе','хуя','хер',
+    'пизд','пезд','пизж',
+    'бля','бляд',
+    'еб','ёб','еба',
+    'сук','муд','ганд','шлюх'
+  ];
+
+  return patterns.some(word => clean.includes(word));
+}
+
+// =========================
+// ПРОВЕРКА АДМИНА
 // =========================
 async function isOwnerOrAdmin(msg) {
   try {
