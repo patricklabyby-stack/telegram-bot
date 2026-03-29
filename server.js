@@ -10226,10 +10226,14 @@ function parseTime(input) {
     return null;
 }
 
-// Команда /напомни
+// Глобальные массивы
+const reminders = []; // для напоминаний
+const birthdays = {}; // { userId: { name, day, month, chatId } }
+
+// ======= Команда /напомни =======
 bot.onText(/\/напомни (.+)/i, (msg, match) => {
     const chatId = msg.chat.id;
-    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const fromUser = msg.from.first_name; // имя пользователя
     const input = match[1];
 
     const splitIndex = input.indexOf(' ');
@@ -10249,21 +10253,17 @@ bot.onText(/\/напомни (.+)/i, (msg, match) => {
 
     bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
 
-const fromUser = msg.from.first_name; // берём имя, а не username
+    const timer = setTimeout(() => {
+        bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
+        // удаляем таймер из массива после срабатывания
+        const index = reminders.indexOf(timer);
+        if (index > -1) reminders.splice(index, 1);
+    }, delay);
 
-const timer = setTimeout(() => {
-    bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
-    
-    // удаляем таймер из массива после срабатывания
-    const index = reminders.indexOf(timer);
-    if (index > -1) reminders.splice(index, 1);
-}, delay);
+    reminders.push(timer);
+});
 
-reminders.push(timer);
- 
-  const birthdays = {}; // { userId: { name, day, month } }
-
-// Команда установить день рождения
+// ======= Команда /деньрождения =======
 bot.onText(/\/деньрождения (\d{1,2})\.(\d{1,2})/, (msg, match) => {
     const userId = msg.from.id;
     const name = msg.from.first_name;
@@ -10275,11 +10275,11 @@ bot.onText(/\/деньрождения (\d{1,2})\.(\d{1,2})/, (msg, match) => {
         return;
     }
 
-    birthdays[userId] = { name, day, month };
+    birthdays[userId] = { name, day, month, chatId: msg.chat.id };
     bot.sendMessage(msg.chat.id, `✅ День рождения установлен: ${day}.${month}`);
 });
 
-// Функция проверки дней рождения каждый день
+// ======= Проверка дней рождения =======
 function checkBirthdays() {
     const now = new Date();
     const todayDay = now.getDate();
@@ -10288,18 +10288,16 @@ function checkBirthdays() {
     for (const userId in birthdays) {
         const b = birthdays[userId];
         if (b.day === todayDay && b.month === todayMonth) {
-            bot.sendMessage(
-                userId, // можно в личку или в чат
-                `🎉 С Днём Рождения, ${b.name}!`
-            );
+            bot.sendMessage(b.chatId, `🎉 С Днём Рождения, ${b.name}!`);
         }
     }
 }
 
-// Запуск проверки каждый день в 9:00 утра (например)
+// ======= Таймер для проверки =======
+// Проверяем каждый день каждые 60 секунд и поздравляем в 9:00 утра
 setInterval(() => {
     const now = new Date();
     if (now.getHours() === 9 && now.getMinutes() === 0) {
         checkBirthdays();
     }
-}, 60 * 1000); // проверяем каждую минуту
+}, 60 * 1000);
