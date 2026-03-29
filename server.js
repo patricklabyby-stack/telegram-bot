@@ -10128,7 +10128,7 @@ bot.onText(/\/say (.+)/, async (msg, match) => {
 });
 
 // =========================
-// DELETE MESSAGE IN GROUP (Admins Only)
+// DELETE REPLIED MESSAGE (Admins Only)
 // =========================
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
@@ -10137,10 +10137,10 @@ bot.on('message', async (msg) => {
   // Проверяем, что это группа
   if (msg.chat.type === 'private') return;
 
-  // Проверяем, что сообщение начинается с "-сообщение"
-  if (!msg.text || !msg.text.startsWith('-сообщение')) return;
+  // Сообщение должно начинаться с "-сообщение" и быть ответом
+  if (!msg.text || !msg.text.startsWith('-сообщение') || !msg.reply_to_message) return;
 
-  // Функция проверки: владелец бота или админ группы
+  // Проверка: админ, владелец группы или владелец бота
   async function isAdminOrOwner(userId, chatId) {
     if (userId === OWNER_ID) return true; // владелец бота
     try {
@@ -10155,8 +10155,10 @@ bot.on('message', async (msg) => {
   if (!allowed) return; // если не админ и не владелец, ничего не делать
 
   try {
-    await bot.deleteMessage(chatId, msg.message_id);
-    console.log(`Сообщение от ${userId} удалено (только админ/владелец)`);
+    // Удаляем сообщение, на которое был ответ
+    const targetMessageId = msg.reply_to_message.message_id;
+    await bot.deleteMessage(chatId, targetMessageId);
+    console.log(`Сообщение ${targetMessageId} удалено по команде от ${userId}`);
   } catch (err) {
     console.error('Ошибка при удалении сообщения:', err);
   }
