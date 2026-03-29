@@ -10165,132 +10165,51 @@ bot.on('message', async (msg) => {
 });
 
 // =========================
-// FILTER SETTINGS
+// FILTER SETTINGS PER CHAT
 // =========================
-const filterSettings = {
-  enabled: true,
-  warnMessage: '⚠️ Плохое слово обнаружено у'
-};
-
-// Хранилище нарушений
-const warnCounts = {}; // { chatId: { userId: count } }
-
-// =========================
-// НОРМАЛИЗАЦИЯ
-// =========================
-function normalizeText(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-zа-я0-9]/gi, '')
-    .replace(/1/g, 'и')
-    .replace(/3/g, 'е')
-    .replace(/4/g, 'а')
-    .replace(/0/g, 'о');
-}
-
-// =========================
-// ПРОВЕРКА МАТОВ
-// =========================
-function containsBadWord(text) {
-  if (!text) return false;
-
-  const clean = normalizeText(text);
-
-  const patterns = [
-    'хуй','хуе','хуя','хер',
-    'пизд','пезд','пизж',
-    'бля','бляд',
-    'еб','ёб','еба',
-    'сук','муд','ганд','шлюх'
-  ];
-
-  return patterns.some(w => clean.includes(w));
-}
-
-// =========================
-// ПРОВЕРКА АДМИНА
-// =========================
-async function isOwnerOrAdmin(msg) {
-  try {
-    const chatMember = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return ['creator', 'administrator'].includes(chatMember.status);
-  } catch {
-    return false;
-  }
-}
+const filterSettings = {}; // { chatId: { enabled: true } }
 
 // =========================
 // ФИЛЬТР
 // =========================
 bot.on('message', async (msg) => {
   if (msg.chat.type === 'private') return;
-  if (!filterSettings.enabled || !msg.text) return;
+  if (!msg.text) return;
   if (await isOwnerOrAdmin(msg)) return;
 
   const chatId = msg.chat.id;
-  const userId = msg.from.id;
+
+  // Если для группы еще нет настроек — включаем по умолчанию
+  if (!filterSettings[chatId]) filterSettings[chatId] = { enabled: true };
+
+  if (!filterSettings[chatId].enabled) return;
 
   if (containsBadWord(msg.text)) {
     try {
       await bot.deleteMessage(chatId, msg.message_id);
-
-      const name = msg.from.username
-        ? `@${msg.from.username}`
-        : msg.from.first_name;
-
-      // создаем счетчик
-      if (!warnCounts[chatId]) warnCounts[chatId] = {};
-      if (!warnCounts[chatId][userId]) warnCounts[chatId][userId] = 0;
-
-      warnCounts[chatId][userId]++;
-
-      const warns = warnCounts[chatId][userId];
-
-      // 1-2 предупреждение
-      if (warns <= 2) {
-        await bot.sendMessage(chatId, `⚠️ ${name}, не матерись (${warns}/3)`);
-      }
-
-      // 3-4 → мут
-      if (warns >= 3) {
-        const muteMinutes = Math.floor(Math.random() * 5) + 1; // 1-5 мин
-        const until = Math.floor(Date.now() / 1000) + (muteMinutes * 60);
-
-        await bot.restrictChatMember(chatId, userId, {
-          permissions: { can_send_messages: false },
-          until_date: until
-        });
-
-        await bot.sendMessage(chatId, `🔇 ${name} получил мут на ${muteMinutes} мин за маты`);
-
-        // сброс варнов
-        warnCounts[chatId][userId] = 0;
-
-        // сообщение после мута
-        setTimeout(async () => {
-          try {
-            await bot.sendMessage(chatId, `✅ ${name}, мут закончился. Можешь писать, но без матов`);
-          } catch {}
-        }, muteMinutes * 60 * 1000);
-      }
-
+      const name = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+      await bot.sendMessage(chatId, `⚠️ Плохое слово обнаружено у ${name}`);
     } catch (err) {
-      console.error('Ошибка:', err);
+      console.error('Ошибка при фильтрации:', err);
     }
   }
 });
 
 // =========================
-// КОМАНДА /маты
+// КОМАНДА /маты ON/OFF ДЛЯ КАЖДОЙ ГРУППЫ
 // =========================
 bot.onText(/\/маты(?:@\w+)? (on|off)/i, async (msg, match) => {
   if (!await isOwnerOrAdmin(msg)) return;
 
+  const chatId = msg.chat.id;
   const arg = match[1].toLowerCase();
-  filterSettings.enabled = arg === 'on';
+
+  if (!filterSettings[chatId]) filterSettings[chatId] = {};
+
+  filterSettings[chatId].enabled = arg === 'on';
 
   bot.sendMessage(
-    msg.chat.id,
-    `✅ Фильтр матов ${filterSettings.enabled ? 'включен' : 'выключен'}`
+    chatId,
+    `✅ Фильтр матов ${filterSettings[chatId].enabled ? 'включен' : 'выключен'}`
   );
 });
