@@ -10168,9 +10168,9 @@ bot.on('message', async (msg) => {
 // FILTER SETTINGS
 // =========================
 const filterSettings = {
-  enabled: true,              // включение/выключения фильтра
-  warnMessage: '⚠️ Плохое слово обнаружено у', 
-  customWords: ['дурак','идиот','слово1','слово2'] // свой список запрещённых слов
+  enabled: true,
+  warnMessage: '⚠️ Плохое слово обнаружено у',
+  customWords: ['дурак','идиот','слово1','слово2']
 };
 
 // =========================
@@ -10180,12 +10180,10 @@ function containsBadWord(text) {
   if (!text) return false;
   text = text.toLowerCase();
 
-  // Проверка по ручному списку
   for (const word of filterSettings.customWords) {
     if (text.includes(word)) return true;
   }
 
-  // Автоматическая проверка обходов (х*р, бл#н и т.д.)
   const regex = /(х.{0,2}р.{0,2}н)|(бл.{0,2}н)|(иди.{0,2}т)/i;
   return regex.test(text);
 }
@@ -10206,20 +10204,19 @@ async function isOwnerOrAdmin(msg) {
 // FILTER MESSAGE
 // =========================
 bot.on('message', async (msg) => {
-  // Только для групп
   if (msg.chat.type === 'private') return;
 
-  // Игнор админов и владельца бота
   if (await isOwnerOrAdmin(msg)) return;
   if (!filterSettings.enabled || !msg.text) return;
 
   if (containsBadWord(msg.text)) {
     try {
-      // Удаляем сообщение
       await bot.deleteMessage(msg.chat.id, msg.message_id);
 
-      // Отправляем предупреждение
-      const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+      const userName = msg.from.username
+        ? `@${msg.from.username}`
+        : msg.from.first_name;
+
       await bot.sendMessage(msg.chat.id, `${filterSettings.warnMessage} ${userName}`);
     } catch (err) {
       console.error('Ошибка при фильтрации:', err);
@@ -10228,12 +10225,16 @@ bot.on('message', async (msg) => {
 });
 
 // =========================
-// COMMANDS TOGGLE FILTER
+// COMMAND: МАТЫ ON/OFF
 // =========================
-bot.onText(/\/filter (on|off)/, async (msg, match) => {
+bot.onText(/\/маты(?:@\w+)? (on|off)/i, async (msg, match) => {
   if (!await isOwnerOrAdmin(msg)) return;
 
-  const arg = match[1];
+  const arg = match[1].toLowerCase();
   filterSettings.enabled = arg === 'on';
-  bot.sendMessage(msg.chat.id, `✅ Фильтр матов ${filterSettings.enabled ? 'включен' : 'выключен'}`);
+
+  bot.sendMessage(
+    msg.chat.id,
+    `✅ Фильтр матов ${filterSettings.enabled ? 'включен' : 'выключен'}`
+  );
 });
