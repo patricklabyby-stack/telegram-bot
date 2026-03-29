@@ -10149,3 +10149,48 @@ bot.on('message', async (msg) => {
     }
   }
 });
+
+bot.onText(/\/addmod (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const ownerId = msg.from.id;
+  const botId = (await bot.getMe()).id;
+
+  if (ownerId !== OWNER_ID) return;
+
+  const username = match[1].replace('@', '');
+  try {
+    const botMember = await bot.getChatMember(chatId, botId);
+
+    // проверка прав бота
+    if (botMember.status !== 'administrator' || !botMember.can_promote_members) {
+      return bot.sendMessage(chatId, '❌ У меня нет прав назначать модеров');
+    }
+
+    // Получаем пользователя
+    const chatMembers = await bot.getChatAdministrators(chatId); // список админов
+    // Здесь лучше получить userId через username через свой способ
+    // Для примера предположим, что есть функция findUserId(username)
+    const userId = await findUserId(username, chatId);
+    if (!userId) return bot.sendMessage(chatId, '❌ Пользователь не найден в чате');
+
+    // Назначаем админом с ограниченными правами
+    await bot.promoteChatMember(chatId, userId, {
+      can_change_info: false,
+      can_delete_messages: true,
+      can_invite_users: true,
+      can_restrict_members: true,
+      can_pin_messages: true,
+      can_promote_members: false
+    });
+
+    // Сохраняем в список модеров
+    if (!moderators[chatId]) moderators[chatId] = [];
+    moderators[chatId].push(userId);
+
+    bot.sendMessage(chatId, `✅ @${username} теперь модератор`);
+
+  } catch (err) {
+    console.error(err);
+    bot.sendMessage(chatId, '❌ Ошибка при назначении модератора');
+  }
+});
