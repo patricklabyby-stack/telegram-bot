@@ -10207,24 +10207,3 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
     bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.response?.description || err.message}`);
   }
 });
-
-// =========================
-// SETTINGS
-// =========================
-const BOT_TOKEN = 'YOUR_BOT_TOKEN';
-const OWNER_ID = 123456789; // твой ID
-const TelegramBot = require('node-telegram-bot-api');
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-
-// =========================
-// HELPER: Проверка прав
-// =========================
-async function isAdminOrOwner(userId, chatId) {
-  if (userId === OWNER_ID) return true; // владелец бота
-  try {
-    const member = await bot.getChatMember(chatId, userId);
-    return ['creator', 'administrator'].includes(member.status);
-  } catch {
-    return false;
-  }
-}
