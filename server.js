@@ -9944,6 +9944,22 @@ bot.on("polling_error", (error) => {
 })();
 
 // =========================
+// START COMMAND
+// =========================
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  const userName = msg.from.first_name || "друг";
+
+  bot.sendMessage(
+    chatId,
+    `👋 Привет, ${userName}!\n\n` +
+    `🔥 Добро пожаловать в мини!\n\n` +
+    `📌 Напиши /help, чтобы увидеть все команды.`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// =========================
 // АНТИ-СПАМ С МУТОМ (Node-Telegram-Bot-API)
 // =========================
 const spamSettings = {
