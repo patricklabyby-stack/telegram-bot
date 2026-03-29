@@ -4624,9 +4624,7 @@ const rpCommands = {
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
 
-  bot.sendMessage(
-    chatId,
-    `🔥 <b>Мини Модератор — бот для Telegram групп</b>
+  `🔥 <b>Мини Модератор — бот для Telegram групп</b>
 
 <b>📚 Разделы бота:</b>
 
