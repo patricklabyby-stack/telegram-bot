@@ -10159,6 +10159,7 @@ const mutedUsersPerChat = {};     // хранение мутов
 
 const BOT_TOKEN = 'YOUR_BOT_TOKEN';
 const OWNER_ID = 123456789; // вставь сюда свой ID
+
 const TelegramBot = require('node-telegram-bot-api');
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
@@ -10173,7 +10174,7 @@ function containsBadWord(text) {
 }
 
 // =========================
-// HELPER: ПРОВЕРКА АДМИНА
+// HELPER: ПРОВЕРКА АДМИНА/ВЛАДЕЛЬЦА
 // =========================
 async function isOwnerOrAdmin(msg) {
   try {
@@ -10190,31 +10191,30 @@ async function isOwnerOrAdmin(msg) {
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from?.id;
+
   if (!userId || msg.chat.type === 'private') return;
 
-  // Инициализация
+  // Инициализация настроек
   if (!filterSettingsPerChat[chatId]) filterSettingsPerChat[chatId] = { enabled: true };
   if (!warnCountsPerChat[chatId]) warnCountsPerChat[chatId] = {};
   if (!mutedUsersPerChat[chatId]) mutedUsersPerChat[chatId] = {};
 
-  // Игнор админов
-  if (await isOwnerOrAdmin(msg)) return;
+  // Игнор админов и владельца
+  if (await isOwnerOrAdmin(msg) || userId === OWNER_ID) return;
   if (!filterSettingsPerChat[chatId].enabled) return;
   if (!msg.text) return;
 
   // Проверка на мат
   if (containsBadWord(msg.text)) {
     try {
-      // Удаляем сообщение
       await bot.deleteMessage(chatId, msg.message_id);
 
-      // Варн
       if (!warnCountsPerChat[chatId][userId]) warnCountsPerChat[chatId][userId] = 0;
       warnCountsPerChat[chatId][userId] += 1;
       const warnCount = warnCountsPerChat[chatId][userId];
       const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
 
-      // Мут на 1-5 минут при 3 и более варнах
+      // Мут при 3 и более варнах
       if (warnCount >= 3) {
         const muteTime = Math.floor(Math.random() * 5 + 1) * 60;
         mutedUsersPerChat[chatId][userId] = Date.now() + muteTime * 1000;
@@ -10227,9 +10227,7 @@ bot.on('message', async (msg) => {
             await bot.restrictChatMember(chatId, userId, { can_send_messages: true });
             delete mutedUsersPerChat[chatId][userId];
             await bot.sendMessage(chatId, `✅ ${userName} снова может писать, но без матов!`);
-          } catch (err) {
-            console.error(err);
-          }
+          } catch (err) { console.error(err); }
         }, muteTime * 1000);
       } else {
         await bot.sendMessage(chatId, `⚠️ Плохое слово обнаружено у ${userName}. Варн: ${warnCount}/3`);
@@ -10244,7 +10242,7 @@ bot.on('message', async (msg) => {
 // COMMAND: МАТЫ ON/OFF
 // =========================
 bot.onText(/\/маты(?:@\w+)? (on|off)/i, async (msg, match) => {
-  if (!await isOwnerOrAdmin(msg)) return;
+  if (!await isOwnerOrAdmin(msg) && msg.from.id !== OWNER_ID) return;
 
   const chatId = msg.chat.id;
   const arg = match[1].toLowerCase();
