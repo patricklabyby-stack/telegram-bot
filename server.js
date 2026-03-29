@@ -10239,24 +10239,3 @@ const timer = setTimeout(() => {
 }, delay);
 
 reminders.push(timer);
-
-// Команда установить день рождения
-bot.onText(/\/деньрождения (\d{1,2})\.(\d{1,2})/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const name = msg.from.first_name;
-    const day = parseInt(match[1]);
-    const month = parseInt(match[2]);
-
-    if (day < 1 || day > 31 || month < 1 || month > 12) {
-        bot.sendMessage(chatId, 'Неверная дата. Используй формат ДД.ММ, например 25.12');
-        return;
-    }
-
-    bot.sendMessage(chatId, `✅ День рождения установлен: ${day}.${month}`);
-
-    // Для теста: сразу поздравление, если день совпадает с сегодняшним
-    const today = new Date();
-    if (today.getDate() === day && today.getMonth() + 1 === month) {
-        bot.sendMessage(chatId, `🎉 С Днём Рождения, ${name}!`);
-    }
-});
