@@ -10756,3 +10756,182 @@ bot.on("message", async (msg) => {
     console.error("Антимат error:", error.message);
   }
 });
+
+/* ===================== ПРОСТОЕ ПРИВЕТСТВИЕ ===================== */
+
+const fs = require("fs");
+const path = require("path");
+
+const OWNER_IDS = [7837011810];
+const WELCOME_DB_PATH = path.join(__dirname, "welcome_data.json");
+
+let welcomeData = {
+  chats: {}
+};
+
+/* ---------- База ---------- */
+
+function loadWelcomeData() {
+  try {
+    if (fs.existsSync(WELCOME_DB_PATH)) {
+      const raw = fs.readFileSync(WELCOME_DB_PATH, "utf8");
+      const parsed = JSON.parse(raw);
+
+      if (parsed && typeof parsed === "object") {
+        welcomeData = {
+          chats: parsed.chats || {}
+        };
+      }
+    }
+  } catch (error) {
+    console.error("loadWelcomeData error:", error.message);
+  }
+}
+
+function saveWelcomeData() {
+  try {
+    fs.writeFileSync(WELCOME_DB_PATH, JSON.stringify(welcomeData, null, 2), "utf8");
+  } catch (error) {
+    console.error("saveWelcomeData error:", error.message);
+  }
+}
+
+loadWelcomeData();
+
+/* ---------- Утилиты ---------- */
+
+function isWelcomeOwner(userId) {
+  return OWNER_IDS.includes(Number(userId));
+}
+
+async function canUseWelcomeCommands(msg) {
+  try {
+    if (!msg || !msg.from || !msg.chat) return false;
+
+    if (isWelcomeOwner(msg.from.id)) {
+      return true;
+    }
+
+    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (error) {
+    console.error("canUseWelcomeCommands error:", error.message);
+    return false;
+  }
+}
+
+function getWelcomeState(chatId) {
+  const key = String(chatId);
+
+  if (!welcomeData.chats[key]) {
+    welcomeData.chats[key] = {
+      enabled: true
+    };
+    saveWelcomeData();
+  }
+
+  return welcomeData.chats[key];
+}
+
+function setWelcomeEnabled(chatId, enabled) {
+  const state = getWelcomeState(chatId);
+  state.enabled = Boolean(enabled);
+  saveWelcomeData();
+}
+
+/* ---------- Команды ---------- */
+
+bot.onText(/^\/welcomeon(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await canUseWelcomeCommands(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    setWelcomeEnabled(msg.chat.id, true);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      "✅ Приветствие включено."
+    );
+  } catch (error) {
+    console.error("/welcomeon error:", error.message);
+  }
+});
+
+bot.onText(/^\/welcomeoff(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await canUseWelcomeCommands(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    setWelcomeEnabled(msg.chat.id, false);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      "❌ Приветствие выключено."
+    );
+  } catch (error) {
+    console.error("/welcomeoff error:", error.message);
+  }
+});
+
+bot.onText(/^\/welcomestatus(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await canUseWelcomeCommands(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    const state = getWelcomeState(msg.chat.id);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `Статус приветствия: ${state.enabled ? "✅ включено" : "❌ выключено"}`
+    );
+  } catch (error) {
+    console.error("/welcomestatus error:", error.message);
+  }
+});
+
+/* ---------- Автоприветствие ---------- */
+
+bot.on("message", async (msg) => {
+  try {
+    if (!msg || !msg.chat) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+    if (!Array.isArray(msg.new_chat_members) || msg.new_chat_members.length === 0) return;
+
+    const state = getWelcomeState(msg.chat.id);
+    if (!state.enabled) return;
+
+    for (const user of msg.new_chat_members) {
+      if (!user || user.is_bot) continue;
+
+      const firstName = user.first_name || "друг";
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `👋 Привет, ${firstName}! Добро пожаловать в группу.`
+      );
+    }
+  } catch (error) {
+    console.error("welcome message error:", error.message);
+  }
+});
