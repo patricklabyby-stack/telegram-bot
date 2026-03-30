@@ -10226,40 +10226,15 @@ function parseTime(input) {
     return null;
 }
 
-// ======= Напоминания =======
-const reminders = []; // массив для хранения активных таймеров
-
-function parseTime(input) {
-    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
-    const match = input.match(regex);
-    if (!match) return null;
-
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-
-    if (unit.startsWith('сек')) return value * 1000;
-    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
-    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
-    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
-    return null;
-}
-
-// Сообщения с "напоминание"
-bot.on('message', (msg) => {
+// Команда /напомни
+bot.onText(/\/напомни (.+)/i, (msg, match) => {
     const chatId = msg.chat.id;
     const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
-    const text = msg.text;
-
-    if (!text) return;
-
-    // проверяем, начинается ли сообщение с "напоминание "
-    if (!text.toLowerCase().startsWith('напоминание ')) return;
-
-    const input = text.slice('напоминание '.length).trim();
+    const input = match[1];
 
     const splitIndex = input.indexOf(' ');
     if (splitIndex === -1) {
-        bot.sendMessage(chatId, 'Неверный формат. Пример: напоминание 5мин Поспать');
+        bot.sendMessage(chatId, 'Неверный формат. Пример: /напомни 5мин Поспать');
         return;
     }
 
@@ -10276,6 +10251,7 @@ bot.on('message', (msg) => {
 
     const timer = setTimeout(() => {
         bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
+        // удаляем таймер из массива после срабатывания
         const index = reminders.indexOf(timer);
         if (index > -1) reminders.splice(index, 1);
     }, delay);
