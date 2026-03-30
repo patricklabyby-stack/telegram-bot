@@ -10249,24 +10249,25 @@ bot.onText(/^напомни (.+)/i, (msg, match) => {
 
     bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
 
-    const reminder = {
-        id: Date.now(),
-        userId,
-        userName,
-        text: reminderText,
-        time: timeStr
-    };
+const reminder = {
+    id: Date.now(),
+    userId,
+    userName,
+    text: reminderText,
+    time: timeStr,
+    chatId,
+    endTime: Date.now() + delay
+};
 
-    const timer = setTimeout(() => {
-        bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
+const timer = setTimeout(() => {
+    bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
 
-        const index = reminders.findIndex(r => r.id === reminder.id);
-        if (index > -1) reminders.splice(index, 1);
-    }, delay);
+    const index = reminders.findIndex(r => r.id === reminder.id);
+    if (index > -1) reminders.splice(index, 1);
+}, delay);
 
-    reminder.timer = timer;
-    reminders.push(reminder);
-});
+reminder.timer = timer;
+reminders.push(reminder);
 
 bot.onText(/\/напоминания/, (msg) => {
     const chatId = msg.chat.id;
@@ -10282,7 +10283,19 @@ bot.onText(/\/напоминания/, (msg) => {
     let text = '📋 Твои напоминания:\n\n';
 
     userReminders.forEach((r, i) => {
-        text += `${i + 1}. Через ${r.time} — ${r.text}\n`;
+        const remaining = r.endTime - Date.now();
+
+        let timeLeft = 'скоро';
+
+        if (remaining > 0) {
+            const sec = Math.floor(remaining / 1000) % 60;
+            const min = Math.floor(remaining / (1000 * 60)) % 60;
+            const hrs = Math.floor(remaining / (1000 * 60 * 60));
+
+            timeLeft = `${hrs}ч ${min}м ${sec}с`;
+        }
+
+        text += `${i + 1}. (${timeLeft}) — ${r.text}\n`;
     });
 
     bot.sendMessage(chatId, text);
