@@ -10208,66 +10208,34 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
   }
 });
 
-// ======= Напоминания с сохранением (без /) =======
-const fs = require('fs');
-const path = './reminders.json';
-let reminders = [];
+// Команда напомни без /
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const text = msg.text;
 
-// Загружаем напоминания при старте
-if (fs.existsSync(path)) {
-    const data = fs.readFileSync(path, 'utf-8');
-    reminders = JSON.parse(data);
-    const now = Date.now();
-    reminders.forEach(reminder => {
-        const delay = reminder.time - now;
-        if (delay > 0) {
-            startReminder(reminder);
-        } else {
-            console.log(`Пропущенное напоминание: "${reminder.text}"`);
-        }
-    });
-}
+    if (!text.toLowerCase().startsWith('напомни ')) return;
 
-function saveReminders() {
-    fs.writeFileSync(path, JSON.stringify(reminders, null, 2));
-}
+    const input = text.slice('напомни '.length);
+    const splitIndex = input.indexOf(' ');
+    if (splitIndex === -1) {
+        bot.sendMessage(chatId, 'Неверный формат. Пример: напомни 5мин Поспать');
+        return;
+    }
 
-function parseTime(input) {
-    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
-    const match = input.match(regex);
-    if (!match) return null;
+    const timeStr = input.slice(0, splitIndex);
+    const reminderText = input.slice(splitIndex + 1);
 
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-
-    if (unit.startsWith('сек')) return value * 1000;
-    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
-    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
-    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
-    return null;
-}
-
-// Функция запуска таймера
-function startReminder(reminder) {
-    const delay = reminder.time - Date.now();
-    reminder.timer = setTimeout(() => {
-        console.log(`⏰ Напоминание: ${reminder.text}`);
-        // удаляем из массива
-        reminders = reminders.filter(r => r !== reminder);
-        saveReminders();
-    }, delay);
-}
-
-// Функция добавления нового напоминания
-function напомни(timeStr, text) {
     const delay = parseTime(timeStr);
     if (!delay) {
-        console.log('Не удалось распознать время. Используй сек, мин, ч, д.');
+        bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
         return;
     }
 
     const reminder = {
-        text,
+        chatId,
+        user: fromUser,
+        text: reminderText,
         time: Date.now() + delay
     };
 
@@ -10275,37 +10243,5 @@ function напомни(timeStr, text) {
     saveReminders();
     startReminder(reminder);
 
-    console.log(`✅ Напоминание установлено на ${timeStr}: "${text}"`);
-}
-
-// Функция показа всех активных напоминаний
-function показатьНапоминания() {
-    if (!reminders.length) {
-        console.log("Нет активных напоминаний.");
-        return;
-    }
-
-    console.log("Активные напоминания:");
-    reminders.forEach((r, i) => {
-        const remaining = Math.max(0, r.time - Date.now());
-        let sec = Math.floor((remaining / 1000) % 60);
-        let min = Math.floor((remaining / 1000 / 60) % 60);
-        let hour = Math.floor((remaining / 1000 / 60 / 60) % 24);
-        let day = Math.floor(remaining / 1000 / 60 / 60 / 24);
-
-        let timeStr = '';
-        if (day) timeStr += `${day}д `;
-        if (hour) timeStr += `${hour}ч `;
-        if (min) timeStr += `${min}мин `;
-        if (sec) timeStr += `${sec}сек`;
-
-        console.log(`${i + 1}. "${r.text}" — через ${timeStr.trim()}`);
-    });
-}
-
-// ===== Примеры использования =====
-напомни("5сек", "Проверить почту");
-напомни("10сек", "Выпить воды");
-
-// Через 3 секунды показать активные напоминания
-setTimeout(показатьНапоминания, 3000);
+    bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+});
