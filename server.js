@@ -10280,18 +10280,56 @@ bot.onText(/\/мои_напоминания/i, (msg) => {
     bot.sendMessage(chatId, response);
 });
 
-/* ===================== АНТИМАТ FULL ===================== */
+/* ===================== АНТИМАТ С СОХРАНЕНИЕМ ===================== */
+
+const fs = require("fs");
+const path = require("path");
 
 const OWNER_IDS = [7837011810];
 
-const MAT_FILTER_STATE = new Map();      // chatId -> { enabled: boolean }
-const MAT_USER_WARNINGS = new Map();     // `${chatId}_${userId}` -> { count, lastTime }
-const MAT_MUTE_TIMERS = new Map();       // `${chatId}_${userId}` -> timeout
-
-const MAT_WARN_LIMIT = 3; // на 4 нарушение мут
-const MAT_RESET_MS = 30 * 60 * 1000; // сброс предупреждений через 30 минут
-const MAT_MUTE_MIN_MINUTES = 0;
+const MAT_WARN_LIMIT = 3; // 1,2,3 предупреждение, дальше муты
+const MAT_RESET_MS = 30 * 60 * 1000; // если долго не матерился, можно сбросить счетчик
+const MAT_MUTE_MIN_MINUTES = 1;
 const MAT_MUTE_MAX_MINUTES = 10;
+
+const MAT_DB_PATH = path.join(__dirname, "antimat_data.json");
+
+let matData = {
+  chats: {}, // chatId -> { enabled: boolean }
+  users: {}  // `${chatId}_${userId}` -> { count, lastTime }
+};
+
+const MAT_MUTE_TIMERS = new Map();
+
+/* ---------- База ---------- */
+
+function loadMatData() {
+  try {
+    if (fs.existsSync(MAT_DB_PATH)) {
+      const raw = fs.readFileSync(MAT_DB_PATH, "utf8");
+      const parsed = JSON.parse(raw);
+
+      if (parsed && typeof parsed === "object") {
+        matData = {
+          chats: parsed.chats || {},
+          users: parsed.users || {}
+        };
+      }
+    }
+  } catch (error) {
+    console.error("loadMatData error:", error.message);
+  }
+}
+
+function saveMatData() {
+  try {
+    fs.writeFileSync(MAT_DB_PATH, JSON.stringify(matData, null, 2), "utf8");
+  } catch (error) {
+    console.error("saveMatData error:", error.message);
+  }
+}
+
+loadMatData();
 
 /* ---------- Утилиты ---------- */
 
@@ -10302,15 +10340,41 @@ function matIsOwner(userId) {
 function matGetChatState(chatId) {
   const key = String(chatId);
 
-  if (!MAT_FILTER_STATE.has(key)) {
-    MAT_FILTER_STATE.set(key, { enabled: false });
+  if (!matData.chats[key]) {
+    matData.chats[key] = { enabled: false };
+    saveMatData();
   }
 
-  return MAT_FILTER_STATE.get(key);
+  return matData.chats[key];
+}
+
+function matSetChatEnabled(chatId, enabled) {
+  const key = String(chatId);
+
+  if (!matData.chats[key]) {
+    matData.chats[key] = { enabled: false };
+  }
+
+  matData.chats[key].enabled = Boolean(enabled);
+  saveMatData();
 }
 
 function matUserKey(chatId, userId) {
   return `${chatId}_${userId}`;
+}
+
+function matGetUserState(chatId, userId) {
+  const key = matUserKey(chatId, userId);
+
+  if (!matData.users[key]) {
+    matData.users[key] = {
+      count: 0,
+      lastTime: 0
+    };
+    saveMatData();
+  }
+
+  return matData.users[key];
 }
 
 function matNormalize(text) {
@@ -10388,7 +10452,7 @@ async function matIsAdmin(chatId, userId) {
 
 async function matCanUseCommands(msg) {
   try {
-    if (!msg || !msg.from) return false;
+    if (!msg || !msg.from || !msg.chat) return false;
 
     if (matIsOwner(msg.from.id)) {
       return true;
@@ -10402,27 +10466,33 @@ async function matCanUseCommands(msg) {
   }
 }
 
-function matRegisterWarning(chatId, userId) {
-  const key = matUserKey(chatId, userId);
+function matRegisterViolation(chatId, userId) {
+  const user = matGetUserState(chatId, userId);
   const now = Date.now();
-  const current = MAT_USER_WARNINGS.get(key);
 
-  if (!current || (now - current.lastTime > MAT_RESET_MS)) {
-    const fresh = { count: 1, lastTime: now };
-    MAT_USER_WARNINGS.set(key, fresh);
-    return fresh;
+  if (!user.lastTime || (now - user.lastTime > MAT_RESET_MS)) {
+    user.count = 1;
+    user.lastTime = now;
+    saveMatData();
+    return user;
   }
 
-  current.count += 1;
-  current.lastTime = now;
-  MAT_USER_WARNINGS.set(key, current);
-  return current;
+  user.count += 1;
+
+  // после 3 предупреждений человек остается в режиме мутов
+  if (user.count > 4) {
+    user.count = 4;
+  }
+
+  user.lastTime = now;
+  saveMatData();
+  return user;
 }
 
 function matResetUser(chatId, userId) {
   const key = matUserKey(chatId, userId);
-
-  MAT_USER_WARNINGS.delete(key);
+  delete matData.users[key];
+  saveMatData();
 
   if (MAT_MUTE_TIMERS.has(key)) {
     clearTimeout(MAT_MUTE_TIMERS.get(key));
@@ -10466,8 +10536,8 @@ async function matUnmuteUser(chatId, userId) {
       can_send_polls: true,
       can_send_other_messages: true,
       can_add_web_page_previews: true,
-      can_change_info: false,
       can_invite_users: true,
+      can_change_info: false,
       can_pin_messages: false
     }
   });
@@ -10481,15 +10551,17 @@ bot.onText(/^\/maton(?:@\w+)?$/i, async (msg) => {
 
     const allowed = await matCanUseCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
     }
 
-    const state = matGetChatState(msg.chat.id);
-    state.enabled = true;
+    matSetChatEnabled(msg.chat.id, true);
 
     await bot.sendMessage(
       msg.chat.id,
-      "✅ Антимат включен.\nЗа мат бот даст 3 предупреждения, а на 4 раз — мут."
+      "✅ Антимат включен.\n1, 2 и 3 нарушение — предупреждения.\nНачиная с 4 нарушения бот выдает мут от 1 до 10 минут."
     );
   } catch (error) {
     console.error("/maton error:", error.message);
@@ -10502,11 +10574,13 @@ bot.onText(/^\/matoff(?:@\w+)?$/i, async (msg) => {
 
     const allowed = await matCanUseCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
     }
 
-    const state = matGetChatState(msg.chat.id);
-    state.enabled = false;
+    matSetChatEnabled(msg.chat.id, false);
 
     await bot.sendMessage(msg.chat.id, "❌ Антимат выключен.");
   } catch (error) {
@@ -10520,7 +10594,10 @@ bot.onText(/^\/matstatus(?:@\w+)?$/i, async (msg) => {
 
     const allowed = await matCanUseCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
     }
 
     const state = matGetChatState(msg.chat.id);
@@ -10557,34 +10634,33 @@ bot.on("message", async (msg) => {
 
     if (!matContainsBadWords(msg.text)) return;
 
-    const warning = matRegisterWarning(chatId, userId);
+    const violation = matRegisterViolation(chatId, userId);
 
-    if (warning.count === 1) {
-      await bot.sendMessage(chatId, `⚠️ ${firstName}, не матерись.\n1 предупреждение.`);
+    if (violation.count === 1) {
+      await bot.sendMessage(
+        chatId,
+        `⚠️ ${firstName}, не матерись.\n1 предупреждение.`
+      );
       return;
     }
 
-    if (warning.count === 2) {
-      await bot.sendMessage(chatId, `⚠️ ${firstName}, не матерись.\n2 предупреждение.`);
+    if (violation.count === 2) {
+      await bot.sendMessage(
+        chatId,
+        `⚠️ ${firstName}, не матерись.\n2 предупреждение.`
+      );
       return;
     }
 
-    if (warning.count === 3) {
-      await bot.sendMessage(chatId, `⚠️ ${firstName}, не матерись.\n3 предупреждение.\nСледующий мат — мут.`);
+    if (violation.count === 3) {
+      await bot.sendMessage(
+        chatId,
+        `⚠️ ${firstName}, не матерись.\n3 предупреждение.\nСледующий мат — мут.`
+      );
       return;
     }
 
     const muteMinutes = matGetRandomMuteMinutes();
-
-    if (muteMinutes <= 0) {
-      await bot.sendMessage(
-        chatId,
-        `⚠️ ${firstName}, это уже 4 предупреждение.\nПричина: мат.\nНа этот раз без мута, но дальше бот может выдать мут.`
-      );
-
-      matResetUser(chatId, userId);
-      return;
-    }
 
     await matMuteUser(chatId, userId, muteMinutes);
 
@@ -10593,9 +10669,11 @@ bot.on("message", async (msg) => {
       `🔇 ${firstName} получил мут на ${muteMinutes} мин.\nПричина: мат.`
     );
 
-    matResetUser(chatId, userId);
-
     const timerKey = matUserKey(chatId, userId);
+
+    if (MAT_MUTE_TIMERS.has(timerKey)) {
+      clearTimeout(MAT_MUTE_TIMERS.get(timerKey));
+    }
 
     const timer = setTimeout(async () => {
       try {
