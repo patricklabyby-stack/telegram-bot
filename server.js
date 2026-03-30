@@ -10208,25 +10208,27 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
   }
 });
 
-// Универсальный обработчик сообщений
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
-    const text = msg.text.trim().toLowerCase();
+    const textRaw = msg.text;
+    if (!textRaw) return;
+
+    const text = textRaw.trim();
 
     // ===== Установка нового напоминания =====
-    if (text.startsWith('напомни ')) {
-        const input = msg.text.slice('напомни '.length); // берём оригинальный текст с учётом регистра
+    if (text.toLowerCase().startsWith('напомни ')) {
+        const input = text.slice('напомни '.length).trim();
         const splitIndex = input.indexOf(' ');
         if (splitIndex === -1) {
-            bot.sendMessage(chatId, 'Неверный формат. Пример: напомни 5мин Поспать');
+            bot.sendMessage(chatId, 'Неверный формат. Пример: напомни 5сек Поспать');
             return;
         }
 
-        const timeStr = input.slice(0, splitIndex);
-        const reminderText = input.slice(splitIndex + 1);
-
+        const timeStr = input.slice(0, splitIndex).trim();
+        const reminderText = input.slice(splitIndex + 1).trim();
         const delay = parseTime(timeStr);
+
         if (!delay) {
             bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
             return;
@@ -10244,11 +10246,11 @@ bot.on('message', (msg) => {
         startReminder(reminder);
 
         bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
-        return; // чтобы не обрабатывалось дальше
+        return;
     }
 
     // ===== Показ всех напоминаний пользователя =====
-    if (text === 'мои напоминания') {
+    if (text.toLowerCase() === 'мои напоминания') {
         const userReminders = reminders.filter(r => r.user === fromUser);
         if (userReminders.length === 0) {
             bot.sendMessage(chatId, 'У тебя пока нет сохранённых напоминаний.');
