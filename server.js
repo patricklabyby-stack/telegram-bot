@@ -10208,49 +10208,88 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
   }
 });
 
-// Массив для хранения напоминаний
+// ======= Напоминания с сохранением =======
+const fs = require('fs');
+const path = './reminders.json';
 let reminders = [];
 
-/**
- * Установить напоминание
- * @param {string} text - текст напоминания
- * @param {number} delayMs - задержка в миллисекундах
- */
-function addReminder(text, delayMs) {
-    const reminder = {
-        text,
-        time: Date.now() + delayMs
-    };
-    reminders.push(reminder);
-
-    console.log(`✅ Напоминание установлено на ${Math.round(delayMs / 1000)} секунд: "${text}"`);
-
-    setTimeout(() => {
-        console.log(`⏰ Напоминание: "${text}"`);
-        // Удаляем напоминание после срабатывания
-        reminders = reminders.filter(r => r !== reminder);
-    }, delayMs);
-}
-
-/**
- * Показать все активные напоминания
- */
-function showReminders() {
-    if (!reminders.length) {
-        console.log("Нет активных напоминаний.");
-        return;
-    }
-
-    console.log("Активные напоминания:");
-    reminders.forEach((r, i) => {
-        const remaining = Math.max(0, r.time - Date.now());
-        console.log(`${i + 1}. "${r.text}" — через ${Math.round(remaining / 1000)} секунд`);
+// Загружаем напоминания при старте
+if (fs.existsSync(path)) {
+    const data = fs.readFileSync(path, 'utf-8');
+    reminders = JSON.parse(data);
+    // Восстанавливаем таймеры
+    const now = Date.now();
+    reminders.forEach(reminder => {
+        const delay = reminder.time - now;
+        if (delay > 0) {
+            startReminder(reminder);
+        } else {
+            console.log(`Пропущенное напоминание: "${reminder.text}"`);
+        }
     });
 }
 
-// Примеры использования
-addReminder("Проверить почту", 5000);   // через 5 секунд
-addReminder("Выпить воду", 10000);     // через 10 секунд
+function saveReminders() {
+    fs.writeFileSync(path, JSON.stringify(reminders, null, 2));
+}
 
-// Через 3 секунды показать активные напоминания
-setTimeout(showReminders, 3000);
+function parseTime(input) {
+    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
+    const match = input.match(regex);
+    if (!match) return null;
+
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+
+    if (unit.startsWith('сек')) return value * 1000;
+    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
+    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
+    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
+    return null;
+}
+
+// Функция запуска таймера
+function startReminder(reminder) {
+    const delay = reminder.time - Date.now();
+    reminder.timer = setTimeout(() => {
+        bot.sendMessage(reminder.chatId, `⏰ ${reminder.user}, напоминание: ${reminder.text}`);
+        // удаляем из массива
+        reminders = reminders.filter(r => r !== reminder);
+        saveReminders();
+    }, delay);
+}
+
+// Команда /напомни
+bot.onText(/\/напомни (.+)/i, (msg, match) => {
+    const chatId = msg.chat.id;
+    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const input = match[1];
+
+    const splitIndex = input.indexOf(' ');
+    if (splitIndex === -1) {
+        bot.sendMessage(chatId, 'Неверный формат. Пример: /напомни 5мин Поспать');
+        return;
+    }
+
+    const timeStr = input.slice(0, splitIndex);
+    const reminderText = input.slice(splitIndex + 1);
+
+    const delay = parseTime(timeStr);
+    if (!delay) {
+        bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
+        return;
+    }
+
+    const reminder = {
+        chatId,
+        user: fromUser,
+        text: reminderText,
+        time: Date.now() + delay
+    };
+
+    reminders.push(reminder);
+    saveReminders();
+    startReminder(reminder);
+
+    bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+});
