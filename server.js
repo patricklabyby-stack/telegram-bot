@@ -10245,3 +10245,24 @@ bot.on('message', (msg) => {
 
     bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
 });
+
+// Показ всех напоминаний пользователя
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const userId = msg.from.id;
+    const text = msg.text.trim();
+
+    // Если пользователь пишет "мои напоминания"
+    if (text.toLowerCase() === 'мои напоминания') {
+        const userReminders = reminders.filter(r => r.user === fromUser);
+        if (userReminders.length === 0) {
+            bot.sendMessage(chatId, 'У тебя пока нет сохранённых напоминаний.');
+        } else {
+            const list = userReminders
+                .map(r => `- ${r.text} (сработает: ${new Date(r.time).toLocaleString()})`)
+                .join('\n');
+            bot.sendMessage(chatId, `📋 Твои напоминания:\n${list}`);
+        }
+    }
+});
