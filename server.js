@@ -10885,3 +10885,129 @@ bot.on("message", async (msg) => {
     console.error("simple welcome message error:", error.message);
   }
 });
+
+/* ===================== SIMPLE BYE ===================== */
+
+const simpleByeState = new Map(); // chatId -> true/false
+
+function simpleByeIsOwner(userId) {
+  return Number(userId) === 7837011810;
+}
+
+async function simpleByeCanUse(msg) {
+  try {
+    if (!msg || !msg.chat || !msg.from) return false;
+
+    if (simpleByeIsOwner(msg.from.id)) {
+      return true;
+    }
+
+    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (error) {
+    console.error("simpleByeCanUse error:", error.message);
+    return false;
+  }
+}
+
+function simpleByeGet(chatId) {
+  const key = String(chatId);
+
+  if (!simpleByeState.has(key)) {
+    simpleByeState.set(key, true); // по умолчанию включено
+  }
+
+  return simpleByeState.get(key);
+}
+
+function simpleByeSet(chatId, enabled) {
+  simpleByeState.set(String(chatId), Boolean(enabled));
+}
+
+/* ---------- Команды ---------- */
+
+bot.onText(/^\/byeon(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await simpleByeCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    simpleByeSet(msg.chat.id, true);
+
+    await bot.sendMessage(msg.chat.id, "✅ Прощание включено.");
+  } catch (error) {
+    console.error("/byeon error:", error.message);
+  }
+});
+
+bot.onText(/^\/byeoff(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await simpleByeCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    simpleByeSet(msg.chat.id, false);
+
+    await bot.sendMessage(msg.chat.id, "❌ Прощание выключено.");
+  } catch (error) {
+    console.error("/byeoff error:", error.message);
+  }
+});
+
+bot.onText(/^\/byestatus(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await simpleByeCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    const enabled = simpleByeGet(msg.chat.id);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `Статус прощания: ${enabled ? "✅ включено" : "❌ выключено"}`
+    );
+  } catch (error) {
+    console.error("/byestatus error:", error.message);
+  }
+});
+
+/* ---------- Прощание ---------- */
+
+bot.on("message", async (msg) => {
+  try {
+    if (!msg || !msg.chat) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+
+    const enabled = simpleByeGet(msg.chat.id);
+    if (!enabled) return;
+
+    if (msg.left_chat_member && !msg.left_chat_member.is_bot) {
+      const firstName = msg.left_chat_member.first_name || "пользователь";
+
+      await bot.sendMessage(
+        msg.chat.id,
+        `👋 ${firstName} вышел(а) из группы.`
+      );
+    }
+  } catch (error) {
+    console.error("simple bye message error:", error.message);
+  }
+});
