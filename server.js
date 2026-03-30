@@ -11415,4 +11415,88 @@ bot.onText(/^\/unpin(?:@\w+)?$/i, async (msg) => {
     console.error("/unpin error:", error.message);
     await bot.sendMessage(msg.chat.id, "Не удалось снять закреп.");
   }
+})
+
+/* ===================== SLOW MODE ===================== */
+
+const SLOW_OWNER_IDS = [7837011810];
+
+function slowIsOwner(userId) {
+  return SLOW_OWNER_IDS.includes(Number(userId));
+}
+
+async function slowCanUse(msg) {
+  try {
+    if (!msg || !msg.chat || !msg.from) return false;
+
+    if (slowIsOwner(msg.from.id)) return true;
+
+    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (error) {
+    console.error("slowCanUse error:", error.message);
+    return false;
+  }
+}
+
+/* ---------- /slow ---------- */
+
+bot.onText(/^\/slow(?:@\w+)?\s+(\d+)$/i, async (msg, match) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await slowCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    let seconds = parseInt(match[1], 10);
+
+    if (isNaN(seconds) || seconds < 0) {
+      return bot.sendMessage(msg.chat.id, "Укажи корректное время в секундах.");
+    }
+
+    if (seconds > 86400) {
+      return bot.sendMessage(msg.chat.id, "Максимум — 86400 секунд (24 часа).");
+    }
+
+    await bot.setChatSlowModeDelay(msg.chat.id, seconds);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `🐢 Медленный режим включён: ${seconds} сек. между сообщениями.`
+    );
+  } catch (error) {
+    console.error("/slow error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Не удалось включить медленный режим.");
+  }
+});
+
+/* ---------- /slowoff ---------- */
+
+bot.onText(/^\/slowoff(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await slowCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    await bot.setChatSlowModeDelay(msg.chat.id, 0);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      "🚀 Медленный режим выключен."
+    );
+  } catch (error) {
+    console.error("/slowoff error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Не удалось выключить медленный режим.");
+  }
 });
