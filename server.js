@@ -10280,23 +10280,23 @@ bot.onText(/\/мои_напоминания/i, (msg) => {
     bot.sendMessage(chatId, response);
 });
 
-/* ===================== АНТИМАТ С СОХРАНЕНИЕМ ===================== */
+/* ===================== АНТИМАТ FULL FIX ===================== */
 
 const fs = require("fs");
 const path = require("path");
 
 const OWNER_IDS = [7837011810];
 
-const MAT_WARN_LIMIT = 3; // 1,2,3 предупреждение, дальше муты
-const MAT_RESET_MS = 30 * 60 * 1000; // если долго не матерился, можно сбросить счетчик
+const MAT_WARN_LIMIT = 3;
+const MAT_RESET_MS = 30 * 60 * 1000; // 30 минут
 const MAT_MUTE_MIN_MINUTES = 1;
 const MAT_MUTE_MAX_MINUTES = 10;
 
 const MAT_DB_PATH = path.join(__dirname, "antimat_data.json");
 
 let matData = {
-  chats: {}, // chatId -> { enabled: boolean }
-  users: {}  // `${chatId}_${userId}` -> { count, lastTime }
+  chats: {},
+  users: {}
 };
 
 const MAT_MUTE_TIMERS = new Map();
@@ -10479,7 +10479,7 @@ function matRegisterViolation(chatId, userId) {
 
   user.count += 1;
 
-  // после 3 предупреждений человек остается в режиме мутов
+  // после 3 предупреждений дальше только муты
   if (user.count > 4) {
     user.count = 4;
   }
@@ -10487,17 +10487,6 @@ function matRegisterViolation(chatId, userId) {
   user.lastTime = now;
   saveMatData();
   return user;
-}
-
-function matResetUser(chatId, userId) {
-  const key = matUserKey(chatId, userId);
-  delete matData.users[key];
-  saveMatData();
-
-  if (MAT_MUTE_TIMERS.has(key)) {
-    clearTimeout(MAT_MUTE_TIMERS.get(key));
-    MAT_MUTE_TIMERS.delete(key);
-  }
 }
 
 async function matMuteUser(chatId, userId, minutes) {
@@ -10518,12 +10507,15 @@ async function matMuteUser(chatId, userId, minutes) {
       can_add_web_page_previews: false,
       can_change_info: false,
       can_invite_users: false,
-      can_pin_messages: false
+      can_pin_messages: false,
+      can_manage_topics: false
     }
   });
 }
 
 async function matUnmuteUser(chatId, userId) {
+  // Главное: permissions + use_independent_chat_permissions: false
+  // Так Telegram вернет обычные права участника группы.
   await bot.restrictChatMember(chatId, userId, {
     permissions: {
       can_send_messages: true,
@@ -10536,11 +10528,37 @@ async function matUnmuteUser(chatId, userId) {
       can_send_polls: true,
       can_send_other_messages: true,
       can_add_web_page_previews: true,
-      can_invite_users: true,
       can_change_info: false,
-      can_pin_messages: false
-    }
+      can_invite_users: true,
+      can_pin_messages: false,
+      can_manage_topics: false
+    },
+    use_independent_chat_permissions: false
   });
+}
+
+async function matSafeUnmute(chatId, userId, firstName) {
+  try {
+    await matUnmuteUser(chatId, userId);
+
+    // небольшая проверка
+    const member = await bot.getChatMember(chatId, userId);
+
+    if (member && member.status === "restricted" && member.can_send_messages === false) {
+      console.log(`matSafeUnmute: пользователь ${userId} все еще restricted`);
+      return false;
+    }
+
+    await bot.sendMessage(
+      chatId,
+      `✅ ${firstName}, мут снят.\nТеперь можешь писать в чат, но не пиши маты.`
+    );
+
+    return true;
+  } catch (error) {
+    console.error("matSafeUnmute error:", error.message);
+    return false;
+  }
 }
 
 /* ---------- Команды ---------- */
@@ -10611,6 +10629,52 @@ bot.onText(/^\/matstatus(?:@\w+)?$/i, async (msg) => {
   }
 });
 
+/* ---------- Команда ручного размута ---------- */
+
+bot.onText(/^\/unmute(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await matCanUseCommands(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    let targetUserId = null;
+    let targetFirstName = "пользователь";
+
+    if (msg.reply_to_message && msg.reply_to_message.from) {
+      targetUserId = msg.reply_to_message.from.id;
+      targetFirstName = msg.reply_to_message.from.first_name || "пользователь";
+    } else if (match && match[1]) {
+      const maybeId = String(match[1]).trim();
+      if (/^\d+$/.test(maybeId)) {
+        targetUserId = Number(maybeId);
+      }
+    }
+
+    if (!targetUserId) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Используй команду ответом на сообщение пользователя:\n/unmute"
+      );
+    }
+
+    await matUnmuteUser(msg.chat.id, targetUserId);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `✅ ${targetFirstName}, мут снят вручную.`
+    );
+  } catch (error) {
+    console.error("/unmute error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Не удалось снять мут.");
+  }
+});
+
 /* ---------- Основная логика ---------- */
 
 bot.on("message", async (msg) => {
@@ -10677,11 +10741,11 @@ bot.on("message", async (msg) => {
 
     const timer = setTimeout(async () => {
       try {
-        await matUnmuteUser(chatId, userId);
-        await bot.sendMessage(
-          chatId,
-          `✅ ${firstName}, мут снят.\nТеперь можешь писать в чат, но не пиши маты.`
-        );
+        const ok = await matSafeUnmute(chatId, userId, firstName);
+
+        if (!ok) {
+          console.log(`Не удалось автоматически снять мут с ${userId} в чате ${chatId}`);
+        }
       } catch (error) {
         console.error("unmute timer error:", error.message);
       } finally {
