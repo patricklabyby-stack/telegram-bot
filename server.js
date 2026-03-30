@@ -10279,3 +10279,263 @@ bot.onText(/\/мои_напоминания/i, (msg) => {
 
     bot.sendMessage(chatId, response);
 });
+
+/* ===================== АНТИМАТ ===================== */
+
+const badWordsFilterState = new Map(); // chatId -> { enabled: boolean }
+const badWordsUserWarnings = new Map(); // `${chatId}_${userId}` -> { count, lastTime }
+const badWordsMuteTimers = new Map(); // `${chatId}_${userId}` -> timeout
+
+const BAD_WORDS_WARN_LIMIT = 3; // после 3 предупреждений на 4-й раз мут
+const BAD_WORDS_RESET_MS = 30 * 60 * 1000; // сброс счетчика через 30 минут
+const BAD_WORDS_MUTE_MIN_MS = 5 * 60 * 1000; // 5 минут
+const BAD_WORDS_MUTE_MAX_MS = 10 * 60 * 1000; // 10 минут
+
+const BAD_WORDS_LIST = [
+  "бля", "блять", "блят", "бляд", "блядь",
+  "сука", "сучка",
+  "хуй", "нахуй", "похуй", "хуево", "хуёво", "хер",
+  "еб", "еба", "ебать", "ебан", "ёб", "ёба", "ёбан",
+  "заеб", "заёб", "выеб", "выёб", "уеб", "уёб",
+  "пизд", "пизда", "пиздец",
+  "мудак", "долбоеб", "долбаеб", "долбоёб",
+  "гандон", "шлюха"
+];
+
+function badWordsGetChatState(chatId) {
+  const key = String(chatId);
+  if (!badWordsFilterState.has(key)) {
+    badWordsFilterState.set(key, { enabled: false });
+  }
+  return badWordsFilterState.get(key);
+}
+
+function badWordsUserKey(chatId, userId) {
+  return `${chatId}_${userId}`;
+}
+
+function badWordsNormalize(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function badWordsContainsMat(text) {
+  const normalized = badWordsNormalize(text);
+  if (!normalized) return false;
+
+  return BAD_WORDS_LIST.some((word) => normalized.includes(word));
+}
+
+function badWordsGetRandomMuteMs() {
+  return Math.floor(
+    Math.random() * (BAD_WORDS_MUTE_MAX_MS - BAD_WORDS_MUTE_MIN_MS + 1)
+  ) + BAD_WORDS_MUTE_MIN_MS;
+}
+
+function badWordsFormatMinutes(ms) {
+  return Math.max(1, Math.round(ms / 60000));
+}
+
+async function badWordsIsAdmin(chatId, userId) {
+  try {
+    const member = await bot.getChatMember(chatId, userId);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (e) {
+    console.error("badWordsIsAdmin error:", e.message);
+    return false;
+  }
+}
+
+async function badWordsCanUseCommands(msg) {
+  try {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const member = await bot.getChatMember(chatId, userId);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (e) {
+    console.error("badWordsCanUseCommands error:", e.message);
+    return false;
+  }
+}
+
+function badWordsRegisterWarning(chatId, userId) {
+  const key = badWordsUserKey(chatId, userId);
+  const now = Date.now();
+  const current = badWordsUserWarnings.get(key);
+
+  if (!current || now - current.lastTime > BAD_WORDS_RESET_MS) {
+    const fresh = { count: 1, lastTime: now };
+    badWordsUserWarnings.set(key, fresh);
+    return fresh;
+  }
+
+  current.count += 1;
+  current.lastTime = now;
+  badWordsUserWarnings.set(key, current);
+  return current;
+}
+
+function badWordsResetUser(chatId, userId) {
+  const key = badWordsUserKey(chatId, userId);
+  badWordsUserWarnings.delete(key);
+
+  if (badWordsMuteTimers.has(key)) {
+    clearTimeout(badWordsMuteTimers.get(key));
+    badWordsMuteTimers.delete(key);
+  }
+}
+
+async function badWordsMuteUser(chatId, userId, muteMs) {
+  const untilDate = Math.floor((Date.now() + muteMs) / 1000);
+
+  await bot.restrictChatMember(chatId, userId, {
+    until_date: untilDate,
+    can_send_messages: false,
+    can_send_audios: false,
+    can_send_documents: false,
+    can_send_photos: false,
+    can_send_videos: false,
+    can_send_video_notes: false,
+    can_send_voice_notes: false,
+    can_send_polls: false,
+    can_send_other_messages: false,
+    can_add_web_page_previews: false,
+    can_change_info: false,
+    can_invite_users: false,
+    can_pin_messages: false
+  });
+}
+
+async function badWordsUnmuteUser(chatId, userId) {
+  await bot.restrictChatMember(chatId, userId, {
+    can_send_messages: true,
+    can_send_audios: true,
+    can_send_documents: true,
+    can_send_photos: true,
+    can_send_videos: true,
+    can_send_video_notes: true,
+    can_send_voice_notes: true,
+    can_send_polls: true,
+    can_send_other_messages: true,
+    can_add_web_page_previews: true,
+    can_change_info: false,
+    can_invite_users: true,
+    can_pin_messages: false
+  });
+}
+
+/* ---------- Команды антимата ---------- */
+
+bot.onText(/^\/maton$/i, async (msg) => {
+  if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+  const isAllowed = await badWordsCanUseCommands(msg);
+  if (!isAllowed) {
+    return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ.");
+  }
+
+  const state = badWordsGetChatState(msg.chat.id);
+  state.enabled = true;
+
+  return bot.sendMessage(
+    msg.chat.id,
+    "✅ Антимат включен.\nТеперь за мат бот будет предупреждать, а потом выдавать мут."
+  );
+});
+
+bot.onText(/^\/matoff$/i, async (msg) => {
+  if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+  const isAllowed = await badWordsCanUseCommands(msg);
+  if (!isAllowed) {
+    return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ.");
+  }
+
+  const state = badWordsGetChatState(msg.chat.id);
+  state.enabled = false;
+
+  return bot.sendMessage(
+    msg.chat.id,
+    "❌ Антимат выключен."
+  );
+});
+
+bot.onText(/^\/matstatus$/i, async (msg) => {
+  if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+  const state = badWordsGetChatState(msg.chat.id);
+  return bot.sendMessage(
+    msg.chat.id,
+    `Статус антимата: ${state.enabled ? "✅ включен" : "❌ выключен"}`
+  );
+});
+
+/* ---------- Основная логика ---------- */
+
+bot.on("message", async (msg) => {
+  try {
+    if (!msg || !msg.chat || !msg.from) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+    if (!msg.text) return;
+    if (msg.text.startsWith("/")) return;
+
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const firstName = msg.from.first_name || "пользователь";
+
+    const state = badWordsGetChatState(chatId);
+    if (!state.enabled) return;
+
+    const isAdmin = await badWordsIsAdmin(chatId, userId);
+    if (isAdmin) return;
+
+    if (!badWordsContainsMat(msg.text)) return;
+
+    const warning = badWordsRegisterWarning(chatId, userId);
+
+    if (warning.count <= BAD_WORDS_WARN_LIMIT) {
+      const left = BAD_WORDS_WARN_LIMIT + 1 - warning.count;
+
+      await bot.sendMessage(
+        chatId,
+        `⚠️ ${firstName}, не матерись.\nПричина: мат.\nПредупреждение: ${warning.count}/${BAD_WORDS_WARN_LIMIT}\nЕще ${left} ${left === 1 ? "нарушение" : left < 5 ? "нарушения" : "нарушений"} до мута.`
+      );
+      return;
+    }
+
+    const muteMs = badWordsGetRandomMuteMs();
+    const muteMinutes = badWordsFormatMinutes(muteMs);
+
+    await badWordsMuteUser(chatId, userId, muteMs);
+
+    await bot.sendMessage(
+      chatId,
+      `🔇 ${firstName} получил мут на ${muteMinutes} мин.\nПричина: мат.`
+    );
+
+    badWordsResetUser(chatId, userId);
+
+    const timerKey = badWordsUserKey(chatId, userId);
+    const timer = setTimeout(async () => {
+      try {
+        await badWordsUnmuteUser(chatId, userId);
+        await bot.sendMessage(
+          chatId,
+          `✅ ${firstName}, мут снят. Теперь можешь писать в чат, но без матов.`
+        );
+      } catch (e) {
+        console.error("badWords unmute timer error:", e.message);
+      } finally {
+        badWordsMuteTimers.delete(timerKey);
+      }
+    }, muteMs);
+
+    badWordsMuteTimers.set(timerKey, timer);
+  } catch (e) {
+    console.error("Антимат error:", e.message);
+  }
+});
