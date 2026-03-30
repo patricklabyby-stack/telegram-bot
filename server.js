@@ -11417,139 +11417,71 @@ bot.onText(/^\/unpin(?:@\w+)?$/i, async (msg) => {
   }
 })
 
-/* ===================== SLOW MODE WORKING ===================== */
+/* ===================== REPORT SYSTEM ===================== */
 
-const SLOW_OWNER_IDS = [7837011810];
+const REPORT_OWNER_ID = 7837011810;
 
-function slowIsOwner(userId) {
-  return SLOW_OWNER_IDS.includes(Number(userId));
+function reportIsOwner(userId) {
+  return Number(userId) === REPORT_OWNER_ID;
 }
 
-async function slowCanUse(msg) {
+async function getAdmins(chatId) {
   try {
-    if (!msg || !msg.chat || !msg.from) return false;
-
-    if (slowIsOwner(msg.from.id)) return true;
-
-    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("slowCanUse error:", error.message);
-    return false;
+    const admins = await bot.getChatAdministrators(chatId);
+    return admins.map(a => a.user);
+  } catch (e) {
+    console.error("getAdmins error:", e.message);
+    return [];
   }
 }
 
-function normalizeSlowValue(value) {
-  const n = Number(value);
+/* ---------- /report ---------- */
 
-  if (!Number.isFinite(n)) return null;
-
-  const allowed = [0, 5, 10, 30, 60, 300, 900, 3600];
-  return allowed.includes(n) ? n : null;
-}
-
-async function setSlowModeRaw(chatId, seconds) {
-  const token = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN;
-
-  if (!token) {
-    throw new Error("Не найден токен бота в env (TELEGRAM_BOT_TOKEN / BOT_TOKEN / TOKEN)");
-  }
-
-  const response = await fetch(`https://api.telegram.org/bot${token}/setChatSlowModeDelay`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      chat_id: chatId,
-      slow_mode_delay: seconds
-    })
-  });
-
-  const data = await response.json();
-
-  if (!data.ok) {
-    throw new Error(data.description || "Telegram API error");
-  }
-
-  return data.result;
-}
-
-/* ---------- /slow ---------- */
-
-bot.onText(/^\/slow(?:@\w+)?\s+(\d+)$/i, async (msg, match) => {
+bot.onText(/^\/report(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "supergroup")) {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    if (!msg.reply_to_message || !msg.reply_to_message.from) {
       return bot.sendMessage(
         msg.chat.id,
-        "Slow mode работает только в супергруппе."
+        "❗ Используй /report ответом на сообщение пользователя.\nПример:\n(ответ на сообщение) /report спам"
       );
     }
 
-    const allowed = await slowCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+    const from = msg.from;
+    const target = msg.reply_to_message.from;
+
+    if (from.id === target.id) {
+      return bot.sendMessage(msg.chat.id, "❌ Нельзя пожаловаться на самого себя.");
     }
 
-    const seconds = normalizeSlowValue(match[1]);
+    const reason = match && match[1] ? match[1] : "без причины";
 
-    if (seconds === null) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Можно ставить только: 5, 10, 30, 60, 300, 900, 3600 сек.\nПример: /slow 10"
-      );
+    const reporterName = from.first_name || "пользователь";
+    const targetName = target.first_name || "пользователь";
+
+    const admins = await getAdmins(msg.chat.id);
+
+    let adminMentions = "";
+
+    for (const admin of admins) {
+      if (!admin.is_bot) {
+        adminMentions += `[${admin.first_name}](tg://user?id=${admin.id}) `;
+      }
     }
-
-    await setSlowModeRaw(msg.chat.id, seconds);
 
     await bot.sendMessage(
       msg.chat.id,
-      `🐢 Медленный режим включён: ${seconds} сек.`
+      `🚨 Жалоба!\n\n` +
+      `👤 Кто: ${reporterName}\n` +
+      `🎯 На кого: ${targetName}\n` +
+      `📝 Причина: ${reason}\n\n` +
+      `Админы: ${adminMentions}`,
+      { parse_mode: "Markdown" }
     );
+
   } catch (error) {
-    console.error("/slow error:", error.message);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      `Не удалось включить медленный режим.\nОшибка: ${error.message}`
-    );
-  }
-});
-
-/* ---------- /slowoff ---------- */
-
-bot.onText(/^\/slowoff(?:@\w+)?$/i, async (msg) => {
-  try {
-    if (!msg.chat || (msg.chat.type !== "supergroup")) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Slow mode работает только в супергруппе."
-      );
-    }
-
-    const allowed = await slowCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
-    }
-
-    await setSlowModeRaw(msg.chat.id, 0);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      "🚀 Медленный режим выключен."
-    );
-  } catch (error) {
-    console.error("/slowoff error:", error.message);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      `Не удалось выключить медленный режим.\nОшибка: ${error.message}`
-    );
+    console.error("/report error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Ошибка при отправке жалобы.");
   }
 });
