@@ -10282,6 +10282,8 @@ bot.onText(/\/мои_напоминания/i, (msg) => {
 
 /* ===================== АНТИМАТ FULL ===================== */
 
+const OWNER_IDS = [7837011810];
+
 const MAT_FILTER_STATE = new Map();      // chatId -> { enabled: boolean }
 const MAT_USER_WARNINGS = new Map();     // `${chatId}_${userId}` -> { count, lastTime }
 const MAT_MUTE_TIMERS = new Map();       // `${chatId}_${userId}` -> timeout
@@ -10292,6 +10294,10 @@ const MAT_MUTE_MIN_MINUTES = 0;
 const MAT_MUTE_MAX_MINUTES = 10;
 
 /* ---------- Утилиты ---------- */
+
+function matIsOwner(userId) {
+  return OWNER_IDS.includes(Number(userId));
+}
 
 function matGetChatState(chatId) {
   const key = String(chatId);
@@ -10335,20 +10341,20 @@ function matContainsBadWords(text) {
   t = matCompressRepeats(t);
 
   const patterns = [
-    /бл(я|а|е)/,        // бля
-    /бляд/,             // блядь
-    /блять/,            // блять
-    /сук(а|и|о)/,       // сука
-    /сучк/,             // сучка
-    /ху(й|и|я|е|л)/,    // хуй, хуе...
-    /наху/,             // нахуй
-    /поху/,             // похуй
-    /еб/,               // ебать, ебан
+    /бл(я|а|е)/,
+    /бляд/,
+    /блять/,
+    /сук(а|и|о)/,
+    /сучк/,
+    /ху(й|и|я|е|л)/,
+    /наху/,
+    /поху/,
+    /еб/,
     /заеб/,
     /выеб/,
     /уеб/,
-    /пизд/,             // пизда, пиздец
-    /пид[ао]?р/,        // пидор
+    /пизд/,
+    /пид[ао]?р/,
     /мудак/,
     /долбоеб/,
     /гандон/,
@@ -10370,6 +10376,8 @@ function matGetRandomMuteMinutes() {
 
 async function matIsAdmin(chatId, userId) {
   try {
+    if (matIsOwner(userId)) return true;
+
     const member = await bot.getChatMember(chatId, userId);
     return member && (member.status === "administrator" || member.status === "creator");
   } catch (error) {
@@ -10380,6 +10388,12 @@ async function matIsAdmin(chatId, userId) {
 
 async function matCanUseCommands(msg) {
   try {
+    if (!msg || !msg.from) return false;
+
+    if (matIsOwner(msg.from.id)) {
+      return true;
+    }
+
     const member = await bot.getChatMember(msg.chat.id, msg.from.id);
     return member && (member.status === "administrator" || member.status === "creator");
   } catch (error) {
@@ -10421,25 +10435,53 @@ async function matMuteUser(chatId, userId, minutes) {
 
   await bot.restrictChatMember(chatId, userId, {
     until_date: untilDate,
-    can_send_messages: false
+    permissions: {
+      can_send_messages: false,
+      can_send_audios: false,
+      can_send_documents: false,
+      can_send_photos: false,
+      can_send_videos: false,
+      can_send_video_notes: false,
+      can_send_voice_notes: false,
+      can_send_polls: false,
+      can_send_other_messages: false,
+      can_add_web_page_previews: false,
+      can_change_info: false,
+      can_invite_users: false,
+      can_pin_messages: false
+    }
   });
 }
 
 async function matUnmuteUser(chatId, userId) {
   await bot.restrictChatMember(chatId, userId, {
-    can_send_messages: true
+    permissions: {
+      can_send_messages: true,
+      can_send_audios: true,
+      can_send_documents: true,
+      can_send_photos: true,
+      can_send_videos: true,
+      can_send_video_notes: true,
+      can_send_voice_notes: true,
+      can_send_polls: true,
+      can_send_other_messages: true,
+      can_add_web_page_previews: true,
+      can_change_info: false,
+      can_invite_users: true,
+      can_pin_messages: false
+    }
   });
 }
 
 /* ---------- Команды ---------- */
 
-bot.onText(/^\/maton$/i, async (msg) => {
+bot.onText(/^\/maton(?:@\w+)?$/i, async (msg) => {
   try {
     if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
 
     const allowed = await matCanUseCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ.");
+      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
     const state = matGetChatState(msg.chat.id);
@@ -10454,13 +10496,13 @@ bot.onText(/^\/maton$/i, async (msg) => {
   }
 });
 
-bot.onText(/^\/matoff$/i, async (msg) => {
+bot.onText(/^\/matoff(?:@\w+)?$/i, async (msg) => {
   try {
     if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
 
     const allowed = await matCanUseCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ.");
+      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
     const state = matGetChatState(msg.chat.id);
@@ -10472,9 +10514,14 @@ bot.onText(/^\/matoff$/i, async (msg) => {
   }
 });
 
-bot.onText(/^\/matstatus$/i, async (msg) => {
+bot.onText(/^\/matstatus(?:@\w+)?$/i, async (msg) => {
   try {
     if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await matCanUseCommands(msg);
+    if (!allowed) {
+      return bot.sendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
+    }
 
     const state = matGetChatState(msg.chat.id);
 
@@ -10502,6 +10549,8 @@ bot.on("message", async (msg) => {
 
     const state = matGetChatState(chatId);
     if (!state.enabled) return;
+
+    if (matIsOwner(userId)) return;
 
     const isAdmin = await matIsAdmin(chatId, userId);
     if (isAdmin) return;
