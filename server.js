@@ -10209,7 +10209,7 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
 });
 
 // ======= Напоминания =======
-const reminders = []; // массив для хранения активных таймеров
+const reminders = []; // массив для хранения активных таймеров и данных о напоминаниях
 
 function parseTime(input) {
     const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
@@ -10252,9 +10252,30 @@ bot.onText(/\/напомни (.+)/i, (msg, match) => {
     const timer = setTimeout(() => {
         bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
         // удаляем таймер из массива после срабатывания
-        const index = reminders.indexOf(timer);
+        const index = reminders.findIndex(r => r.timer === timer);
         if (index > -1) reminders.splice(index, 1);
     }, delay);
 
-    reminders.push(timer);
+    // Сохраняем данные о напоминании
+    reminders.push({ timer, chatId, user: fromUser, text: reminderText });
+});
+
+// Команда /мои_напоминания
+bot.onText(/\/мои_напоминания/i, (msg) => {
+    const chatId = msg.chat.id;
+    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+
+    const userReminders = reminders.filter(r => r.user === fromUser);
+
+    if (userReminders.length === 0) {
+        bot.sendMessage(chatId, 'У вас нет активных напоминаний.');
+        return;
+    }
+
+    let response = '📋 Ваши активные напоминания:\n';
+    userReminders.forEach((r, i) => {
+        response += `${i + 1}. ${r.text}\n`;
+    });
+
+    bot.sendMessage(chatId, response);
 });
