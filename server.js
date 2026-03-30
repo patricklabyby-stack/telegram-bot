@@ -11331,3 +11331,88 @@ bot.onText(/^\/unmute(?:@\w+)?$/i, async (msg) => {
     await bot.sendMessage(msg.chat.id, "Ошибка при снятии мута.");
   }
 });
+
+/* ===================== PIN / UNPIN ===================== */
+
+const PIN_OWNER_IDS = [7837011810];
+
+function pinIsOwner(userId) {
+  return PIN_OWNER_IDS.includes(Number(userId));
+}
+
+async function pinCanUse(msg) {
+  try {
+    if (!msg || !msg.chat || !msg.from) return false;
+
+    if (pinIsOwner(msg.from.id)) {
+      return true;
+    }
+
+    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (error) {
+    console.error("pinCanUse error:", error.message);
+    return false;
+  }
+}
+
+/* ---------- /pin ---------- */
+
+bot.onText(/^\/pin(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await pinCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    if (!msg.reply_to_message) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Используй /pin ответом на сообщение, которое нужно закрепить."
+      );
+    }
+
+    await bot.pinChatMessage(msg.chat.id, msg.reply_to_message.message_id, {
+      disable_notification: false
+    });
+
+    await bot.sendMessage(
+      msg.chat.id,
+      "📌 Сообщение закреплено."
+    );
+  } catch (error) {
+    console.error("/pin error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Не удалось закрепить сообщение.");
+  }
+});
+
+/* ---------- /unpin ---------- */
+
+bot.onText(/^\/unpin(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await pinCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    await bot.unpinChatMessage(msg.chat.id);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      "❌ Закреплённое сообщение снято."
+    );
+  } catch (error) {
+    console.error("/unpin error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Не удалось снять закреп.");
+  }
+});
