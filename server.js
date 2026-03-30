@@ -10208,6 +10208,9 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
   }
 });
 
+// =========================
+// Напоминания
+// =========================
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
@@ -10221,7 +10224,7 @@ bot.on('message', (msg) => {
         const input = text.slice('напомни '.length).trim();
         const splitIndex = input.indexOf(' ');
         if (splitIndex === -1) {
-            bot.sendMessage(chatId, 'Неверный формат. Пример: напомни 5сек Поспать');
+            bot.sendMessage(chatId, '⚠️ Неверный формат. Пример:\nнапомни 5сек Поспать');
             return;
         }
 
@@ -10230,7 +10233,7 @@ bot.on('message', (msg) => {
         const delay = parseTime(timeStr);
 
         if (!delay) {
-            bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
+            bot.sendMessage(chatId, '⚠️ Не удалось распознать время. Используй сек, мин, ч, д.');
             return;
         }
 
@@ -10245,7 +10248,7 @@ bot.on('message', (msg) => {
         saveReminders();
         startReminder(reminder);
 
-        bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+        bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}:\n"${reminderText}"`);
         return;
     }
 
@@ -10253,12 +10256,24 @@ bot.on('message', (msg) => {
     if (text.toLowerCase() === 'мои напоминания') {
         const userReminders = reminders.filter(r => r.user === fromUser);
         if (userReminders.length === 0) {
-            bot.sendMessage(chatId, 'У тебя пока нет сохранённых напоминаний.');
+            bot.sendMessage(chatId, 'ℹ️ У тебя пока нет сохранённых напоминаний.');
         } else {
             const list = userReminders
-                .map(r => `- ${r.text} (сработает: ${new Date(r.time).toLocaleString()})`)
-                .join('\n');
-            bot.sendMessage(chatId, `📋 Твои напоминания:\n${list}`);
+                .map((r, i) => {
+                    const timeLeftMs = r.time - Date.now();
+                    const sec = Math.floor((timeLeftMs / 1000) % 60);
+                    const min = Math.floor((timeLeftMs / 60000) % 60);
+                    const hour = Math.floor((timeLeftMs / 3600000) % 24);
+                    const days = Math.floor(timeLeftMs / 86400000);
+                    let leftStr = '';
+                    if (days > 0) leftStr += `${days}д `;
+                    if (hour > 0) leftStr += `${hour}ч `;
+                    if (min > 0) leftStr += `${min}м `;
+                    leftStr += `${sec}с`;
+                    return `📝 ${i + 1}. "${r.text}"\n   ⏱ Сработает: ${new Date(r.time).toLocaleString()} (осталось: ${leftStr})`;
+                })
+                .join('\n\n');
+            bot.sendMessage(chatId, `📋 Твои напоминания:\n\n${list}`);
         }
         return;
     }
