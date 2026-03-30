@@ -10428,6 +10428,168 @@ async function badWordsUnmuteUser(chatId, userId) {
   });
 }
 
+/* ===================== АНТИМАТ ФУНКЦИИ ===================== */
+
+const badWordsFilterState = new Map(); // chatId -> { enabled: boolean }
+const badWordsUserWarnings = new Map(); // `${chatId}_${userId}` -> { count, lastTime }
+const badWordsMuteTimers = new Map(); // `${chatId}_${userId}` -> timeout
+
+const BAD_WORDS_WARN_LIMIT = 3; // на 4-м нарушении мут
+const BAD_WORDS_RESET_MS = 30 * 60 * 1000; // сброс предупреждений через 30 минут
+const BAD_WORDS_MUTE_MIN_MS = 0 * 60 * 1000; // 0 минут
+const BAD_WORDS_MUTE_MAX_MS = 10 * 60 * 1000; // 10 минут
+
+function badWordsGetChatState(chatId) {
+  const key = String(chatId);
+  if (!badWordsFilterState.has(key)) {
+    badWordsFilterState.set(key, { enabled: false });
+  }
+  return badWordsFilterState.get(key);
+}
+
+function badWordsUserKey(chatId, userId) {
+  return `${chatId}_${userId}`;
+}
+
+function badWordsNormalize(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/@/g, "а")
+    .replace(/a/g, "а")
+    .replace(/6/g, "б")
+    .replace(/0/g, "о")
+    .replace(/3/g, "з")
+    .replace(/4/g, "ч")
+    .replace(/y/g, "у")
+    .replace(/x/g, "х")
+    .replace(/!/g, "и")
+    .replace(/\$/g, "с")
+    .replace(/#/g, "х")
+    .replace(/[^a-zа-я0-9]/gi, "")
+    .trim();
+}
+
+function badWordsCompressRepeats(text) {
+  return text.replace(/(.)\1{2,}/g, "$1");
+}
+
+function badWordsContainsMat(text) {
+  let t = badWordsNormalize(text);
+  t = badWordsCompressRepeats(t);
+
+  const patterns = [
+    /бл(я|а|е)/,
+    /бляд/,
+    /блять/,
+    /сук(а|и|о)/,
+    /сучк/,
+    /ху(й|и|я|е|л)/,
+    /наху/,
+    /поху/,
+    /еб/,
+    /заеб/,
+    /выеб/,
+    /уеб/,
+    /пизд/,
+    /пид[ао]?р/,
+    /мудак/,
+    /долбоеб/,
+    /гандон/,
+    /шлюх/,
+    /мраз/,
+    /твар/,
+    /сра[тч]/,
+    /говн/
+  ];
+
+  return patterns.some((p) => p.test(t));
+}
+
+function badWordsGetRandomMuteMs() {
+  return Math.floor(
+    Math.random() * (BAD_WORDS_MUTE_MAX_MS - BAD_WORDS_MUTE_MIN_MS + 1)
+  ) + BAD_WORDS_MUTE_MIN_MS;
+}
+
+function badWordsFormatMinutes(ms) {
+  return Math.round(ms / 60000);
+}
+
+async function badWordsIsAdmin(chatId, userId) {
+  try {
+    const member = await bot.getChatMember(chatId, userId);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (e) {
+    console.error("badWordsIsAdmin error:", e.message);
+    return false;
+  }
+}
+
+async function badWordsCanUseCommands(msg) {
+  try {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const member = await bot.getChatMember(chatId, userId);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (e) {
+    console.error("badWordsCanUseCommands error:", e.message);
+    return false;
+  }
+}
+
+function badWordsRegisterWarning(chatId, userId) {
+  const key = badWordsUserKey(chatId, userId);
+  const now = Date.now();
+  const current = badWordsUserWarnings.get(key);
+
+  if (!current || now - current.lastTime > BAD_WORDS_RESET_MS) {
+    const fresh = { count: 1, lastTime: now };
+    badWordsUserWarnings.set(key, fresh);
+    return fresh;
+  }
+
+  current.count += 1;
+  current.lastTime = now;
+  badWordsUserWarnings.set(key, current);
+  return current;
+}
+
+function badWordsResetUser(chatId, userId) {
+  const key = badWordsUserKey(chatId, userId);
+  badWordsUserWarnings.delete(key);
+
+  if (badWordsMuteTimers.has(key)) {
+    clearTimeout(badWordsMuteTimers.get(key));
+    badWordsMuteTimers.delete(key);
+  }
+}
+
+async function badWordsMuteUser(chatId, userId, muteMs) {
+  const untilDate = Math.floor((Date.now() + muteMs) / 1000);
+
+  await bot.restrictChatMember(chatId, userId, {
+    until_date: untilDate,
+    can_send_messages: false
+  });
+}
+
+async function badWordsUnmuteUser(chatId, userId) {
+  await bot.restrictChatMember(chatId, userId, {
+    can_send_messages: true,
+    can_send_audios: true,
+    can_send_documents: true,
+    can_send_photos: true,
+    can_send_videos: true,
+    can_send_video_notes: true,
+    can_send_voice_notes: true,
+    can_send_polls: true,
+    can_send_other_messages: true,
+    can_add_web_page_previews: true,
+    can_invite_users: true
+  });
+}
+
 /* ---------- Команды антимата ---------- */
 
 bot.onText(/^\/maton$/i, async (msg) => {
@@ -10443,7 +10605,7 @@ bot.onText(/^\/maton$/i, async (msg) => {
 
   return bot.sendMessage(
     msg.chat.id,
-    "✅ Антимат включен.\nТеперь за мат бот будет предупреждать, а потом выдавать мут."
+    "✅ Антимат включен.\nТеперь бот будет выдавать предупреждения за мат, а на 4 нарушение — мут."
   );
 });
 
@@ -10458,10 +10620,7 @@ bot.onText(/^\/matoff$/i, async (msg) => {
   const state = badWordsGetChatState(msg.chat.id);
   state.enabled = false;
 
-  return bot.sendMessage(
-    msg.chat.id,
-    "❌ Антимат выключен."
-  );
+  return bot.sendMessage(msg.chat.id, "❌ Антимат выключен.");
 });
 
 bot.onText(/^\/matstatus$/i, async (msg) => {
@@ -10497,18 +10656,47 @@ bot.on("message", async (msg) => {
 
     const warning = badWordsRegisterWarning(chatId, userId);
 
-    if (warning.count <= BAD_WORDS_WARN_LIMIT) {
-      const left = BAD_WORDS_WARN_LIMIT + 1 - warning.count;
-
+    if (warning.count === 1) {
       await bot.sendMessage(
         chatId,
-        `⚠️ ${firstName}, не матерись.\nПричина: мат.\nПредупреждение: ${warning.count}/${BAD_WORDS_WARN_LIMIT}\nЕще ${left} ${left === 1 ? "нарушение" : left < 5 ? "нарушения" : "нарушений"} до мута.`
+        `⚠️ ${firstName}, не матерись.\n1 предупреждение.`
+      );
+      return;
+    }
+
+    if (warning.count === 2) {
+      await bot.sendMessage(
+        chatId,
+        `⚠️ ${firstName}, не матерись.\n2 предупреждение.`
+      );
+      return;
+    }
+
+    if (warning.count === 3) {
+      await bot.sendMessage(
+        chatId,
+        `⚠️ ${firstName}, не матерись.\n3 предупреждение.\nСледующее нарушение — мут.`
       );
       return;
     }
 
     const muteMs = badWordsGetRandomMuteMs();
     const muteMinutes = badWordsFormatMinutes(muteMs);
+
+    if (muteMinutes <= 0) {
+      await bot.sendMessage(
+        chatId,
+        `🔇 ${firstName} получил мут на 0 минут.\nПричина: мат.\nНа этот раз предупреждение последнее.`
+      );
+
+      badWordsResetUser(chatId, userId);
+
+      await bot.sendMessage(
+        chatId,
+        `✅ ${firstName}, можешь писать в чат, но больше не матерись.`
+      );
+      return;
+    }
 
     await badWordsMuteUser(chatId, userId, muteMs);
 
@@ -10525,7 +10713,7 @@ bot.on("message", async (msg) => {
         await badWordsUnmuteUser(chatId, userId);
         await bot.sendMessage(
           chatId,
-          `✅ ${firstName}, мут снят. Теперь можешь писать в чат, но без матов.`
+          `✅ ${firstName}, мут снят. Теперь ты можешь писать в чат, но не пиши маты.`
         );
       } catch (e) {
         console.error("badWords unmute timer error:", e.message);
