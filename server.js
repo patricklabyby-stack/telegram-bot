@@ -10757,86 +10757,42 @@ bot.on("message", async (msg) => {
   }
 });
 
-/* ===================== ПРОСТОЕ ПРИВЕТСТВИЕ ===================== */
+/* ===================== SIMPLE WELCOME ===================== */
 
-const fs = require("fs");
-const path = require("path");
+const simpleWelcomeState = new Map(); // chatId -> true/false
 
-const OWNER_IDS = [7837011810];
-const WELCOME_DB_PATH = path.join(__dirname, "welcome_data.json");
-
-let welcomeData = {
-  chats: {}
-};
-
-/* ---------- База ---------- */
-
-function loadWelcomeData() {
-  try {
-    if (fs.existsSync(WELCOME_DB_PATH)) {
-      const raw = fs.readFileSync(WELCOME_DB_PATH, "utf8");
-      const parsed = JSON.parse(raw);
-
-      if (parsed && typeof parsed === "object") {
-        welcomeData = {
-          chats: parsed.chats || {}
-        };
-      }
-    }
-  } catch (error) {
-    console.error("loadWelcomeData error:", error.message);
-  }
+function simpleWelcomeIsOwner(userId) {
+  return Number(userId) === 7837011810;
 }
 
-function saveWelcomeData() {
+async function simpleWelcomeCanUse(msg) {
   try {
-    fs.writeFileSync(WELCOME_DB_PATH, JSON.stringify(welcomeData, null, 2), "utf8");
-  } catch (error) {
-    console.error("saveWelcomeData error:", error.message);
-  }
-}
+    if (!msg || !msg.chat || !msg.from) return false;
 
-loadWelcomeData();
-
-/* ---------- Утилиты ---------- */
-
-function isWelcomeOwner(userId) {
-  return OWNER_IDS.includes(Number(userId));
-}
-
-async function canUseWelcomeCommands(msg) {
-  try {
-    if (!msg || !msg.from || !msg.chat) return false;
-
-    if (isWelcomeOwner(msg.from.id)) {
+    if (simpleWelcomeIsOwner(msg.from.id)) {
       return true;
     }
 
     const member = await bot.getChatMember(msg.chat.id, msg.from.id);
     return member && (member.status === "administrator" || member.status === "creator");
   } catch (error) {
-    console.error("canUseWelcomeCommands error:", error.message);
+    console.error("simpleWelcomeCanUse error:", error.message);
     return false;
   }
 }
 
-function getWelcomeState(chatId) {
+function simpleWelcomeGet(chatId) {
   const key = String(chatId);
 
-  if (!welcomeData.chats[key]) {
-    welcomeData.chats[key] = {
-      enabled: true
-    };
-    saveWelcomeData();
+  if (!simpleWelcomeState.has(key)) {
+    simpleWelcomeState.set(key, true); // по умолчанию включено
   }
 
-  return welcomeData.chats[key];
+  return simpleWelcomeState.get(key);
 }
 
-function setWelcomeEnabled(chatId, enabled) {
-  const state = getWelcomeState(chatId);
-  state.enabled = Boolean(enabled);
-  saveWelcomeData();
+function simpleWelcomeSet(chatId, enabled) {
+  simpleWelcomeState.set(String(chatId), Boolean(enabled));
 }
 
 /* ---------- Команды ---------- */
@@ -10845,7 +10801,7 @@ bot.onText(/^\/welcomeon(?:@\w+)?$/i, async (msg) => {
   try {
     if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
 
-    const allowed = await canUseWelcomeCommands(msg);
+    const allowed = await simpleWelcomeCanUse(msg);
     if (!allowed) {
       return bot.sendMessage(
         msg.chat.id,
@@ -10853,12 +10809,9 @@ bot.onText(/^\/welcomeon(?:@\w+)?$/i, async (msg) => {
       );
     }
 
-    setWelcomeEnabled(msg.chat.id, true);
+    simpleWelcomeSet(msg.chat.id, true);
 
-    await bot.sendMessage(
-      msg.chat.id,
-      "✅ Приветствие включено."
-    );
+    await bot.sendMessage(msg.chat.id, "✅ Приветствие включено.");
   } catch (error) {
     console.error("/welcomeon error:", error.message);
   }
@@ -10868,7 +10821,7 @@ bot.onText(/^\/welcomeoff(?:@\w+)?$/i, async (msg) => {
   try {
     if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
 
-    const allowed = await canUseWelcomeCommands(msg);
+    const allowed = await simpleWelcomeCanUse(msg);
     if (!allowed) {
       return bot.sendMessage(
         msg.chat.id,
@@ -10876,12 +10829,9 @@ bot.onText(/^\/welcomeoff(?:@\w+)?$/i, async (msg) => {
       );
     }
 
-    setWelcomeEnabled(msg.chat.id, false);
+    simpleWelcomeSet(msg.chat.id, false);
 
-    await bot.sendMessage(
-      msg.chat.id,
-      "❌ Приветствие выключено."
-    );
+    await bot.sendMessage(msg.chat.id, "❌ Приветствие выключено.");
   } catch (error) {
     console.error("/welcomeoff error:", error.message);
   }
@@ -10891,7 +10841,7 @@ bot.onText(/^\/welcomestatus(?:@\w+)?$/i, async (msg) => {
   try {
     if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
 
-    const allowed = await canUseWelcomeCommands(msg);
+    const allowed = await simpleWelcomeCanUse(msg);
     if (!allowed) {
       return bot.sendMessage(
         msg.chat.id,
@@ -10899,18 +10849,18 @@ bot.onText(/^\/welcomestatus(?:@\w+)?$/i, async (msg) => {
       );
     }
 
-    const state = getWelcomeState(msg.chat.id);
+    const enabled = simpleWelcomeGet(msg.chat.id);
 
     await bot.sendMessage(
       msg.chat.id,
-      `Статус приветствия: ${state.enabled ? "✅ включено" : "❌ выключено"}`
+      `Статус приветствия: ${enabled ? "✅ включено" : "❌ выключено"}`
     );
   } catch (error) {
     console.error("/welcomestatus error:", error.message);
   }
 });
 
-/* ---------- Автоприветствие ---------- */
+/* ---------- Приветствие ---------- */
 
 bot.on("message", async (msg) => {
   try {
@@ -10918,8 +10868,8 @@ bot.on("message", async (msg) => {
     if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
     if (!Array.isArray(msg.new_chat_members) || msg.new_chat_members.length === 0) return;
 
-    const state = getWelcomeState(msg.chat.id);
-    if (!state.enabled) return;
+    const enabled = simpleWelcomeGet(msg.chat.id);
+    if (!enabled) return;
 
     for (const user of msg.new_chat_members) {
       if (!user || user.is_bot) continue;
@@ -10932,6 +10882,6 @@ bot.on("message", async (msg) => {
       );
     }
   } catch (error) {
-    console.error("welcome message error:", error.message);
+    console.error("simple welcome message error:", error.message);
   }
 });
