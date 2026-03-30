@@ -11011,3 +11011,323 @@ bot.on("message", async (msg) => {
     console.error("simple bye message error:", error.message);
   }
 });
+
+/* ===================== MUTE SYSTEM ===================== */
+
+const MUTE_OWNER_IDS = [7837011810];
+const muteTimers = new Map(); // key: chatId_userId -> timeout
+
+function muteIsOwner(userId) {
+  return MUTE_OWNER_IDS.includes(Number(userId));
+}
+
+async function muteCanUse(msg) {
+  try {
+    if (!msg || !msg.chat || !msg.from) return false;
+
+    if (muteIsOwner(msg.from.id)) return true;
+
+    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (error) {
+    console.error("muteCanUse error:", error.message);
+    return false;
+  }
+}
+
+async function muteIsAdmin(chatId, userId) {
+  try {
+    if (muteIsOwner(userId)) return true;
+
+    const member = await bot.getChatMember(chatId, userId);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (error) {
+    console.error("muteIsAdmin error:", error.message);
+    return false;
+  }
+}
+
+function muteTimerKey(chatId, userId) {
+  return `${chatId}_${userId}`;
+}
+
+function muteFormatDuration(ms) {
+  const sec = Math.floor(ms / 1000);
+
+  if (sec < 60) return `${sec} сек`;
+  if (sec < 3600) return `${Math.floor(sec / 60)} мин`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)} ч`;
+  if (sec < 604800) return `${Math.floor(sec / 86400)} д`;
+  if (sec < 31536000) return `${Math.floor(sec / 604800)} нед`;
+  return `${Math.floor(sec / 31536000)} г`;
+}
+
+function parseMuteDuration(input) {
+  if (!input) return null;
+
+  let text = String(input).toLowerCase().trim().replace(",", ".");
+
+  const match = text.match(/^(\d+(?:\.\d+)?)\s*([a-zа-яё]+)$/i);
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  const unit = match[2];
+
+  if (!Number.isFinite(value) || value <= 0) return null;
+
+  const units = {
+    // секунды
+    "с": 1000,
+    "сек": 1000,
+    "секунда": 1000,
+    "секунды": 1000,
+    "секунд": 1000,
+    "second": 1000,
+    "seconds": 1000,
+
+    // минуты
+    "м": 60000,
+    "мин": 60000,
+    "минута": 60000,
+    "минуты": 60000,
+    "минут": 60000,
+    "minute": 60000,
+    "minutes": 60000,
+
+    // часы
+    "ч": 3600000,
+    "час": 3600000,
+    "часа": 3600000,
+    "часов": 3600000,
+    "hour": 3600000,
+    "hours": 3600000,
+
+    // дни
+    "д": 86400000,
+    "день": 86400000,
+    "дня": 86400000,
+    "дней": 86400000,
+    "day": 86400000,
+    "days": 86400000,
+
+    // недели
+    "н": 604800000,
+    "нед": 604800000,
+    "неделя": 604800000,
+    "недели": 604800000,
+    "недель": 604800000,
+    "week": 604800000,
+    "weeks": 604800000,
+
+    // годы
+    "г": 31536000000,
+    "год": 31536000000,
+    "года": 31536000000,
+    "лет": 31536000000,
+    "year": 31536000000,
+    "years": 31536000000
+  };
+
+  const multiplier = units[unit];
+  if (!multiplier) return null;
+
+  const ms = Math.floor(value * multiplier);
+
+  if (ms < 1000) return null;
+  return ms;
+}
+
+async function muteUser(chatId, userId, durationMs) {
+  const untilDate = Math.floor((Date.now() + durationMs) / 1000);
+
+  await bot.restrictChatMember(chatId, userId, {
+    until_date: untilDate,
+    can_send_messages: false,
+    can_send_audios: false,
+    can_send_documents: false,
+    can_send_photos: false,
+    can_send_videos: false,
+    can_send_video_notes: false,
+    can_send_voice_notes: false,
+    can_send_polls: false,
+    can_send_other_messages: false,
+    can_add_web_page_previews: false,
+    can_change_info: false,
+    can_invite_users: false,
+    can_pin_messages: false
+  });
+}
+
+async function unmuteUser(chatId, userId) {
+  await bot.restrictChatMember(chatId, userId, {
+    until_date: 0,
+    can_send_messages: true,
+    can_send_audios: true,
+    can_send_documents: true,
+    can_send_photos: true,
+    can_send_videos: true,
+    can_send_video_notes: true,
+    can_send_voice_notes: true,
+    can_send_polls: true,
+    can_send_other_messages: true,
+    can_add_web_page_previews: true,
+    can_change_info: false,
+    can_invite_users: true,
+    can_pin_messages: false
+  });
+}
+
+async function safeUnmuteUser(chatId, userId, firstName) {
+  try {
+    await unmuteUser(chatId, userId);
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    const member = await bot.getChatMember(chatId, userId);
+
+    const stillRestricted =
+      member &&
+      member.status === "restricted" &&
+      member.can_send_messages === false;
+
+    if (stillRestricted) {
+      return false;
+    }
+
+    await bot.sendMessage(
+      chatId,
+      `✅ ${firstName}, время мута вышло. Теперь ты снова можешь писать в чат.`
+    );
+
+    return true;
+  } catch (error) {
+    console.error("safeUnmuteUser error:", error.message);
+    return false;
+  }
+}
+
+/* ---------- Команда /mute ---------- */
+
+bot.onText(/^\/mute(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await muteCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    if (!msg.reply_to_message || !msg.reply_to_message.from) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Используй команду ответом на сообщение пользователя.\nПример: /mute 10 мин"
+      );
+    }
+
+    const durationText = match && match[1] ? match[1].trim() : "";
+    const durationMs = parseMuteDuration(durationText);
+
+    if (!durationMs) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Неверное время.\nПримеры:\n/mute 30 сек\n/mute 10 мин\n/mute 2 часа\n/mute 1 день\n/mute 2 недели\n/mute 1 год"
+      );
+    }
+
+    const target = msg.reply_to_message.from;
+    const targetUserId = target.id;
+    const firstName = target.first_name || "пользователь";
+
+    if (muteIsOwner(targetUserId)) {
+      return bot.sendMessage(msg.chat.id, "❌ Владельца бота мутить нельзя.");
+    }
+
+    const targetIsAdmin = await muteIsAdmin(msg.chat.id, targetUserId);
+    if (targetIsAdmin) {
+      return bot.sendMessage(msg.chat.id, "❌ Админа группы мутить нельзя.");
+    }
+
+    await muteUser(msg.chat.id, targetUserId, durationMs);
+
+    const pretty = muteFormatDuration(durationMs);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `🔇 ${firstName} получил мут на ${pretty}.`
+    );
+
+    const key = muteTimerKey(msg.chat.id, targetUserId);
+
+    if (muteTimers.has(key)) {
+      clearTimeout(muteTimers.get(key));
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const ok = await safeUnmuteUser(msg.chat.id, targetUserId, firstName);
+
+        if (!ok) {
+          await bot.sendMessage(
+            msg.chat.id,
+            `⚠️ Не удалось автоматически снять мут с ${firstName}.\nИспользуй /unmute ответом на сообщение пользователя.`
+          );
+        }
+      } catch (error) {
+        console.error("mute timer error:", error.message);
+      } finally {
+        muteTimers.delete(key);
+      }
+    }, durationMs);
+
+    muteTimers.set(key, timer);
+  } catch (error) {
+    console.error("/mute error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Ошибка при выдаче мута.");
+  }
+});
+
+/* ---------- Команда /unmute ---------- */
+
+bot.onText(/^\/unmute(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+
+    const allowed = await muteCanUse(msg);
+    if (!allowed) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Эту команду может использовать только админ группы или владелец бота."
+      );
+    }
+
+    if (!msg.reply_to_message || !msg.reply_to_message.from) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Используй /unmute ответом на сообщение пользователя."
+      );
+    }
+
+    const target = msg.reply_to_message.from;
+    const targetUserId = target.id;
+    const firstName = target.first_name || "пользователь";
+
+    await unmuteUser(msg.chat.id, targetUserId);
+
+    const key = muteTimerKey(msg.chat.id, targetUserId);
+    if (muteTimers.has(key)) {
+      clearTimeout(muteTimers.get(key));
+      muteTimers.delete(key);
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `✅ ${firstName}, мут снят вручную. Теперь можешь писать в чат.`
+    );
+  } catch (error) {
+    console.error("/unmute error:", error.message);
+    await bot.sendMessage(msg.chat.id, "Ошибка при снятии мута.");
+  }
+});
