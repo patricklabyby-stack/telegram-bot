@@ -11417,7 +11417,7 @@ bot.onText(/^\/unpin(?:@\w+)?$/i, async (msg) => {
   }
 })
 
-/* ===================== SLOW MODE ===================== */
+/* ===================== SLOW MODE WORKING ===================== */
 
 const SLOW_OWNER_IDS = [7837011810];
 
@@ -11439,11 +11439,52 @@ async function slowCanUse(msg) {
   }
 }
 
+function normalizeSlowValue(value) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) return null;
+
+  const allowed = [0, 5, 10, 30, 60, 300, 900, 3600];
+  return allowed.includes(n) ? n : null;
+}
+
+async function setSlowModeRaw(chatId, seconds) {
+  const token = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN;
+
+  if (!token) {
+    throw new Error("Не найден токен бота в env (TELEGRAM_BOT_TOKEN / BOT_TOKEN / TOKEN)");
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/setChatSlowModeDelay`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      slow_mode_delay: seconds
+    })
+  });
+
+  const data = await response.json();
+
+  if (!data.ok) {
+    throw new Error(data.description || "Telegram API error");
+  }
+
+  return data.result;
+}
+
 /* ---------- /slow ---------- */
 
 bot.onText(/^\/slow(?:@\w+)?\s+(\d+)$/i, async (msg, match) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (!msg.chat || (msg.chat.type !== "supergroup")) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Slow mode работает только в супергруппе."
+      );
+    }
 
     const allowed = await slowCanUse(msg);
     if (!allowed) {
@@ -11453,25 +11494,28 @@ bot.onText(/^\/slow(?:@\w+)?\s+(\d+)$/i, async (msg, match) => {
       );
     }
 
-    let seconds = parseInt(match[1], 10);
+    const seconds = normalizeSlowValue(match[1]);
 
-    if (isNaN(seconds) || seconds < 0) {
-      return bot.sendMessage(msg.chat.id, "Укажи корректное время в секундах.");
+    if (seconds === null) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Можно ставить только: 5, 10, 30, 60, 300, 900, 3600 сек.\nПример: /slow 10"
+      );
     }
 
-    if (seconds > 86400) {
-      return bot.sendMessage(msg.chat.id, "Максимум — 86400 секунд (24 часа).");
-    }
-
-    await bot.setChatSlowModeDelay(msg.chat.id, seconds);
+    await setSlowModeRaw(msg.chat.id, seconds);
 
     await bot.sendMessage(
       msg.chat.id,
-      `🐢 Медленный режим включён: ${seconds} сек. между сообщениями.`
+      `🐢 Медленный режим включён: ${seconds} сек.`
     );
   } catch (error) {
     console.error("/slow error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Не удалось включить медленный режим.");
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `Не удалось включить медленный режим.\nОшибка: ${error.message}`
+    );
   }
 });
 
@@ -11479,7 +11523,12 @@ bot.onText(/^\/slow(?:@\w+)?\s+(\d+)$/i, async (msg, match) => {
 
 bot.onText(/^\/slowoff(?:@\w+)?$/i, async (msg) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (!msg.chat || (msg.chat.type !== "supergroup")) {
+      return bot.sendMessage(
+        msg.chat.id,
+        "Slow mode работает только в супергруппе."
+      );
+    }
 
     const allowed = await slowCanUse(msg);
     if (!allowed) {
@@ -11489,7 +11538,7 @@ bot.onText(/^\/slowoff(?:@\w+)?$/i, async (msg) => {
       );
     }
 
-    await bot.setChatSlowModeDelay(msg.chat.id, 0);
+    await setSlowModeRaw(msg.chat.id, 0);
 
     await bot.sendMessage(
       msg.chat.id,
@@ -11497,6 +11546,10 @@ bot.onText(/^\/slowoff(?:@\w+)?$/i, async (msg) => {
     );
   } catch (error) {
     console.error("/slowoff error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Не удалось выключить медленный режим.");
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `Не удалось выключить медленный режим.\nОшибка: ${error.message}`
+    );
   }
 });
