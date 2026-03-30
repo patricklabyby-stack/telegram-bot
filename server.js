@@ -10226,15 +10226,15 @@ function parseTime(input) {
     return null;
 }
 
-// Команда /напомни
-bot.onText(/\/напомни (.+)/i, (msg, match) => {
+bot.onText(/^напомни (.+)/i, (msg, match) => {
     const chatId = msg.chat.id;
-    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const userName = msg.from.first_name;
+    const userId = msg.from.id;
     const input = match[1];
 
     const splitIndex = input.indexOf(' ');
     if (splitIndex === -1) {
-        bot.sendMessage(chatId, 'Неверный формат. Пример: /напомни 5мин Поспать');
+        bot.sendMessage(chatId, 'Пример: напомни 5мин Поспать');
         return;
     }
 
@@ -10243,18 +10243,47 @@ bot.onText(/\/напомни (.+)/i, (msg, match) => {
 
     const delay = parseTime(timeStr);
     if (!delay) {
-        bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
+        bot.sendMessage(chatId, 'Используй: сек, мин, ч, д');
         return;
     }
 
     bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
 
+    const reminder = {
+        id: Date.now(),
+        userId,
+        userName,
+        text: reminderText,
+        time: timeStr
+    };
+
     const timer = setTimeout(() => {
-        bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
-        // удаляем таймер из массива после срабатывания
-        const index = reminders.indexOf(timer);
+        bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
+
+        const index = reminders.findIndex(r => r.id === reminder.id);
         if (index > -1) reminders.splice(index, 1);
     }, delay);
 
-    reminders.push(timer);
+    reminder.timer = timer;
+    reminders.push(reminder);
+});
+
+bot.onText(/\/напоминания/, (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    const userReminders = reminders.filter(r => r.userId === userId);
+
+    if (userReminders.length === 0) {
+        bot.sendMessage(chatId, '📭 У тебя нет напоминаний');
+        return;
+    }
+
+    let text = '📋 Твои напоминания:\n\n';
+
+    userReminders.forEach((r, i) => {
+        text += `${i + 1}. Через ${r.time} — ${r.text}\n`;
+    });
+
+    bot.sendMessage(chatId, text);
 });
