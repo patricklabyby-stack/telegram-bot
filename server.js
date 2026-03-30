@@ -10208,95 +10208,49 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
   }
 });
 
-// ======= Напоминания =======
-const reminders = []; // массив для хранения активных таймеров
+// Массив для хранения напоминаний
+let reminders = [];
 
-function parseTime(input) {
-    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
-    const match = input.match(regex);
-    if (!match) return null;
+/**
+ * Установить напоминание
+ * @param {string} text - текст напоминания
+ * @param {number} delayMs - задержка в миллисекундах
+ */
+function addReminder(text, delayMs) {
+    const reminder = {
+        text,
+        time: Date.now() + delayMs
+    };
+    reminders.push(reminder);
 
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
+    console.log(`✅ Напоминание установлено на ${Math.round(delayMs / 1000)} секунд: "${text}"`);
 
-    if (unit.startsWith('сек')) return value * 1000;
-    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
-    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
-    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
-    return null;
+    setTimeout(() => {
+        console.log(`⏰ Напоминание: "${text}"`);
+        // Удаляем напоминание после срабатывания
+        reminders = reminders.filter(r => r !== reminder);
+    }, delayMs);
 }
 
-bot.onText(/^напомни (.+)/i, (msg, match) => {
-    const chatId = msg.chat.id;
-    const userName = msg.from.first_name;
-    const userId = msg.from.id;
-    const input = match[1];
-
-    const splitIndex = input.indexOf(' ');
-    if (splitIndex === -1) {
-        bot.sendMessage(chatId, 'Пример: напомни 5мин Поспать');
+/**
+ * Показать все активные напоминания
+ */
+function showReminders() {
+    if (!reminders.length) {
+        console.log("Нет активных напоминаний.");
         return;
     }
 
-    const timeStr = input.slice(0, splitIndex);
-    const reminderText = input.slice(splitIndex + 1);
-
-    const delay = parseTime(timeStr);
-    if (!delay) {
-        bot.sendMessage(chatId, 'Используй: сек, мин, ч, д');
-        return;
-    }
-
-    bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
-
-const reminder = {
-    id: Date.now(),
-    userId,
-    userName,
-    text: reminderText,
-    time: timeStr,
-    chatId,
-    endTime: Date.now() + delay
-};
-
-const timer = setTimeout(() => {
-    bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
-
-    const index = reminders.findIndex(r => r.id === reminder.id);
-    if (index > -1) reminders.splice(index, 1);
-}, delay);
-
-reminder.timer = timer;
-reminders.push(reminder);
-
-bot.onText(/\/напоминания/, (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    const userReminders = reminders.filter(r => r.userId === userId);
-
-    if (userReminders.length === 0) {
-        bot.sendMessage(chatId, '📭 У тебя нет напоминаний');
-        return;
-    }
-
-    let text = '📋 Твои напоминания:\n\n';
-
-    userReminders.forEach((r, i) => {
-        const remaining = r.endTime - Date.now();
-
-        let timeLeft = 'скоро';
-
-        if (remaining > 0) {
-            const sec = Math.floor(remaining / 1000) % 60;
-            const min = Math.floor(remaining / (1000 * 60)) % 60;
-            const hrs = Math.floor(remaining / (1000 * 60 * 60));
-
-            timeLeft = `${hrs}ч ${min}м ${sec}с`;
-        }
-
-        text += `${i + 1}. (${timeLeft}) — ${r.text}\n`;
+    console.log("Активные напоминания:");
+    reminders.forEach((r, i) => {
+        const remaining = Math.max(0, r.time - Date.now());
+        console.log(`${i + 1}. "${r.text}" — через ${Math.round(remaining / 1000)} секунд`);
     });
+}
 
-    bot.sendMessage(chatId, text);
-});
+// Примеры использования
+addReminder("Проверить почту", 5000);   // через 5 секунд
+addReminder("Выпить воду", 10000);     // через 10 секунд
+
+// Через 3 секунды показать активные напоминания
+setTimeout(showReminders, 3000);
