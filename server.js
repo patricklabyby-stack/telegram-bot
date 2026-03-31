@@ -9950,6 +9950,9 @@ bot.on("polling_error", (error) => {
   console.error("Polling error:", error?.message || error);
 });
 
+const fs = require("fs");
+const path = require("path");
+
 // =========================
 // STARTUP
 // =========================
@@ -9965,6 +9968,8 @@ bot.on("polling_error", (error) => {
     await processLayLowReductions();
     await processPassiveWantedDecay();
 
+    restoreReminders();
+
     console.log("✅ Shields clamped to max =", MAX_SHIELDS);
     console.log("✅ Bot started");
   } catch (error) {
@@ -9972,30 +9977,57 @@ bot.on("polling_error", (error) => {
   }
 })();
 
-bot.onText(/\/start/, (msg) => {
-  if (msg.chat.type !== 'private') return;
+// =========================
+// /start
+// =========================
+bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
+  try {
+    if (msg.chat.type !== "private") return;
 
-  const chatId = msg.chat.id;
-  const userName = msg.from.first_name || "друг";
+    const chatId = msg.chat.id;
+    const userName = msg.from?.first_name || "друг";
 
-  bot.sendMessage(
-    chatId,
-    `👋 Привет, ${userName}!\n\n` +
-    `🔥 Добро пожаловать в Мини Модератор!\n\n` +
-    `📌 Напиши /help, чтобы увидеть все команды.`,
-    { parse_mode: "HTML" }
-  );
+    await bot.sendMessage(
+      chatId,
+      `👋 Привет, ${userName}!\n\n` +
+      `🔥 Добро пожаловать в Мини Модератор!\n\n` +
+      `📌 Напиши /help, чтобы увидеть все команды.`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("/start error:", error.message);
+  }
 });
 
 // =========================
-// АНТИСПАМ С МУТОМ
+// ОБЩИЕ КОНСТАНТЫ
 // =========================
+const OWNER_ID = 7837011810;
+const OWNER_IDS = [7837011810];
 
-const userSpamMap = new Map();
-const mutedUsers = new Map();
+function isOwner(userId) {
+  return OWNER_IDS.includes(Number(userId));
+}
 
-function getSpamKey(chatId, userId) {
-  return `${chatId}:${userId}`;
+async function isAdmin(chatId, userId) {
+  try {
+    if (isOwner(userId)) return true;
+    const member = await bot.getChatMember(chatId, userId);
+    return member && (member.status === "administrator" || member.status === "creator");
+  } catch (error) {
+    console.error("isAdmin error:", error.message);
+    return false;
+  }
+}
+
+async function canUseAdminCommands(msg) {
+  try {
+    if (!msg?.chat || !msg?.from) return false;
+    return await isAdmin(msg.chat.id, msg.from.id);
+  } catch (error) {
+    console.error("canUseAdminCommands error:", error.message);
+    return false;
+  }
 }
 
 async function canBotRestrict(chatId) {
@@ -10013,191 +10045,211 @@ async function canBotRestrict(chatId) {
   }
 }
 
-function formatTime(ms) {
+function formatDuration(ms) {
   const sec = Math.floor(ms / 1000);
 
   if (sec < 60) return `${sec} сек`;
-
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} мин`;
-
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} ч`;
-
-  const day = Math.floor(hr / 24);
-  return `${day} д`;
+  if (sec < 3600) return `${Math.floor(sec / 60)} мин`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)} ч`;
+  if (sec < 604800) return `${Math.floor(sec / 86400)} д`;
+  if (sec < 31536000) return `${Math.floor(sec / 604800)} нед`;
+  return `${Math.floor(sec / 31536000)} г`;
 }
 
-function isMuted(chatId, userId) {
-  return mutedUsers.has(getSpamKey(chatId, userId));
+// =========================
+// SAFE MESSAGE SEND
+// =========================
+async function safeSendMessage(chatId, text, options = {}) {
+  try {
+    return await bot.sendMessage(chatId, text, options);
+  } catch (error) {
+    console.error("safeSendMessage error:", error.message);
+    return null;
+  }
+}
+
+// =========================
+// SAFE DELETE MESSAGE
+// =========================
+async function safeDeleteMessage(chatId, messageId) {
+  try {
+    await bot.deleteMessage(chatId, messageId);
+  } catch (error) {
+    console.error("safeDeleteMessage error:", error.message);
+  }
+}
+
+// =========================
+// MUTE / UNMUTE CORE
+// =========================
+const muteTimers = new Map(); // key: chatId_userId -> timeout
+const spamMuteTimers = new Map(); // отдельные таймеры антиспама
+const MAT_MUTE_TIMERS = new Map(); // антимат
+
+function makeTimerKey(chatId, userId) {
+  return `${chatId}_${userId}`;
+}
+
+async function restrictUser(chatId, userId, durationMs) {
+  const untilDate = Math.floor((Date.now() + durationMs) / 1000);
+
+  await bot.restrictChatMember(chatId, userId, {
+    until_date: untilDate,
+    permissions: {
+      can_send_messages: false,
+      can_send_audios: false,
+      can_send_documents: false,
+      can_send_photos: false,
+      can_send_videos: false,
+      can_send_video_notes: false,
+      can_send_voice_notes: false,
+      can_send_polls: false,
+      can_send_other_messages: false,
+      can_add_web_page_previews: false
+    }
+  });
+}
+
+async function liftRestrictions(chatId, userId) {
+  await bot.restrictChatMember(chatId, userId, {
+    until_date: 0,
+    permissions: {
+      can_send_messages: true,
+      can_send_audios: true,
+      can_send_documents: true,
+      can_send_photos: true,
+      can_send_videos: true,
+      can_send_video_notes: true,
+      can_send_voice_notes: true,
+      can_send_polls: true,
+      can_send_other_messages: true,
+      can_add_web_page_previews: true
+    }
+  });
+}
+
+async function safeUnmute(chatId, userId, firstName) {
+  try {
+    await liftRestrictions(chatId, userId);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    const member = await bot.getChatMember(chatId, userId);
+    const stillRestricted =
+      member &&
+      member.status === "restricted" &&
+      member.can_send_messages === false;
+
+    if (stillRestricted) return false;
+
+    await safeSendMessage(
+      chatId,
+      `✅ ${firstName}, время мута вышло. Теперь ты снова можешь писать в чат.`
+    );
+
+    return true;
+  } catch (error) {
+    console.error("safeUnmute error:", error.message);
+    return false;
+  }
+}
+
+function clearAllMuteTimers(chatId, userId) {
+  const key = makeTimerKey(chatId, userId);
+
+  if (muteTimers.has(key)) {
+    clearTimeout(muteTimers.get(key));
+    muteTimers.delete(key);
+  }
+
+  if (spamMuteTimers.has(key)) {
+    clearTimeout(spamMuteTimers.get(key));
+    spamMuteTimers.delete(key);
+  }
+
+  if (MAT_MUTE_TIMERS.has(key)) {
+    clearTimeout(MAT_MUTE_TIMERS.get(key));
+    MAT_MUTE_TIMERS.delete(key);
+  }
+}
+
+// =========================
+// АНТИСПАМ
+// =========================
+const userSpamMap = new Map();
+
+function getSpamKey(chatId, userId) {
+  return `${chatId}:${userId}`;
+}
+
+function isSpamMuted(chatId, userId) {
+  return spamMuteTimers.has(makeTimerKey(chatId, userId));
 }
 
 function clearSpamHistory(chatId, userId) {
   userSpamMap.delete(getSpamKey(chatId, userId));
 }
 
-async function muteUser(chatId, userId, userName, muteTime, reason = "спам") {
-  const key = getSpamKey(chatId, userId);
+async function antispamMuteUser(chatId, userId, userName, muteTime, reason = "спам") {
+  const key = makeTimerKey(chatId, userId);
 
-  if (mutedUsers.has(key)) return false;
+  if (spamMuteTimers.has(key)) return false;
 
   try {
-    await bot.restrictChatMember(chatId, userId, {
-      until_date: Math.floor((Date.now() + muteTime) / 1000),
-      permissions: {
-        can_send_messages: false,
-        can_send_audios: false,
-        can_send_documents: false,
-        can_send_photos: false,
-        can_send_videos: false,
-        can_send_video_notes: false,
-        can_send_voice_notes: false,
-        can_send_polls: false,
-        can_send_other_messages: false,
-        can_add_web_page_previews: false
-      }
-    });
+    await restrictUser(chatId, userId, muteTime);
 
     const timeout = setTimeout(async () => {
       try {
-        await bot.restrictChatMember(chatId, userId, {
-          permissions: {
-            can_send_messages: true,
-            can_send_audios: true,
-            can_send_documents: true,
-            can_send_photos: true,
-            can_send_videos: true,
-            can_send_video_notes: true,
-            can_send_voice_notes: true,
-            can_send_polls: true,
-            can_send_other_messages: true,
-            can_add_web_page_previews: true
-          }
-        });
-
-        mutedUsers.delete(key);
-        await bot.sendMessage(chatId, `✅ ${userName} снова может писать`);
+        await liftRestrictions(chatId, userId);
+        spamMuteTimers.delete(key);
+        await safeSendMessage(chatId, `✅ ${userName} снова может писать`);
       } catch (err) {
-        console.log("Ошибка авторазмута:", err.message);
+        console.log("Ошибка авторазмута антиспама:", err.message);
       }
     }, muteTime);
 
-    mutedUsers.set(key, timeout);
+    spamMuteTimers.set(key, timeout);
     clearSpamHistory(chatId, userId);
 
-    await bot.sendMessage(
+    await safeSendMessage(
       chatId,
-      `🔇 ${userName} получил мут на ${formatTime(muteTime)}\n💬 Причина: ${reason}`
+      `🔇 ${userName} получил мут на ${formatDuration(muteTime)}\n💬 Причина: ${reason}`
     );
 
     return true;
   } catch (err) {
-    console.log("Ошибка muteUser:", err.message);
+    console.log("Ошибка antispamMuteUser:", err.message);
     return false;
   }
 }
 
 // =========================
-// ПРОВЕРКА СООБЩЕНИЙ
-// =========================
-
-bot.on("message", async (msg) => {
-  try {
-    if (!msg?.chat || !msg?.from) return;
-    if (msg.chat.type === "private") return;
-    if (msg.text && msg.text.startsWith("/")) return;
-
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const userName =
-      msg.from.first_name ||
-      msg.from.username ||
-      `user_${userId}`;
-
-    const settings = await getSettings(chatId);
-    if (!settings.enabled) return;
-
-    if (settings.ignoreAdmins) {
-      const admin = await isOwnerOrAdmin(msg);
-      if (admin) return;
-    }
-
-    const botCanRestrict = await canBotRestrict(chatId);
-    if (!botCanRestrict) return;
-
-    if (isMuted(chatId, userId)) return;
-
-    const key = getSpamKey(chatId, userId);
-    const now = Date.now();
-
-    if (!userSpamMap.has(key)) {
-      userSpamMap.set(key, []);
-    }
-
-    const times = userSpamMap.get(key);
-    times.push(now);
-
-    while (times.length && now - times[0] > settings.interval) {
-      times.shift();
-    }
-
-    if (times.length > settings.messageLimit) {
-      if (settings.deleteSpamMessage) {
-        try {
-          await bot.deleteMessage(chatId, msg.message_id);
-        } catch (err) {
-          console.log("Ошибка удаления сообщения:", err.message);
-        }
-      }
-
-      await muteUser(chatId, userId, userName, settings.muteTime, "спам");
-    }
-  } catch (err) {
-    console.log("Ошибка антиспама:", err.message);
-  }
-});
-
-// =========================
 // /addmod
+// ЛУЧШЕ ТОЛЬКО REPLY
 // =========================
-bot.onText(/\/addmod (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const senderId = msg.from.id;
-  const targetUsername = match[1].replace('@', '');
-
-  // Проверяем права отправителя
-  let canPromote = false;
-  if (senderId === OWNER_ID) {
-    canPromote = true; // владелец бота может назначать
-  } else {
-    try {
-      const member = await bot.getChatMember(chatId, senderId);
-      if (['creator', 'administrator'].includes(member.status)) canPromote = true;
-    } catch {}
-  }
-
-  if (!canPromote) return bot.sendMessage(chatId, '❌ Только админ или владелец бота может назначать модеров.');
-
+bot.onText(/^\/addmod(?:@\w+)?$/i, async (msg) => {
   try {
-    // Получаем всех участников группы
-    const chatAdmins = await bot.getChatAdministrators(chatId);
-    const targetAdmin = chatAdmins.find(m => m.user.username === targetUsername);
+    const chatId = msg.chat.id;
 
-    // Проверка: цель не владелец
-    if (targetAdmin && targetAdmin.status === 'creator') {
-      return bot.sendMessage(chatId, '❌ Невозможно назначить владельца модером.');
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+
+    const allowed = await canUseAdminCommands(msg);
+    if (!allowed) {
+      return safeSendMessage(chatId, "❌ Только админ или владелец бота может назначать модеров.");
     }
 
-    // Получаем id пользователя по username
-    let targetId;
-    if (targetAdmin) targetId = targetAdmin.user.id;
-    else {
-      // Если цель не в админах, пробуем найти через getChatMember
-      const member = await bot.getChatMember(chatId, targetUsername);
-      targetId = member.user.id;
+    if (!msg.reply_to_message?.from) {
+      return safeSendMessage(chatId, "Используй /addmod ответом на сообщение пользователя.");
     }
 
-    // Назначаем модератором
+    const target = msg.reply_to_message.from;
+    const targetId = target.id;
+    const targetName = target.username ? `@${target.username}` : (target.first_name || "пользователь");
+
+    const member = await bot.getChatMember(chatId, targetId);
+    if (member.status === "creator") {
+      return safeSendMessage(chatId, "❌ Невозможно назначить владельца группы модером.");
+    }
+
     await bot.promoteChatMember(chatId, targetId, {
       can_change_info: false,
       can_delete_messages: true,
@@ -10207,108 +10259,155 @@ bot.onText(/\/addmod (.+)/, async (msg, match) => {
       can_promote_members: false
     });
 
-    bot.sendMessage(chatId, `✅ @${targetUsername} теперь модератор.`);
-
+    await safeSendMessage(chatId, `✅ ${targetName} теперь модератор.`);
   } catch (err) {
-    console.error('Ошибка при назначении модератора:', err);
-    bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.response?.description || err.message}`);
+    console.error("Ошибка при назначении модератора:", err.message);
+    await safeSendMessage(msg.chat.id, `❌ Не удалось назначить модератора: ${err.message}`);
   }
 });
 
-// ======= Напоминания =======
-const reminders = []; // массив для хранения активных таймеров и данных о напоминаниях
+// =========================
+// НАПОМИНАНИЯ С СОХРАНЕНИЕМ
+// =========================
+const REMINDERS_DB_PATH = path.join(__dirname, "reminders.json");
+let reminders = [];
 
-function parseTime(input) {
-    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
-    const match = input.match(regex);
-    if (!match) return null;
-
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-
-    if (unit.startsWith('сек')) return value * 1000;
-    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
-    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
-    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
-    return null;
+function saveReminders() {
+  try {
+    fs.writeFileSync(REMINDERS_DB_PATH, JSON.stringify(reminders, null, 2), "utf8");
+  } catch (error) {
+    console.error("saveReminders error:", error.message);
+  }
 }
 
-// Команда /напомни
-bot.onText(/\/напомни (.+)/i, (msg, match) => {
+function loadReminders() {
+  try {
+    if (!fs.existsSync(REMINDERS_DB_PATH)) return [];
+    const raw = fs.readFileSync(REMINDERS_DB_PATH, "utf8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.error("loadReminders error:", error.message);
+    return [];
+  }
+}
+
+function parseReminderTime(input) {
+  const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
+  const match = String(input).match(regex);
+  if (!match) return null;
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+
+  if (unit.startsWith("сек")) return value * 1000;
+  if (unit.startsWith("мин") || unit === "м") return value * 60 * 1000;
+  if (unit.startsWith("ч")) return value * 60 * 60 * 1000;
+  if (unit.startsWith("д")) return value * 24 * 60 * 60 * 1000;
+
+  return null;
+}
+
+function scheduleReminder(reminder) {
+  const delay = reminder.triggerAt - Date.now();
+  if (delay <= 0) return;
+
+  reminder.timer = setTimeout(async () => {
+    await safeSendMessage(reminder.chatId, `⏰ ${reminder.user}, напоминание: ${reminder.text}`);
+    reminders = reminders.filter(r => r.id !== reminder.id);
+    saveReminders();
+  }, delay);
+}
+
+function restoreReminders() {
+  reminders = loadReminders();
+
+  const now = Date.now();
+  reminders = reminders.filter(r => r.triggerAt > now);
+
+  for (const reminder of reminders) {
+    scheduleReminder(reminder);
+  }
+
+  saveReminders();
+}
+
+bot.onText(/^\/напомни(?:@\w+)?\s+(.+)$/i, async (msg, match) => {
+  try {
     const chatId = msg.chat.id;
-    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const fromUser = msg.from.username ? "@" + msg.from.username : (msg.from.first_name || "пользователь");
     const input = match[1];
 
-    const splitIndex = input.indexOf(' ');
+    const splitIndex = input.indexOf(" ");
     if (splitIndex === -1) {
-        bot.sendMessage(chatId, 'Неверный формат. Пример: /напомни 5мин Поспать');
-        return;
+      return safeSendMessage(chatId, "Неверный формат. Пример: /напомни 5мин Поспать");
     }
 
     const timeStr = input.slice(0, splitIndex);
-    const reminderText = input.slice(splitIndex + 1);
+    const reminderText = input.slice(splitIndex + 1).trim();
 
-    const delay = parseTime(timeStr);
-    if (!delay) {
-        bot.sendMessage(chatId, 'Не удалось распознать время. Используй сек, мин, ч, д.');
-        return;
+    if (!reminderText) {
+      return safeSendMessage(chatId, "Укажи текст напоминания.");
     }
 
-    bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+    const delay = parseReminderTime(timeStr);
+    if (!delay) {
+      return safeSendMessage(chatId, "Не удалось распознать время. Используй сек, мин, ч, д.");
+    }
 
-    const timer = setTimeout(() => {
-        bot.sendMessage(chatId, `⏰ ${fromUser}, напоминание: ${reminderText}`);
-        // удаляем таймер из массива после срабатывания
-        const index = reminders.findIndex(r => r.timer === timer);
-        if (index > -1) reminders.splice(index, 1);
-    }, delay);
+    const reminder = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      chatId,
+      user: fromUser,
+      text: reminderText,
+      triggerAt: Date.now() + delay
+    };
 
-    // Сохраняем данные о напоминании
-    reminders.push({ timer, chatId, user: fromUser, text: reminderText });
+    reminders.push(reminder);
+    saveReminders();
+    scheduleReminder(reminder);
+
+    await safeSendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+  } catch (error) {
+    console.error("/напомни error:", error.message);
+  }
 });
 
-// Команда /мои_напоминания
-bot.onText(/\/мои_напоминания/i, (msg) => {
+bot.onText(/^\/мои_напоминания(?:@\w+)?$/i, async (msg) => {
+  try {
     const chatId = msg.chat.id;
-    const fromUser = msg.from.username ? '@' + msg.from.username : msg.from.first_name;
+    const fromUser = msg.from.username ? "@" + msg.from.username : (msg.from.first_name || "пользователь");
 
     const userReminders = reminders.filter(r => r.user === fromUser);
 
     if (userReminders.length === 0) {
-        bot.sendMessage(chatId, 'У вас нет активных напоминаний.');
-        return;
+      return safeSendMessage(chatId, "У вас нет активных напоминаний.");
     }
 
-    let response = '📋 Ваши активные напоминания:\n';
+    let response = "📋 Ваши активные напоминания:\n\n";
     userReminders.forEach((r, i) => {
-        response += `${i + 1}. ${r.text}\n`;
+      response += `${i + 1}. ${r.text} — через ${formatDuration(r.triggerAt - Date.now())}\n`;
     });
 
-    bot.sendMessage(chatId, response);
+    await safeSendMessage(chatId, response);
+  } catch (error) {
+    console.error("/мои_напоминания error:", error.message);
+  }
 });
 
-/* ===================== АНТИМАТ WORKING ===================== */
-
-const fs = require("fs");
-const path = require("path");
-
-const OWNER_IDS = [7837011810];
-
-const MAT_WARN_LIMIT = 3; // 1,2,3 предупреждение, дальше муты
-const MAT_RESET_MS = 30 * 60 * 1000; // если 30 минут без мата — счетчик сбрасывается
+// =========================
+// АНТИМАТ
+// =========================
+const MAT_WARN_LIMIT = 3;
+const MAT_RESET_MS = 30 * 60 * 1000;
 const MAT_MUTE_MIN_MINUTES = 1;
 const MAT_MUTE_MAX_MINUTES = 10;
-
 const MAT_DB_PATH = path.join(__dirname, "antimat_data.json");
 
 let matData = {
   chats: {},
   users: {}
 };
-
-const MAT_MUTE_TIMERS = new Map();
-
-/* ---------- База ---------- */
 
 function loadMatData() {
   try {
@@ -10337,12 +10436,6 @@ function saveMatData() {
 }
 
 loadMatData();
-
-/* ---------- Утилиты ---------- */
-
-function matIsOwner(userId) {
-  return OWNER_IDS.includes(Number(userId));
-}
 
 function matGetChatState(chatId) {
   const key = String(chatId);
@@ -10445,34 +10538,6 @@ function matGetRandomMuteMinutes() {
   ) + MAT_MUTE_MIN_MINUTES;
 }
 
-async function matIsAdmin(chatId, userId) {
-  try {
-    if (matIsOwner(userId)) return true;
-
-    const member = await bot.getChatMember(chatId, userId);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("matIsAdmin error:", error.message);
-    return false;
-  }
-}
-
-async function matCanUseCommands(msg) {
-  try {
-    if (!msg || !msg.from || !msg.chat) return false;
-
-    if (matIsOwner(msg.from.id)) {
-      return true;
-    }
-
-    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("matCanUseCommands error:", error.message);
-    return false;
-  }
-}
-
 function matRegisterViolation(chatId, userId) {
   const user = matGetUserState(chatId, userId);
   const now = Date.now();
@@ -10486,102 +10551,25 @@ function matRegisterViolation(chatId, userId) {
 
   user.count += 1;
 
-  if (user.count > 4) {
-    user.count = 4;
-  }
+  if (user.count > 4) user.count = 4;
 
   user.lastTime = now;
   saveMatData();
   return user;
 }
 
-async function matMuteUser(chatId, userId, minutes) {
-  const untilDate = Math.floor(Date.now() / 1000) + (minutes * 60);
-
-  await bot.restrictChatMember(chatId, userId, {
-    until_date: untilDate,
-    can_send_messages: false,
-    can_send_audios: false,
-    can_send_documents: false,
-    can_send_photos: false,
-    can_send_videos: false,
-    can_send_video_notes: false,
-    can_send_voice_notes: false,
-    can_send_polls: false,
-    can_send_other_messages: false,
-    can_add_web_page_previews: false,
-    can_change_info: false,
-    can_invite_users: false,
-    can_pin_messages: false
-  });
-}
-
-async function matUnmuteUser(chatId, userId) {
-  await bot.restrictChatMember(chatId, userId, {
-    until_date: 0,
-    can_send_messages: true,
-    can_send_audios: true,
-    can_send_documents: true,
-    can_send_photos: true,
-    can_send_videos: true,
-    can_send_video_notes: true,
-    can_send_voice_notes: true,
-    can_send_polls: true,
-    can_send_other_messages: true,
-    can_add_web_page_previews: true,
-    can_change_info: false,
-    can_invite_users: true,
-    can_pin_messages: false
-  });
-}
-
-async function matSafeUnmute(chatId, userId, firstName) {
-  try {
-    await matUnmuteUser(chatId, userId);
-
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    const member = await bot.getChatMember(chatId, userId);
-
-    const stillRestricted =
-      member &&
-      member.status === "restricted" &&
-      member.can_send_messages === false;
-
-    if (stillRestricted) {
-      console.log(`matSafeUnmute: ${userId} все еще не может писать`);
-      return false;
-    }
-
-    await bot.sendMessage(
-      chatId,
-      `✅ ${firstName}, мут снят.\nМожешь писать в чат, но без матов.`
-    );
-
-    return true;
-  } catch (error) {
-    console.error("matSafeUnmute error:", error.message);
-    return false;
-  }
-}
-
-/* ---------- Команды ---------- */
-
 bot.onText(/^\/maton(?:@\w+)?$/i, async (msg) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    const allowed = await matCanUseCommands(msg);
+    const allowed = await canUseAdminCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+      return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
     matSetChatEnabled(msg.chat.id, true);
 
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       "✅ Антимат включен.\n1, 2 и 3 нарушение — предупреждения.\nС 4 нарушения бот выдает мут от 1 до 10 минут."
     );
@@ -10592,19 +10580,15 @@ bot.onText(/^\/maton(?:@\w+)?$/i, async (msg) => {
 
 bot.onText(/^\/matoff(?:@\w+)?$/i, async (msg) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    const allowed = await matCanUseCommands(msg);
+    const allowed = await canUseAdminCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+      return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
     matSetChatEnabled(msg.chat.id, false);
-
-    await bot.sendMessage(msg.chat.id, "❌ Антимат выключен.");
+    await safeSendMessage(msg.chat.id, "❌ Антимат выключен.");
   } catch (error) {
     console.error("/matoff error:", error.message);
   }
@@ -10612,463 +10596,130 @@ bot.onText(/^\/matoff(?:@\w+)?$/i, async (msg) => {
 
 bot.onText(/^\/matstatus(?:@\w+)?$/i, async (msg) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    const allowed = await matCanUseCommands(msg);
+    const allowed = await canUseAdminCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+      return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
     const state = matGetChatState(msg.chat.id);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      `Статус антимата: ${state.enabled ? "✅ включен" : "❌ выключен"}`
-    );
+    await safeSendMessage(msg.chat.id, `Статус антимата: ${state.enabled ? "✅ включен" : "❌ выключен"}`);
   } catch (error) {
     console.error("/matstatus error:", error.message);
   }
 });
 
-bot.onText(/^\/unmute(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
+// =========================
+// WELCOME / BYE С СОХРАНЕНИЕМ
+// =========================
+const CHAT_FEATURES_DB = path.join(__dirname, "chat_features.json");
+let chatFeatures = {};
+
+function loadChatFeatures() {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
-
-    const allowed = await matCanUseCommands(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+    if (fs.existsSync(CHAT_FEATURES_DB)) {
+      chatFeatures = JSON.parse(fs.readFileSync(CHAT_FEATURES_DB, "utf8"));
     }
-
-    let targetUserId = null;
-    let targetFirstName = "пользователь";
-
-    if (msg.reply_to_message && msg.reply_to_message.from) {
-      targetUserId = msg.reply_to_message.from.id;
-      targetFirstName = msg.reply_to_message.from.first_name || "пользователь";
-    } else if (match && match[1]) {
-      const maybeId = String(match[1]).trim();
-      if (/^\d+$/.test(maybeId)) {
-        targetUserId = Number(maybeId);
-      }
-    }
-
-    if (!targetUserId) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Используй /unmute ответом на сообщение пользователя."
-      );
-    }
-
-    await matUnmuteUser(msg.chat.id, targetUserId);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      `✅ ${targetFirstName}, мут снят вручную.`
-    );
   } catch (error) {
-    console.error("/unmute error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Не удалось снять мут.");
-  }
-});
-
-/* ---------- Основная логика ---------- */
-
-bot.on("message", async (msg) => {
-  try {
-    if (!msg || !msg.chat || !msg.from) return;
-    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
-    if (!msg.text) return;
-    if (msg.text.startsWith("/")) return;
-
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const firstName = msg.from.first_name || "пользователь";
-
-    const state = matGetChatState(chatId);
-    if (!state.enabled) return;
-
-    if (matIsOwner(userId)) return;
-
-    const isAdmin = await matIsAdmin(chatId, userId);
-    if (isAdmin) return;
-
-    if (!matContainsBadWords(msg.text)) return;
-
-    const violation = matRegisterViolation(chatId, userId);
-
-    if (violation.count === 1) {
-      await bot.sendMessage(
-        chatId,
-        `⚠️ ${firstName}, не матерись.\n1 предупреждение.`
-      );
-      return;
-    }
-
-    if (violation.count === 2) {
-      await bot.sendMessage(
-        chatId,
-        `⚠️ ${firstName}, не матерись.\n2 предупреждение.`
-      );
-      return;
-    }
-
-    if (violation.count === 3) {
-      await bot.sendMessage(
-        chatId,
-        `⚠️ ${firstName}, не матерись.\n3 предупреждение.\nСледующий мат — мут.`
-      );
-      return;
-    }
-
-    const muteMinutes = matGetRandomMuteMinutes();
-
-    await matMuteUser(chatId, userId, muteMinutes);
-
-    await bot.sendMessage(
-      chatId,
-      `🔇 ${firstName} получил мут на ${muteMinutes} мин.\nПричина: мат.`
-    );
-
-    const timerKey = matUserKey(chatId, userId);
-
-    if (MAT_MUTE_TIMERS.has(timerKey)) {
-      clearTimeout(MAT_MUTE_TIMERS.get(timerKey));
-    }
-
-    const timer = setTimeout(async () => {
-      try {
-        const ok = await matSafeUnmute(chatId, userId, firstName);
-
-        if (!ok) {
-          await bot.sendMessage(
-            chatId,
-            `⚠️ Не удалось автоматически снять мут с ${firstName}.\nПопробуйте команду /unmute ответом на сообщение пользователя.`
-          );
-        }
-      } catch (error) {
-        console.error("unmute timer error:", error.message);
-      } finally {
-        MAT_MUTE_TIMERS.delete(timerKey);
-      }
-    }, muteMinutes * 60 * 1000);
-
-    MAT_MUTE_TIMERS.set(timerKey, timer);
-  } catch (error) {
-    console.error("Антимат error:", error.message);
-  }
-});
-
-/* ===================== SIMPLE WELCOME ===================== */
-
-const simpleWelcomeState = new Map(); // chatId -> true/false
-
-function simpleWelcomeIsOwner(userId) {
-  return Number(userId) === 7837011810;
-}
-
-async function simpleWelcomeCanUse(msg) {
-  try {
-    if (!msg || !msg.chat || !msg.from) return false;
-
-    if (simpleWelcomeIsOwner(msg.from.id)) {
-      return true;
-    }
-
-    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("simpleWelcomeCanUse error:", error.message);
-    return false;
+    console.error("loadChatFeatures error:", error.message);
+    chatFeatures = {};
   }
 }
 
-function simpleWelcomeGet(chatId) {
+function saveChatFeatures() {
+  try {
+    fs.writeFileSync(CHAT_FEATURES_DB, JSON.stringify(chatFeatures, null, 2), "utf8");
+  } catch (error) {
+    console.error("saveChatFeatures error:", error.message);
+  }
+}
+
+loadChatFeatures();
+
+function getChatFeatures(chatId) {
   const key = String(chatId);
 
-  if (!simpleWelcomeState.has(key)) {
-    simpleWelcomeState.set(key, true); // по умолчанию включено
+  if (!chatFeatures[key]) {
+    chatFeatures[key] = {
+      welcomeEnabled: true,
+      byeEnabled: true
+    };
+    saveChatFeatures();
   }
 
-  return simpleWelcomeState.get(key);
+  return chatFeatures[key];
 }
 
-function simpleWelcomeSet(chatId, enabled) {
-  simpleWelcomeState.set(String(chatId), Boolean(enabled));
+function setWelcomeState(chatId, enabled) {
+  const data = getChatFeatures(chatId);
+  data.welcomeEnabled = Boolean(enabled);
+  saveChatFeatures();
 }
 
-/* ---------- Команды ---------- */
+function setByeState(chatId, enabled) {
+  const data = getChatFeatures(chatId);
+  data.byeEnabled = Boolean(enabled);
+  saveChatFeatures();
+}
 
 bot.onText(/^\/welcomeon(?:@\w+)?$/i, async (msg) => {
-  try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
-
-    const allowed = await simpleWelcomeCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
-    }
-
-    simpleWelcomeSet(msg.chat.id, true);
-
-    await bot.sendMessage(msg.chat.id, "✅ Приветствие включено.");
-  } catch (error) {
-    console.error("/welcomeon error:", error.message);
+  if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+  if (!(await canUseAdminCommands(msg))) {
+    return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
   }
+  setWelcomeState(msg.chat.id, true);
+  await safeSendMessage(msg.chat.id, "✅ Приветствие включено.");
 });
 
 bot.onText(/^\/welcomeoff(?:@\w+)?$/i, async (msg) => {
-  try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
-
-    const allowed = await simpleWelcomeCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
-    }
-
-    simpleWelcomeSet(msg.chat.id, false);
-
-    await bot.sendMessage(msg.chat.id, "❌ Приветствие выключено.");
-  } catch (error) {
-    console.error("/welcomeoff error:", error.message);
+  if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+  if (!(await canUseAdminCommands(msg))) {
+    return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
   }
+  setWelcomeState(msg.chat.id, false);
+  await safeSendMessage(msg.chat.id, "❌ Приветствие выключено.");
 });
 
 bot.onText(/^\/welcomestatus(?:@\w+)?$/i, async (msg) => {
-  try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
-
-    const allowed = await simpleWelcomeCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
-    }
-
-    const enabled = simpleWelcomeGet(msg.chat.id);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      `Статус приветствия: ${enabled ? "✅ включено" : "❌ выключено"}`
-    );
-  } catch (error) {
-    console.error("/welcomestatus error:", error.message);
+  if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+  if (!(await canUseAdminCommands(msg))) {
+    return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
   }
+  const data = getChatFeatures(msg.chat.id);
+  await safeSendMessage(msg.chat.id, `Статус приветствия: ${data.welcomeEnabled ? "✅ включено" : "❌ выключено"}`);
 });
-
-/* ---------- Приветствие ---------- */
-
-bot.on("message", async (msg) => {
-  try {
-    if (!msg || !msg.chat) return;
-    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
-    if (!Array.isArray(msg.new_chat_members) || msg.new_chat_members.length === 0) return;
-
-    const enabled = simpleWelcomeGet(msg.chat.id);
-    if (!enabled) return;
-
-    for (const user of msg.new_chat_members) {
-      if (!user || user.is_bot) continue;
-
-      const firstName = user.first_name || "друг";
-
-      await bot.sendMessage(
-        msg.chat.id,
-        `👋 Привет, ${firstName}! Добро пожаловать в группу.`
-      );
-    }
-  } catch (error) {
-    console.error("simple welcome message error:", error.message);
-  }
-});
-
-/* ===================== SIMPLE BYE ===================== */
-
-const simpleByeState = new Map(); // chatId -> true/false
-
-function simpleByeIsOwner(userId) {
-  return Number(userId) === 7837011810;
-}
-
-async function simpleByeCanUse(msg) {
-  try {
-    if (!msg || !msg.chat || !msg.from) return false;
-
-    if (simpleByeIsOwner(msg.from.id)) {
-      return true;
-    }
-
-    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("simpleByeCanUse error:", error.message);
-    return false;
-  }
-}
-
-function simpleByeGet(chatId) {
-  const key = String(chatId);
-
-  if (!simpleByeState.has(key)) {
-    simpleByeState.set(key, true); // по умолчанию включено
-  }
-
-  return simpleByeState.get(key);
-}
-
-function simpleByeSet(chatId, enabled) {
-  simpleByeState.set(String(chatId), Boolean(enabled));
-}
-
-/* ---------- Команды ---------- */
 
 bot.onText(/^\/byeon(?:@\w+)?$/i, async (msg) => {
-  try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
-
-    const allowed = await simpleByeCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
-    }
-
-    simpleByeSet(msg.chat.id, true);
-
-    await bot.sendMessage(msg.chat.id, "✅ Прощание включено.");
-  } catch (error) {
-    console.error("/byeon error:", error.message);
+  if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+  if (!(await canUseAdminCommands(msg))) {
+    return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
   }
+  setByeState(msg.chat.id, true);
+  await safeSendMessage(msg.chat.id, "✅ Прощание включено.");
 });
 
 bot.onText(/^\/byeoff(?:@\w+)?$/i, async (msg) => {
-  try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
-
-    const allowed = await simpleByeCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
-    }
-
-    simpleByeSet(msg.chat.id, false);
-
-    await bot.sendMessage(msg.chat.id, "❌ Прощание выключено.");
-  } catch (error) {
-    console.error("/byeoff error:", error.message);
+  if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+  if (!(await canUseAdminCommands(msg))) {
+    return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
   }
+  setByeState(msg.chat.id, false);
+  await safeSendMessage(msg.chat.id, "❌ Прощание выключено.");
 });
 
 bot.onText(/^\/byestatus(?:@\w+)?$/i, async (msg) => {
-  try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
-
-    const allowed = await simpleByeCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
-    }
-
-    const enabled = simpleByeGet(msg.chat.id);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      `Статус прощания: ${enabled ? "✅ включено" : "❌ выключено"}`
-    );
-  } catch (error) {
-    console.error("/byestatus error:", error.message);
+  if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
+  if (!(await canUseAdminCommands(msg))) {
+    return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
   }
+  const data = getChatFeatures(msg.chat.id);
+  await safeSendMessage(msg.chat.id, `Статус прощания: ${data.byeEnabled ? "✅ включено" : "❌ выключено"}`);
 });
 
-/* ---------- Прощание ---------- */
-
-bot.on("message", async (msg) => {
-  try {
-    if (!msg || !msg.chat) return;
-    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
-
-    const enabled = simpleByeGet(msg.chat.id);
-    if (!enabled) return;
-
-    if (msg.left_chat_member && !msg.left_chat_member.is_bot) {
-      const firstName = msg.left_chat_member.first_name || "пользователь";
-
-      await bot.sendMessage(
-        msg.chat.id,
-        `👋 ${firstName} вышел(а) из группы.`
-      );
-    }
-  } catch (error) {
-    console.error("simple bye message error:", error.message);
-  }
-});
-
-/* ===================== MUTE SYSTEM ===================== */
-
-const MUTE_OWNER_IDS = [7837011810];
-const muteTimers = new Map(); // key: chatId_userId -> timeout
-
-function muteIsOwner(userId) {
-  return MUTE_OWNER_IDS.includes(Number(userId));
-}
-
-async function muteCanUse(msg) {
-  try {
-    if (!msg || !msg.chat || !msg.from) return false;
-
-    if (muteIsOwner(msg.from.id)) return true;
-
-    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("muteCanUse error:", error.message);
-    return false;
-  }
-}
-
-async function muteIsAdmin(chatId, userId) {
-  try {
-    if (muteIsOwner(userId)) return true;
-
-    const member = await bot.getChatMember(chatId, userId);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("muteIsAdmin error:", error.message);
-    return false;
-  }
-}
-
-function muteTimerKey(chatId, userId) {
-  return `${chatId}_${userId}`;
-}
-
-function muteFormatDuration(ms) {
-  const sec = Math.floor(ms / 1000);
-
-  if (sec < 60) return `${sec} сек`;
-  if (sec < 3600) return `${Math.floor(sec / 60)} мин`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)} ч`;
-  if (sec < 604800) return `${Math.floor(sec / 86400)} д`;
-  if (sec < 31536000) return `${Math.floor(sec / 604800)} нед`;
-  return `${Math.floor(sec / 31536000)} г`;
-}
-
+// =========================
+// РУЧНОЙ MUTE
+// =========================
 function parseMuteDuration(input) {
   if (!input) return null;
 
@@ -11083,162 +10734,70 @@ function parseMuteDuration(input) {
   if (!Number.isFinite(value) || value <= 0) return null;
 
   const units = {
-    // секунды
     "с": 1000,
     "сек": 1000,
     "секунда": 1000,
     "секунды": 1000,
     "секунд": 1000,
-    "second": 1000,
-    "seconds": 1000,
 
-    // минуты
     "м": 60000,
     "мин": 60000,
     "минута": 60000,
     "минуты": 60000,
     "минут": 60000,
-    "minute": 60000,
-    "minutes": 60000,
 
-    // часы
     "ч": 3600000,
     "час": 3600000,
     "часа": 3600000,
     "часов": 3600000,
-    "hour": 3600000,
-    "hours": 3600000,
 
-    // дни
     "д": 86400000,
     "день": 86400000,
     "дня": 86400000,
     "дней": 86400000,
-    "day": 86400000,
-    "days": 86400000,
 
-    // недели
     "н": 604800000,
     "нед": 604800000,
     "неделя": 604800000,
     "недели": 604800000,
     "недель": 604800000,
-    "week": 604800000,
-    "weeks": 604800000,
 
-    // годы
     "г": 31536000000,
     "год": 31536000000,
     "года": 31536000000,
-    "лет": 31536000000,
-    "year": 31536000000,
-    "years": 31536000000
+    "лет": 31536000000
   };
 
   const multiplier = units[unit];
   if (!multiplier) return null;
 
   const ms = Math.floor(value * multiplier);
-
   if (ms < 1000) return null;
+
   return ms;
 }
 
-async function muteUser(chatId, userId, durationMs) {
-  const untilDate = Math.floor((Date.now() + durationMs) / 1000);
-
-  await bot.restrictChatMember(chatId, userId, {
-    until_date: untilDate,
-    can_send_messages: false,
-    can_send_audios: false,
-    can_send_documents: false,
-    can_send_photos: false,
-    can_send_videos: false,
-    can_send_video_notes: false,
-    can_send_voice_notes: false,
-    can_send_polls: false,
-    can_send_other_messages: false,
-    can_add_web_page_previews: false,
-    can_change_info: false,
-    can_invite_users: false,
-    can_pin_messages: false
-  });
-}
-
-async function unmuteUser(chatId, userId) {
-  await bot.restrictChatMember(chatId, userId, {
-    until_date: 0,
-    can_send_messages: true,
-    can_send_audios: true,
-    can_send_documents: true,
-    can_send_photos: true,
-    can_send_videos: true,
-    can_send_video_notes: true,
-    can_send_voice_notes: true,
-    can_send_polls: true,
-    can_send_other_messages: true,
-    can_add_web_page_previews: true,
-    can_change_info: false,
-    can_invite_users: true,
-    can_pin_messages: false
-  });
-}
-
-async function safeUnmuteUser(chatId, userId, firstName) {
-  try {
-    await unmuteUser(chatId, userId);
-
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    const member = await bot.getChatMember(chatId, userId);
-
-    const stillRestricted =
-      member &&
-      member.status === "restricted" &&
-      member.can_send_messages === false;
-
-    if (stillRestricted) {
-      return false;
-    }
-
-    await bot.sendMessage(
-      chatId,
-      `✅ ${firstName}, время мута вышло. Теперь ты снова можешь писать в чат.`
-    );
-
-    return true;
-  } catch (error) {
-    console.error("safeUnmuteUser error:", error.message);
-    return false;
-  }
-}
-
-/* ---------- Команда /mute ---------- */
-
 bot.onText(/^\/mute(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    const allowed = await muteCanUse(msg);
+    const allowed = await canUseAdminCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+      return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
-    if (!msg.reply_to_message || !msg.reply_to_message.from) {
-      return bot.sendMessage(
+    if (!msg.reply_to_message?.from) {
+      return safeSendMessage(
         msg.chat.id,
         "Используй команду ответом на сообщение пользователя.\nПример: /mute 10 мин"
       );
     }
 
-    const durationText = match && match[1] ? match[1].trim() : "";
+    const durationText = match?.[1]?.trim() || "";
     const durationMs = parseMuteDuration(durationText);
 
     if (!durationMs) {
-      return bot.sendMessage(
+      return safeSendMessage(
         msg.chat.id,
         "Неверное время.\nПримеры:\n/mute 30 сек\n/mute 10 мин\n/mute 2 часа\n/mute 1 день\n/mute 2 недели\n/mute 1 год"
       );
@@ -11248,36 +10807,28 @@ bot.onText(/^\/mute(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
     const targetUserId = target.id;
     const firstName = target.first_name || "пользователь";
 
-    if (muteIsOwner(targetUserId)) {
-      return bot.sendMessage(msg.chat.id, "❌ Владельца бота мутить нельзя.");
+    if (isOwner(targetUserId)) {
+      return safeSendMessage(msg.chat.id, "❌ Владельца бота мутить нельзя.");
     }
 
-    const targetIsAdmin = await muteIsAdmin(msg.chat.id, targetUserId);
-    if (targetIsAdmin) {
-      return bot.sendMessage(msg.chat.id, "❌ Админа группы мутить нельзя.");
+    if (await isAdmin(msg.chat.id, targetUserId)) {
+      return safeSendMessage(msg.chat.id, "❌ Админа группы мутить нельзя.");
     }
 
-    await muteUser(msg.chat.id, targetUserId, durationMs);
+    await restrictUser(msg.chat.id, targetUserId, durationMs);
 
-    const pretty = muteFormatDuration(durationMs);
+    const pretty = formatDuration(durationMs);
+    await safeSendMessage(msg.chat.id, `🔇 ${firstName} получил мут на ${pretty}.`);
 
-    await bot.sendMessage(
-      msg.chat.id,
-      `🔇 ${firstName} получил мут на ${pretty}.`
-    );
-
-    const key = muteTimerKey(msg.chat.id, targetUserId);
-
-    if (muteTimers.has(key)) {
-      clearTimeout(muteTimers.get(key));
-    }
+    const key = makeTimerKey(msg.chat.id, targetUserId);
+    clearAllMuteTimers(msg.chat.id, targetUserId);
 
     const timer = setTimeout(async () => {
       try {
-        const ok = await safeUnmuteUser(msg.chat.id, targetUserId, firstName);
+        const ok = await safeUnmute(msg.chat.id, targetUserId, firstName);
 
         if (!ok) {
-          await bot.sendMessage(
+          await safeSendMessage(
             msg.chat.id,
             `⚠️ Не удалось автоматически снять мут с ${firstName}.\nИспользуй /unmute ответом на сообщение пользователя.`
           );
@@ -11292,146 +10843,94 @@ bot.onText(/^\/mute(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
     muteTimers.set(key, timer);
   } catch (error) {
     console.error("/mute error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Ошибка при выдаче мута.");
+    await safeSendMessage(msg.chat.id, "Ошибка при выдаче мута.");
   }
 });
 
-/* ---------- Команда /unmute ---------- */
-
-bot.onText(/^\/unmute(?:@\w+)?$/i, async (msg) => {
+// =========================
+// ЕДИНЫЙ /unmute
+// =========================
+bot.onText(/^\/unmute(?:@\w+)?(?:\s+(\d+))?$/i, async (msg, match) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    const allowed = await muteCanUse(msg);
+    const allowed = await canUseAdminCommands(msg);
     if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+      return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
-    if (!msg.reply_to_message || !msg.reply_to_message.from) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Используй /unmute ответом на сообщение пользователя."
-      );
+    let targetUserId = null;
+    let firstName = "пользователь";
+
+    if (msg.reply_to_message?.from) {
+      targetUserId = msg.reply_to_message.from.id;
+      firstName = msg.reply_to_message.from.first_name || "пользователь";
+    } else if (match?.[1]) {
+      targetUserId = Number(match[1]);
     }
 
-    const target = msg.reply_to_message.from;
-    const targetUserId = target.id;
-    const firstName = target.first_name || "пользователь";
-
-    await unmuteUser(msg.chat.id, targetUserId);
-
-    const key = muteTimerKey(msg.chat.id, targetUserId);
-    if (muteTimers.has(key)) {
-      clearTimeout(muteTimers.get(key));
-      muteTimers.delete(key);
+    if (!targetUserId) {
+      return safeSendMessage(msg.chat.id, "Используй /unmute ответом на сообщение пользователя или /unmute ID.");
     }
 
-    await bot.sendMessage(
+    await liftRestrictions(msg.chat.id, targetUserId);
+    clearAllMuteTimers(msg.chat.id, targetUserId);
+
+    await safeSendMessage(
       msg.chat.id,
       `✅ ${firstName}, мут снят вручную. Теперь можешь писать в чат.`
     );
   } catch (error) {
     console.error("/unmute error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Ошибка при снятии мута.");
+    await safeSendMessage(msg.chat.id, "Ошибка при снятии мута.");
   }
 });
 
-/* ===================== PIN / UNPIN ===================== */
-
-const PIN_OWNER_IDS = [7837011810];
-
-function pinIsOwner(userId) {
-  return PIN_OWNER_IDS.includes(Number(userId));
-}
-
-async function pinCanUse(msg) {
-  try {
-    if (!msg || !msg.chat || !msg.from) return false;
-
-    if (pinIsOwner(msg.from.id)) {
-      return true;
-    }
-
-    const member = await bot.getChatMember(msg.chat.id, msg.from.id);
-    return member && (member.status === "administrator" || member.status === "creator");
-  } catch (error) {
-    console.error("pinCanUse error:", error.message);
-    return false;
-  }
-}
-
-/* ---------- /pin ---------- */
-
+// =========================
+// PIN / UNPIN
+// =========================
 bot.onText(/^\/pin(?:@\w+)?$/i, async (msg) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    const allowed = await pinCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+    if (!(await canUseAdminCommands(msg))) {
+      return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
     if (!msg.reply_to_message) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Используй /pin ответом на сообщение, которое нужно закрепить."
-      );
+      return safeSendMessage(msg.chat.id, "Используй /pin ответом на сообщение, которое нужно закрепить.");
     }
 
     await bot.pinChatMessage(msg.chat.id, msg.reply_to_message.message_id, {
       disable_notification: false
     });
 
-    await bot.sendMessage(
-      msg.chat.id,
-      "📌 Сообщение закреплено."
-    );
+    await safeSendMessage(msg.chat.id, "📌 Сообщение закреплено.");
   } catch (error) {
     console.error("/pin error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Не удалось закрепить сообщение.");
+    await safeSendMessage(msg.chat.id, "Не удалось закрепить сообщение.");
   }
 });
 
-/* ---------- /unpin ---------- */
-
 bot.onText(/^\/unpin(?:@\w+)?$/i, async (msg) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    const allowed = await pinCanUse(msg);
-    if (!allowed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "Эту команду может использовать только админ группы или владелец бота."
-      );
+    if (!(await canUseAdminCommands(msg))) {
+      return safeSendMessage(msg.chat.id, "Эту команду может использовать только админ группы или владелец бота.");
     }
 
     await bot.unpinChatMessage(msg.chat.id);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      "❌ Закреплённое сообщение снято."
-    );
+    await safeSendMessage(msg.chat.id, "❌ Закреплённое сообщение снято.");
   } catch (error) {
     console.error("/unpin error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Не удалось снять закреп.");
+    await safeSendMessage(msg.chat.id, "Не удалось снять закреп.");
   }
-})
+});
 
-/* ===================== REPORT SYSTEM ===================== */
-
-const REPORT_OWNER_ID = 7837011810;
-
-function reportIsOwner(userId) {
-  return Number(userId) === REPORT_OWNER_ID;
-}
-
+// =========================
+// REPORT
+// =========================
 async function getAdmins(chatId) {
   try {
     const admins = await bot.getChatAdministrators(chatId);
@@ -11442,14 +10941,12 @@ async function getAdmins(chatId) {
   }
 }
 
-/* ---------- /report ---------- */
-
 bot.onText(/^\/report(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
   try {
-    if (!msg.chat || (msg.chat.type !== "group" && msg.chat.type !== "supergroup")) return;
+    if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") return;
 
-    if (!msg.reply_to_message || !msg.reply_to_message.from) {
-      return bot.sendMessage(
+    if (!msg.reply_to_message?.from) {
+      return safeSendMessage(
         msg.chat.id,
         "❗ Используй /report ответом на сообщение пользователя.\nПример:\n(ответ на сообщение) /report спам"
       );
@@ -11459,36 +10956,186 @@ bot.onText(/^\/report(?:@\w+)?(?:\s+(.+))?$/i, async (msg, match) => {
     const target = msg.reply_to_message.from;
 
     if (from.id === target.id) {
-      return bot.sendMessage(msg.chat.id, "❌ Нельзя пожаловаться на самого себя.");
+      return safeSendMessage(msg.chat.id, "❌ Нельзя пожаловаться на самого себя.");
     }
 
-    const reason = match && match[1] ? match[1] : "без причины";
-
+    const reason = match?.[1]?.trim() || "без причины";
     const reporterName = from.first_name || "пользователь";
     const targetName = target.first_name || "пользователь";
 
     const admins = await getAdmins(msg.chat.id);
+    const adminMentions = admins
+      .filter(admin => !admin.is_bot)
+      .map(admin => `[${admin.first_name}](tg://user?id=${admin.id})`)
+      .join(" ");
 
-    let adminMentions = "";
-
-    for (const admin of admins) {
-      if (!admin.is_bot) {
-        adminMentions += `[${admin.first_name}](tg://user?id=${admin.id}) `;
-      }
-    }
-
-    await bot.sendMessage(
+    await safeSendMessage(
       msg.chat.id,
       `🚨 Жалоба!\n\n` +
       `👤 Кто: ${reporterName}\n` +
       `🎯 На кого: ${targetName}\n` +
       `📝 Причина: ${reason}\n\n` +
-      `Админы: ${adminMentions}`,
+      `Админы: ${adminMentions || "не найдены"}`,
       { parse_mode: "Markdown" }
     );
-
   } catch (error) {
     console.error("/report error:", error.message);
-    await bot.sendMessage(msg.chat.id, "Ошибка при отправке жалобы.");
+    await safeSendMessage(msg.chat.id, "Ошибка при отправке жалобы.");
+  }
+});
+
+// =========================
+// ЕДИНЫЙ ОБРАБОТЧИК MESSAGE
+// =========================
+bot.on("message", async (msg) => {
+  try {
+    if (!msg?.chat || !msg?.from) return;
+
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const firstName = msg.from.first_name || msg.from.username || `user_${userId}`;
+
+    // PRIVATE
+    if (msg.chat.type === "private") return;
+
+    // WELCOME
+    if (Array.isArray(msg.new_chat_members) && msg.new_chat_members.length > 0) {
+      const features = getChatFeatures(chatId);
+
+      if (features.welcomeEnabled) {
+        for (const user of msg.new_chat_members) {
+          if (!user || user.is_bot) continue;
+          const name = user.first_name || "друг";
+          await safeSendMessage(chatId, `👋 Привет, ${name}! Добро пожаловать в группу.`);
+        }
+      }
+      return;
+    }
+
+    // BYE
+    if (msg.left_chat_member && !msg.left_chat_member.is_bot) {
+      const features = getChatFeatures(chatId);
+
+      if (features.byeEnabled) {
+        const name = msg.left_chat_member.first_name || "пользователь";
+        await safeSendMessage(chatId, `👋 ${name} вышел(а) из группы.`);
+      }
+      return;
+    }
+
+    // Дальше только текст
+    if (!msg.text) return;
+    if (msg.text.startsWith("/")) return;
+
+    // -------------------------
+    // АНТИСПАМ
+    // -------------------------
+    try {
+      const settings = await getSettings(chatId);
+
+      if (settings?.enabled) {
+        if (settings.ignoreAdmins) {
+          const admin = await isAdmin(chatId, userId);
+          if (admin) {
+            // пропускаем антиспам для админа
+          } else {
+            const botCanRestrict = await canBotRestrict(chatId);
+
+            if (botCanRestrict && !isSpamMuted(chatId, userId)) {
+              const key = getSpamKey(chatId, userId);
+              const now = Date.now();
+
+              if (!userSpamMap.has(key)) {
+                userSpamMap.set(key, []);
+              }
+
+              const times = userSpamMap.get(key);
+              times.push(now);
+
+              while (times.length && now - times[0] > settings.interval) {
+                times.shift();
+              }
+
+              if (times.length > settings.messageLimit) {
+                if (settings.deleteSpamMessage) {
+                  await safeDeleteMessage(chatId, msg.message_id);
+                }
+
+                await antispamMuteUser(chatId, userId, firstName, settings.muteTime, "спам");
+                return;
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.log("Ошибка антиспама:", err.message);
+    }
+
+    // -------------------------
+    // АНТИМАТ
+    // -------------------------
+    try {
+      const state = matGetChatState(chatId);
+      if (!state.enabled) return;
+
+      if (isOwner(userId)) return;
+      if (await isAdmin(chatId, userId)) return;
+      if (!matContainsBadWords(msg.text)) return;
+
+      const violation = matRegisterViolation(chatId, userId);
+
+      if (violation.count === 1) {
+        await safeSendMessage(chatId, `⚠️ ${firstName}, не матерись.\n1 предупреждение.`);
+        return;
+      }
+
+      if (violation.count === 2) {
+        await safeSendMessage(chatId, `⚠️ ${firstName}, не матерись.\n2 предупреждение.`);
+        return;
+      }
+
+      if (violation.count === 3) {
+        await safeSendMessage(chatId, `⚠️ ${firstName}, не матерись.\n3 предупреждение.\nСледующий мат — мут.`);
+        return;
+      }
+
+      const muteMinutes = matGetRandomMuteMinutes();
+      await restrictUser(chatId, userId, muteMinutes * 60 * 1000);
+
+      await safeSendMessage(
+        chatId,
+        `🔇 ${firstName} получил мут на ${muteMinutes} мин.\nПричина: мат.`
+      );
+
+      const timerKey = makeTimerKey(chatId, userId);
+
+      if (MAT_MUTE_TIMERS.has(timerKey)) {
+        clearTimeout(MAT_MUTE_TIMERS.get(timerKey));
+      }
+
+      const timer = setTimeout(async () => {
+        try {
+          const ok = await safeUnmute(chatId, userId, firstName);
+
+          if (!ok) {
+            await safeSendMessage(
+              chatId,
+              `⚠️ Не удалось автоматически снять мут с ${firstName}.\nПопробуйте команду /unmute ответом на сообщение пользователя.`
+            );
+          }
+        } catch (error) {
+          console.error("unmute timer error:", error.message);
+        } finally {
+          MAT_MUTE_TIMERS.delete(timerKey);
+        }
+      }, muteMinutes * 60 * 1000);
+
+      MAT_MUTE_TIMERS.set(timerKey, timer);
+    } catch (error) {
+      console.error("Антимат error:", error.message);
+    }
+  } catch (error) {
+    console.error("global message handler error:", error.message);
   }
 });
