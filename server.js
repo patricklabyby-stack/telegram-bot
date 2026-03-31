@@ -9432,74 +9432,80 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
       return;
     }
 
-    if (isExactCommand(lowerText, "прогноз")) {
-      const prediction = getRandomPrediction();
+   if (isExactCommand(lowerText, "прогноз")) {
+  const prediction = getRandomPrediction();
 
-      await safeSendMessage(
-        msg.chat.id,
-        `🔮 ${getUserLink(msg.from)}
-${escapeHtml(prediction)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
+  await safeSendMessage(
+    msg.chat.id,
+    `🔮 ${getUserLink(msg.from)}\n${escapeHtml(prediction)}`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     }
+  );
+  return;
+}
 
-    if (lowerText.startsWith("оценка")) {
-      let target = null;
+if (lowerText === "оценка" || lowerText.startsWith("оценка ")) {
+  let target = msg.from;
 
-      if (msg.reply_to_message && msg.reply_to_message.from) {
-        target = msg.reply_to_message.from;
-      } else {
-        const parts = originalText.split(" ");
-        if (parts.length > 1) {
-          target = { first_name: parts.slice(1).join(" ") };
-        } else {
-          target = msg.from;
-        }
-      }
+  if (msg.reply_to_message?.from) {
+    target = msg.reply_to_message.from;
+  } else {
+    const parts = (originalText || "").trim().split(/\s+/);
 
-      const rating = getRandomRating();
-
-      await safeSendMessage(
-        msg.chat.id,
-        `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
+    if (parts.length > 1) {
+      target = {
+        first_name: parts.slice(1).join(" ")
+      };
     }
+  }
 
-    if (lowerText.startsWith("кто ")) {
-      const subject = originalText.slice(4).trim();
+  const rating = getRandomRating();
 
-      if (!subject) {
-        await safeSendMessage(msg.chat.id, "Напиши, например: кто лучший");
-        return;
-      }
-
-      const randomUser = getRandomChatMember(msg.chat.id);
-
-      if (!randomUser) {
-        await safeSendMessage(msg.chat.id, "Пока некого выбрать 🤔");
-        return;
-      }
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🤔 ${escapeHtml(subject)}? Думаю это ${getUserLink(randomUser)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
+  await safeSendMessage(
+    msg.chat.id,
+    `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     }
+  );
+  return;
+}
 
+if (lowerText === "кто" || lowerText.startsWith("кто ")) {
+  const subject = (originalText || "").slice(3).trim();
+
+  if (!subject) {
+    await safeSendMessage(
+      msg.chat.id,
+      "Напиши, например: кто лучший"
+    );
+    return;
+  }
+
+  const randomUser = getRandomChatMember(msg.chat.id);
+
+  if (!randomUser) {
+    await safeSendMessage(
+      msg.chat.id,
+      "Пока некого выбрать 🤔"
+    );
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🤔 ${escapeHtml(subject)}? Думаю это ${getUserLink(randomUser)}`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+    
     if (lowerText.startsWith("подарок")) {
       const sender = msg.from;
       const target = await resolveTargetUserUniversal(msg);
