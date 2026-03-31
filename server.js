@@ -11,7 +11,25 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!token) throw new Error("BOT_TOKEN не найден");
 if (!databaseUrl) throw new Error("DATABASE_URL не найден");
 
-const bot = new TelegramBot(token, { polling: true });
+const bot = new TelegramBot(token, {
+  polling: {
+    autoStart: false,
+    params: {
+      timeout: 10
+    }
+  }
+});
+
+async function startBot() {
+  try {
+    await bot.deleteWebHook().catch(() => {});
+    await bot.stopPolling().catch(() => {});
+    await bot.startPolling();
+    console.log("Бот запущен");
+  } catch (err) {
+    console.error("Ошибка запуска бота:", err.message);
+  }
+}
 
 const pool = new Pool({
   connectionString: databaseUrl,
