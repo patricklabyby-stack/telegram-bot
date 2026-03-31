@@ -9432,7 +9432,8 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
       return;
     }
 
-   if (isExactCommand(lowerText, "прогноз")) {
+   // ===== ПРОГНОЗ =====
+if (isExactCommand(lowerText, "прогноз")) {
   const prediction = getRandomPrediction();
 
   await safeSendMessage(
@@ -9446,6 +9447,7 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
   return;
 }
 
+// ===== ОЦЕНКА =====
 if (lowerText === "оценка" || lowerText.startsWith("оценка ")) {
   let target = msg.from;
 
@@ -9474,6 +9476,7 @@ if (lowerText === "оценка" || lowerText.startsWith("оценка ")) {
   return;
 }
 
+// ===== КТО =====
 if (lowerText === "кто" || lowerText.startsWith("кто ")) {
   const subject = (originalText || "").slice(3).trim();
 
@@ -9497,7 +9500,7 @@ if (lowerText === "кто" || lowerText.startsWith("кто ")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🤔 ${escapeHtml(subject)}? Думаю это ${getUserLink(randomUser)}`,
+    `🤔 ${escapeHtml(subject)}?\nДумаю это ${getUserLink(randomUser)}`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
