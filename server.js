@@ -4758,8 +4758,7 @@ bot.onText(/\/help/, (msg) => {
 • кто ...
 • оценка
 • прогноз
-• он врет?
-`,
+• он врет?`,
     { parse_mode: "HTML", disable_web_page_preview: true }
   );
 });
