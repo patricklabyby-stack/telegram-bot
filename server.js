@@ -21,6 +21,35 @@ const pool = new Pool({
 const OWNER_ID = 7837011810;
 
 // =========================
+// ПРОВЕРКА БД + СОЗДАНИЕ ТАБЛИЦЫ
+// =========================
+
+async function initDB() {
+  try {
+    // Проверка подключения
+    await pool.query("SELECT 1");
+    console.log("✅ БД подключена");
+
+    // Создание таблицы
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS antispam_settings (
+        chat_id BIGINT PRIMARY KEY,
+        enabled BOOLEAN DEFAULT TRUE,
+        message_limit INTEGER DEFAULT 5,
+        interval_ms INTEGER DEFAULT 5000,
+        mute_time_ms INTEGER DEFAULT 60000,
+        ignore_admins BOOLEAN DEFAULT TRUE,
+        delete_spam_message BOOLEAN DEFAULT FALSE
+      )
+    `);
+
+    console.log("✅ Таблица antispam_settings готова");
+  } catch (err) {
+    console.error("❌ ОШИБКА БД:", err.message);
+  }
+}
+
+// =========================
 // CONFIG
 // =========================
 const chatMembers = {};
