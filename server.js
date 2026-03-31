@@ -5,20 +5,43 @@ const crypto = require("crypto");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 const token = process.env.BOT_TOKEN;
 const databaseUrl = process.env.DATABASE_URL;
 
-if (!token) throw new Error("BOT_TOKEN не найден");
-if (!databaseUrl) throw new Error("DATABASE_URL не найден");
+// Проверки (чтобы не падал непонятно где)
+if (!token) {
+  console.error("❌ BOT_TOKEN не найден");
+  process.exit(1);
+}
 
-const bot = new TelegramBot(token, { polling: true });
+if (!databaseUrl) {
+  console.error("❌ DATABASE_URL не найден");
+  process.exit(1);
+}
 
+// Бот
+const bot = new TelegramBot(token, {
+  polling: true
+});
+
+// База данных
 const pool = new Pool({
   connectionString: databaseUrl,
   ssl: { rejectUnauthorized: false }
 });
 
+// Владелец
 const OWNER_ID = 7837011810;
+
+// Сервер (чтобы хостинг не засыпал)
+app.get("/", (req, res) => {
+  res.send("Бот работает");
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Server запущен на порту ${PORT}`);
+});
 
 // =========================
 // CONFIG
