@@ -9973,13 +9973,13 @@ const ANTISPAM_MUTES_FILE = path.join(ANTISPAM_DATA_DIR, 'antispam_mutes.json');
 
 const defaultSpamSettings = {
   enabled: true,
-  messageLimit: 5,           // сколько сообщений допускается
-  interval: 5000,            // за сколько мс
-  warningsBeforeMute: 2,     // сколько предупреждений до мута
-  muteTime: 60000,           // мут в мс
-  ignoreAdmins: true,        // игнорировать админов
-  deleteSpamMessage: false,  // удалять сообщение, на котором сработал антиспам
-  notifyUnmute: true         // писать в чат когда мут снят
+  messageLimit: 5,
+  interval: 5000,
+  warningsBeforeMute: 2,
+  muteTime: 60000,
+  ignoreAdmins: true,
+  deleteSpamMessage: false,
+  notifyUnmute: true
 };
 
 // chatId:userId => [timestamps]
@@ -9994,11 +9994,8 @@ const userWarnings = new Map();
 // chatId:userId => { chatId, userId, userName, reason, expiresAt }
 const activeMutes = new Map();
 
-// кэш id бота
 let BOT_ID = null;
-
-// загруженные настройки
-let spamSettings = loadSpamSettings();
+let spamSettings = { ...defaultSpamSettings };
 
 // =========================
 // ФАЙЛЫ / СОХРАНЕНИЕ
@@ -10014,16 +10011,12 @@ function ensureDataDir() {
   }
 }
 
-function readJsonFile(filePath, fallback) {
+function safeReadJson(filePath, fallback) {
   try {
-    ensureDataDir();
-
-    if (!fs.existsSync(filePath)) {
-      return fallback;
-    }
+    if (!fs.existsSync(filePath)) return fallback;
 
     const raw = fs.readFileSync(filePath, 'utf8');
-    if (!raw.trim()) return fallback;
+    if (!raw || !raw.trim()) return fallback;
 
     return JSON.parse(raw);
   } catch (err) {
@@ -10032,7 +10025,7 @@ function readJsonFile(filePath, fallback) {
   }
 }
 
-function writeJsonFile(filePath, data) {
+function safeWriteJson(filePath, data) {
   try {
     ensureDataDir();
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
@@ -10044,44 +10037,39 @@ function writeJsonFile(filePath, data) {
 }
 
 function loadSpamSettings() {
-  const saved = readJsonFile(ANTISPAM_SETTINGS_FILE, null);
-  if (!saved || typeof saved !== 'object') {
-    return { ...defaultSpamSettings };
-  }
-
-  return {
+  const saved = safeReadJson(ANTISPAM_SETTINGS_FILE, {});
+  spamSettings = {
     ...defaultSpamSettings,
-    ...saved
+    ...(saved && typeof saved === 'object' ? saved : {})
   };
 }
 
 function saveSpamSettings() {
-  return writeJsonFile(ANTISPAM_SETTINGS_FILE, spamSettings);
-}
-
-function saveWarnings() {
-  const data = Object.fromEntries(userWarnings.entries());
-  return writeJsonFile(ANTISPAM_WARNINGS_FILE, data);
+  safeWriteJson(ANTISPAM_SETTINGS_FILE, spamSettings);
 }
 
 function loadWarnings() {
-  const data = readJsonFile(ANTISPAM_WARNINGS_FILE, {});
+  const data = safeReadJson(ANTISPAM_WARNINGS_FILE, {});
+  userWarnings.clear();
+
   if (!data || typeof data !== 'object') return;
 
   for (const [key, value] of Object.entries(data)) {
-    if (Number.isInteger(value) && value > 0) {
-      userWarnings.set(key, value);
+    const count = Number(value);
+    if (Number.isInteger(count) && count > 0) {
+      userWarnings.set(key, count);
     }
   }
 }
 
-function saveMutes() {
-  const data = Object.fromEntries(activeMutes.entries());
-  return writeJsonFile(ANTISPAM_MUTES_FILE, data);
+function saveWarnings() {
+  safeWriteJson(ANTISPAM_WARNINGS_FILE, Object.fromEntries(userWarnings.entries()));
 }
 
 function loadMutes() {
-  const data = readJsonFile(ANTISPAM_MUTES_FILE, {});
+  const data = safeReadJson(ANTISPAM_MUTES_FILE, {});
+  activeMutes.clear();
+
   if (!data || typeof data !== 'object') return;
 
   for (const [key, value] of Object.entries(data)) {
@@ -10095,6 +10083,10 @@ function loadMutes() {
       activeMutes.set(key, value);
     }
   }
+}
+
+function saveMutes() {
+  safeWriteJson(ANTISPAM_MUTES_FILE, Object.fromEntries(activeMutes.entries()));
 }
 
 // =========================
@@ -10131,9 +10123,7 @@ function formatTime(ms) {
 
 function getUserName(user) {
   if (!user) return 'Пользователь';
-  if (user.first_name) return user.first_name;
-  if (user.username) return user.username;
-  return 'Пользователь';
+  return user.first_name || user.username || 'Пользователь';
 }
 
 async function getBotId() {
@@ -10150,14 +10140,19 @@ async function getBotId() {
 }
 
 async function isOwnerOrAdmin(msg) {
-  const userId = msg.from?.id;
-  if (!userId) return false;
+  const userId = msg?.from?.id;
+  const chatId = msg?.chat?.id;
 
-  if (userId === OWNER_ID) return true;
+  if (!userId || !chatId) return false;
+
+  if (typeof OWNER_ID !== 'undefined' && userId === OWNER_ID) {
+    return true;
+  }
+
   if (msg.chat.type === 'private') return false;
 
   try {
-    const member = await bot.getChatMember(msg.chat.id, userId);
+    const member = await bot.getChatMember(chatId, userId);
     return ['creator', 'administrator'].includes(member.status);
   } catch (err) {
     console.error('Ошибка проверки админа:', err.message);
@@ -10183,27 +10178,16 @@ async function canBotRestrict(chatId) {
 }
 
 function isMuted(chatId, userId) {
-  const key = getUserKey(chatId, userId);
-  return activeMutes.has(key);
+  return activeMutes.has(getUserKey(chatId, userId));
 }
 
 function clearUserMessages(chatId, userId) {
-  const key = getUserKey(chatId, userId);
-  userMessageMap.delete(key);
+  userMessageMap.delete(getUserKey(chatId, userId));
 }
 
 function clearUserWarnings(chatId, userId, shouldSave = true) {
-  const key = getUserKey(chatId, userId);
-  userWarnings.delete(key);
-
-  if (shouldSave) {
-    saveWarnings();
-  }
-}
-
-function getWarnings(chatId, userId) {
-  const key = getUserKey(chatId, userId);
-  return userWarnings.get(key) || 0;
+  userWarnings.delete(getUserKey(chatId, userId));
+  if (shouldSave) saveWarnings();
 }
 
 function addWarning(chatId, userId) {
@@ -10241,13 +10225,31 @@ async function warnUser(chatId, userId, userName) {
   if (left > 0) {
     await bot.sendMessage(
       chatId,
-      `⚠️ ${userName}, предупреждение за спам (${currentWarnings}/${spamSettings.warningsBeforeMute})\n` +
-      `Еще ${left} предупрежд. до мута.`
+      `⚠️ ${userName}, предупреждение за спам (${currentWarnings}/${spamSettings.warningsBeforeMute})\nЕще ${left} предупрежд. до мута.`
     );
     return false;
   }
 
   return true;
+}
+
+function getRestrictPermissions(canSend) {
+  return {
+    can_send_messages: canSend,
+    can_send_audios: canSend,
+    can_send_documents: canSend,
+    can_send_photos: canSend,
+    can_send_videos: canSend,
+    can_send_video_notes: canSend,
+    can_send_voice_notes: canSend,
+    can_send_polls: canSend,
+    can_send_other_messages: canSend,
+    can_add_web_page_previews: canSend,
+    can_change_info: false,
+    can_invite_users: canSend,
+    can_pin_messages: false,
+    can_manage_topics: false
+  };
 }
 
 async function muteUser(chatId, userId, userName, reason = 'спам', customMuteTime = null) {
@@ -10256,27 +10258,12 @@ async function muteUser(chatId, userId, userName, reason = 'спам', customMut
   const muteTime = customMuteTime || spamSettings.muteTime;
   const expiresAt = now + muteTime;
 
-  if (isMuted(chatId, userId)) return false;
+  if (activeMutes.has(key)) return false;
 
   try {
     await bot.restrictChatMember(chatId, userId, {
       until_date: Math.floor(expiresAt / 1000),
-      permissions: {
-        can_send_messages: false,
-        can_send_audios: false,
-        can_send_documents: false,
-        can_send_photos: false,
-        can_send_videos: false,
-        can_send_video_notes: false,
-        can_send_voice_notes: false,
-        can_send_polls: false,
-        can_send_other_messages: false,
-        can_add_web_page_previews: false,
-        can_change_info: false,
-        can_invite_users: false,
-        can_pin_messages: false,
-        can_manage_topics: false
-      }
+      permissions: getRestrictPermissions(false)
     });
 
     const timeout = setTimeout(async () => {
@@ -10297,7 +10284,6 @@ async function muteUser(chatId, userId, userName, reason = 'спам', customMut
     });
 
     saveMutes();
-
     clearUserMessages(chatId, userId);
     clearUserWarnings(chatId, userId);
 
@@ -10318,22 +10304,7 @@ async function unmuteUser(chatId, userId, userName) {
 
   try {
     await bot.restrictChatMember(chatId, userId, {
-      permissions: {
-        can_send_messages: true,
-        can_send_audios: true,
-        can_send_documents: true,
-        can_send_photos: true,
-        can_send_videos: true,
-        can_send_video_notes: true,
-        can_send_voice_notes: true,
-        can_send_polls: true,
-        can_send_other_messages: true,
-        can_add_web_page_previews: true,
-        can_change_info: false,
-        can_invite_users: true,
-        can_pin_messages: false,
-        can_manage_topics: false
-      }
+      permissions: getRestrictPermissions(true)
     });
 
     const timeout = muteTimeouts.get(key);
@@ -10372,22 +10343,7 @@ async function restoreActiveMutes() {
     try {
       await bot.restrictChatMember(chatId, userId, {
         until_date: Math.floor(expiresAt / 1000),
-        permissions: {
-          can_send_messages: false,
-          can_send_audios: false,
-          can_send_documents: false,
-          can_send_photos: false,
-          can_send_videos: false,
-          can_send_video_notes: false,
-          can_send_voice_notes: false,
-          can_send_polls: false,
-          can_send_other_messages: false,
-          can_add_web_page_previews: false,
-          can_change_info: false,
-          can_invite_users: false,
-          can_pin_messages: false,
-          can_manage_topics: false
-        }
+        permissions: getRestrictPermissions(false)
       });
 
       const timeout = setTimeout(async () => {
@@ -10407,16 +10363,18 @@ async function restoreActiveMutes() {
   saveMutes();
 }
 
-function cleanupExpiredWarnings() {
-  if (userWarnings.size === 0) return;
-  saveWarnings();
+function initAntispamStorage() {
+  ensureDataDir();
+  loadSpamSettings();
+  loadWarnings();
+  loadMutes();
 }
 
 // =========================
 // КОМАНДЫ
 // =========================
 
-bot.onText(/\/antispam (on|off)/, async (msg, match) => {
+bot.onText(/\/antispam (on|off)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) {
@@ -10435,7 +10393,7 @@ bot.onText(/\/antispam (on|off)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_status/, async (msg) => {
+bot.onText(/\/antispam_status$/, async (msg) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) {
@@ -10458,7 +10416,7 @@ bot.onText(/\/antispam_status/, async (msg) => {
   }
 });
 
-bot.onText(/\/antispam_limit (\d+)/, async (msg, match) => {
+bot.onText(/\/antispam_limit (\d+)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
@@ -10477,7 +10435,7 @@ bot.onText(/\/antispam_limit (\d+)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_interval (\d+)/, async (msg, match) => {
+bot.onText(/\/antispam_interval (\d+)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
@@ -10496,7 +10454,7 @@ bot.onText(/\/antispam_interval (\d+)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_warns (\d+)/, async (msg, match) => {
+bot.onText(/\/antispam_warns (\d+)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
@@ -10515,14 +10473,14 @@ bot.onText(/\/antispam_warns (\d+)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_mute (\d+)/, async (msg, match) => {
+bot.onText(/\/antispam_mute (\d+)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
 
     const value = parseInt(match[1], 10);
-    if (isNaN(value) || value < 5 || value > 10080) {
-      return bot.sendMessage(msg.chat.id, '❌ Укажи время мута от 5 до 10080 минут');
+    if (isNaN(value) || value < 1 || value > 10080) {
+      return bot.sendMessage(msg.chat.id, '❌ Укажи время мута от 1 до 10080 минут');
     }
 
     spamSettings.muteTime = value * 60 * 1000;
@@ -10534,7 +10492,7 @@ bot.onText(/\/antispam_mute (\d+)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_delete (on|off)/, async (msg, match) => {
+bot.onText(/\/antispam_delete (on|off)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
@@ -10551,7 +10509,7 @@ bot.onText(/\/antispam_delete (on|off)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_admins (on|off)/, async (msg, match) => {
+bot.onText(/\/antispam_admins (on|off)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
@@ -10568,7 +10526,7 @@ bot.onText(/\/antispam_admins (on|off)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_unmute_notice (on|off)/, async (msg, match) => {
+bot.onText(/\/antispam_unmute_notice (on|off)$/, async (msg, match) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
@@ -10585,7 +10543,7 @@ bot.onText(/\/antispam_unmute_notice (on|off)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/antispam_resetwarnings/, async (msg) => {
+bot.onText(/\/antispam_resetwarnings$/, async (msg) => {
   try {
     const allowed = await isOwnerOrAdmin(msg);
     if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
@@ -10638,9 +10596,7 @@ bot.on('message', async (msg) => {
       if (spamSettings.deleteSpamMessage) {
         try {
           await bot.deleteMessage(chatId, msg.message_id);
-        } catch (err) {
-          // Не критично
-        }
+        } catch (err) {}
       }
 
       if (spamSettings.warningsBeforeMute > 0) {
@@ -10659,16 +10615,14 @@ bot.on('message', async (msg) => {
 });
 
 // =========================
-// ЗАГРУЗКА СОХРАНЕННЫХ ДАННЫХ
+// ИНИЦИАЛИЗАЦИЯ
 // =========================
 
-loadWarnings();
-loadMutes();
+initAntispamStorage();
 
 setTimeout(async () => {
   try {
     await restoreActiveMutes();
-    cleanupExpiredWarnings();
     console.log('Анти-спам данные загружены');
   } catch (err) {
     console.error('Ошибка восстановления анти-спам данных:', err.message);
