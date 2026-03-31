@@ -9272,173 +9272,184 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
       return;
     }
 
-    // OTHER / FUN
-    if (isExactCommand(lowerText, "бомба")) {
-      const bombKey = getBombChatKey(msg.chat.id);
+   // OTHER / FUN
+if (isExactCommand(lowerText, "бомба")) {
+  const bombKey = getBombChatKey(msg.chat.id);
 
-      if (activeBombs[bombKey]) {
-        await safeSendMessage(msg.chat.id, "💣 Бомба уже запущена. Дождись, пока она взорвётся.");
-        return;
-      }
+  if (activeBombs[bombKey]) {
+    await safeSendMessage(
+      msg.chat.id,
+      "💣 Бомба уже запущена. Дождись, пока она взорвётся."
+    );
+    return;
+  }
 
-      const candidates = getRecentActiveCandidates(msg.chat.id);
-      if (candidates.length < 2) {
-        await safeSendMessage(msg.chat.id, "❌ Нужно хотя бы 2 активных человека в чате.");
-        return;
-      }
+  const candidates = getRecentActiveCandidates(msg.chat.id);
+  if (!Array.isArray(candidates) || candidates.length < 2) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Нужно хотя бы 2 активных человека в чате."
+    );
+    return;
+  }
 
-      const holder = getRandomFromArray(candidates);
+  const holder = getRandomFromArray(candidates);
 
-      activeBombs[bombKey] = {
-        holder,
-        previousHolderId: null,
-        timer: null
-      };
+  if (!holder || !holder.id) {
+    await safeSendMessage(msg.chat.id, "❌ Не удалось выбрать игрока для бомбы.");
+    return;
+  }
 
-      await safeSendMessage(
-        msg.chat.id,
-        `💣 Бомба активирована!
+  activeBombs[bombKey] = {
+    holder,
+    previousHolderId: null,
+    timer: null
+  };
 
-🔥 Бомба у: ${getUserLink(holder)}
-⏳ У него 5 секунд, чтобы написать: передать`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-
-      await startBombTimer(msg.chat.id);
-      return;
+  await safeSendMessage(
+    msg.chat.id,
+    `💣 Бомба активирована!\n\n🔥 Бомба у: ${getUserLink(holder)}\n⏳ У него 5 секунд, чтобы написать: передать`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     }
+  );
 
-    if (isExactCommand(lowerText, "передать")) {
-      const bombKey = getBombChatKey(msg.chat.id);
-      const bomb = activeBombs[bombKey];
+  await startBombTimer(msg.chat.id);
+  return;
+}
 
-      if (!bomb) return;
+if (isExactCommand(lowerText, "передать")) {
+  const bombKey = getBombChatKey(msg.chat.id);
+  const bomb = activeBombs[bombKey];
 
-      if (!bomb.holder || bomb.holder.id !== msg.from.id) {
-        await safeSendMessage(msg.chat.id, "❌ Сейчас бомба не у тебя.");
-        return;
-      }
+  if (!bomb) return;
 
-      await passBomb(msg.chat.id, msg.from);
-      return;
+  if (!bomb.holder || Number(bomb.holder.id) !== Number(msg.from.id)) {
+    await safeSendMessage(msg.chat.id, "❌ Сейчас бомба не у тебя.");
+    return;
+  }
+
+  await passBomb(msg.chat.id, msg.from);
+  return;
+}
+
+if (
+  isExactCommand(lowerText, "он врет?") ||
+  isExactCommand(lowerText, "врет?") ||
+  isExactCommand(lowerText, "он врёт?") ||
+  isExactCommand(lowerText, "врёт?")
+) {
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "Ответь на сообщение человека или напиши: он врет? @username"
+    );
+    return;
+  }
+
+  const result = getLieResult();
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🕵️ ${getUserLink(target)} проверен...\n\nВероятность лжи: ${Number(result?.percent || 0)}%\n${escapeHtml(result?.text || "Результат не найден")}`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     }
+  );
+  return;
+}
 
-    if (
-      isExactCommand(lowerText, "он врет?") ||
-      isExactCommand(lowerText, "врет?") ||
-      isExactCommand(lowerText, "он врёт?") ||
-      isExactCommand(lowerText, "врёт?")
-    ) {
-      const target = await resolveTargetUserUniversal(msg);
+if (isExactCommand(lowerText, "респект")) {
+  const sender = msg.from;
+  const target = await resolveTargetUserUniversal(msg);
 
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: он врет? @username");
-        return;
-      }
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "Ответь на сообщение человека или напиши: респект @username"
+    );
+    return;
+  }
 
-      const result = getLieResult();
+  await initUser(target);
 
-      await safeSendMessage(
-        msg.chat.id,
-        `🕵️ ${getUserLink(target)} проверен...
+  if (Number(sender.id) === Number(target.id)) {
+    await safeSendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
+    return;
+  }
 
-Вероятность лжи: ${result.percent}%
-${escapeHtml(result.text)}`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
+  const result = await pool.query(
+    `UPDATE users
+     SET respect = COALESCE(respect, 0) + 1
+     WHERE user_id = $1
+     RETURNING respect`,
+    [target.id]
+  );
+
+  const respectCount = Number(result.rows?.[0]?.respect || 0);
+
+  let out = `🤝 ${getUserLink(sender)} выразил респект ${getUserLink(target)}\n\nРеспект: ${respectCount}`;
+  out = await appendLevelUpIfNeeded(out, sender.id, 2);
+
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
+
+if (isExactCommand(lowerText, "пара")) {
+  const result = await pool.query(
+    `
+    SELECT user_id, first_name, last_name, username
+    FROM chat_seen_users
+    WHERE chat_id = $1
+    ORDER BY RANDOM()
+    LIMIT 2
+    `,
+    [msg.chat.id]
+  );
+
+  if (!result.rows || result.rows.length < 2) {
+    await safeSendMessage(
+      msg.chat.id,
+      "Нужно хотя бы 2 человека, которых бот уже видел в этом чате 💞"
+    );
+    return;
+  }
+
+  const pair = result.rows.map((row) => ({
+    id: Number(row.user_id),
+    first_name: row.first_name || "",
+    last_name: row.last_name || "",
+    username: row.username || ""
+  }));
+
+  const [firstUser, secondUser] = pair;
+  const percent = Math.floor(Math.random() * 101);
+
+  await safeSendMessage(
+    msg.chat.id,
+    `💞 Случайная пара:\n${getUserLink(firstUser)} + ${getUserLink(secondUser)}\n\n❤️ Совместимость: ${percent}%`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     }
+  );
+  return;
+}
 
-    if (isExactCommand(lowerText, "респект")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserUniversal(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: респект @username");
-        return;
-      }
-
-      await initUser(target);
-
-      if (sender.id === target.id) {
-        await safeSendMessage(msg.chat.id, "Себе респект дать нельзя 😅");
-        return;
-      }
-
-      const result = await pool.query(
-        `UPDATE users SET respect = COALESCE(respect, 0) + 1 WHERE user_id = $1 RETURNING respect`,
-        [target.id]
-      );
-
-      const respectCount = result.rows[0]?.respect || 0;
-
-      let out = `🤝 ${getUserLink(sender)} выразил респект ${getUserLink(target)}
-
-Респект: ${respectCount}`;
-
-      out = await appendLevelUpIfNeeded(out, sender.id, 2);
-
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
-
-    if (isExactCommand(lowerText, "пара")) {
-      const result = await pool.query(
-        `
-        SELECT user_id, first_name, last_name, username
-        FROM chat_seen_users
-        WHERE chat_id = $1
-        ORDER BY RANDOM()
-        LIMIT 2
-        `,
-        [msg.chat.id]
-      );
-
-      if (result.rows.length < 2) {
-        await safeSendMessage(msg.chat.id, "Нужно хотя бы 2 человека, которых бот уже видел в этом чате 💞");
-        return;
-      }
-
-      const pair = result.rows.map((row) => ({
-        id: Number(row.user_id),
-        first_name: row.first_name || "",
-        last_name: row.last_name || "",
-        username: row.username || ""
-      }));
-
-      const [firstUser, secondUser] = pair;
-      const percent = Math.floor(Math.random() * 101);
-
-      await safeSendMessage(
-        msg.chat.id,
-        `💞 Случайная пара:
-${getUserLink(firstUser)} + ${getUserLink(secondUser)}
-
-❤️ Совместимость: ${percent}%`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
-    }
-
-   // ===== ПРОГНОЗ =====
+// ===== ПРОГНОЗ =====
 if (isExactCommand(lowerText, "прогноз")) {
   const prediction = getRandomPrediction();
 
   await safeSendMessage(
     msg.chat.id,
-    `🔮 ${getUserLink(msg.from)}\n${escapeHtml(prediction)}`,
+    `🔮 ${getUserLink(msg.from)}\n${escapeHtml(prediction || "Без прогноза 😅")}`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -9451,10 +9462,10 @@ if (isExactCommand(lowerText, "прогноз")) {
 if (lowerText === "оценка" || lowerText.startsWith("оценка ")) {
   let target = msg.from;
 
-  if (msg.reply_to_message?.from) {
+  if (msg.reply_to_message && msg.reply_to_message.from) {
     target = msg.reply_to_message.from;
   } else {
-    const parts = (originalText || "").trim().split(/\s+/);
+    const parts = String(originalText || "").trim().split(/\s+/);
 
     if (parts.length > 1) {
       target = {
@@ -9467,7 +9478,7 @@ if (lowerText === "оценка" || lowerText.startsWith("оценка ")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
+    `📊 Оценка ${escapeHtml(getUserName(target))}: ${Number(rating || 0)}/10 😎`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -9478,7 +9489,7 @@ if (lowerText === "оценка" || lowerText.startsWith("оценка ")) {
 
 // ===== КТО =====
 if (lowerText === "кто" || lowerText.startsWith("кто ")) {
-  const subject = (originalText || "").slice(3).trim();
+  const subject = String(originalText || "").slice(3).trim();
 
   if (!subject) {
     await safeSendMessage(
@@ -9490,7 +9501,7 @@ if (lowerText === "кто" || lowerText.startsWith("кто ")) {
 
   const randomUser = getRandomChatMember(msg.chat.id);
 
-  if (!randomUser) {
+  if (!randomUser || !randomUser.id) {
     await safeSendMessage(
       msg.chat.id,
       "Пока некого выбрать 🤔"
@@ -9508,417 +9519,129 @@ if (lowerText === "кто" || lowerText.startsWith("кто ")) {
   );
   return;
 }
-    
-    if (lowerText.startsWith("подарок")) {
-      const sender = msg.from;
-      const target = await resolveTargetUserUniversal(msg);
 
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: подарок @username");
-        return;
-      }
+if (lowerText === "подарок" || lowerText.startsWith("подарок ")) {
+  const sender = msg.from;
+  const target = await resolveTargetUserUniversal(msg);
 
-      await initUser(target);
-
-      if (sender.id === target.id) {
-        await safeSendMessage(
-          msg.chat.id,
-          `🎁 ${getUserLink(sender)} подарил(а) подарок самому себе`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      const gift = getRandomGift();
-
-      let out = `🎁 ${getUserLink(sender)} подарил(а) ${getUserLink(target)} ${escapeHtml(gift)}`;
-      out = await appendLevelUpIfNeeded(out, sender.id, 2);
-
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
-
-    // CUSTOM COMMANDS
-    const customCommand = await getCustomCommandByTrigger(lowerText);
-    if (customCommand) {
-      const sender = msg.from;
-      const target = await resolveTargetUserUniversal(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
-        return;
-      }
-
-      await initUser(target);
-
-      if (sender.id === target.id) {
-        await safeSendMessage(
-          msg.chat.id,
-          `😅 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} самого себя`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      let out = `💬 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} ${getUserLink(target)}`;
-      out = await appendLevelUpIfNeeded(out, sender.id, 2);
-
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
-
-    // RP COMMANDS + @username SUPPORT
-    let matchedRpKey = null;
-    for (const key of Object.keys(rpCommands)) {
-      if (lowerText === key || lowerText.startsWith(`${key} `)) {
-        matchedRpKey = key;
-        break;
-      }
-    }
-
-    if (matchedRpKey) {
-      const command = rpCommands[matchedRpKey];
-      const sender = msg.from;
-      const target = await resolveTargetUserUniversal(msg);
-
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
-        return;
-      }
-
-      await initUser(target);
-
-      if (sender.id === target.id) {
-        await safeSendMessage(
-          msg.chat.id,
-          `😅 ${getUserLink(sender)} ${command.text} самого себя`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      await incrementStat(target.id, command.stat);
-
-      let out = `${command.emoji} ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`;
-      out = await appendLevelUpIfNeeded(out, sender.id, command.xp);
-
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
-  } catch (error) {
-    console.error("Ошибка обработки сообщения:", error);
-  }
-});
-
-// =========================
-// CUSTOM COMMAND DB HELPERS
-// =========================
-async function getUserCustomCommandCount(userId) {
-  const result = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM custom_commands WHERE user_id = $1`,
-    [userId]
-  );
-  return result.rows[0]?.count || 0;
-}
-
-async function getUserCustomCommands(userId) {
-  const result = await pool.query(
-    `
-    SELECT trigger, action_text
-    FROM custom_commands
-    WHERE user_id = $1
-    ORDER BY created_at ASC
-    `,
-    [userId]
-  );
-  return result.rows;
-}
-
-async function getCustomCommandByTrigger(trigger) {
-  const result = await pool.query(
-    `
-    SELECT id, user_id, trigger, action_text
-    FROM custom_commands
-    WHERE LOWER(trigger) = LOWER($1)
-    LIMIT 1
-    `,
-    [trigger]
-  );
-  return result.rows[0] || null;
-}
-
-async function createCustomCommand(userId, trigger, actionText) {
-  await pool.query(
-    `INSERT INTO custom_commands (user_id, trigger, action_text) VALUES ($1, $2, $3)`,
-    [userId, trigger, actionText]
-  );
-}
-
-async function deleteCustomCommand(userId, trigger) {
-  const result = await pool.query(
-    `
-    DELETE FROM custom_commands
-    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
-    RETURNING trigger
-    `,
-    [userId, trigger]
-  );
-  return result.rows[0] || null;
-}
-
-bot.onText(/^\/createcommand(@[A-Za-z0-9_]+)?$/, async (msg) => {
-  try {
-    await initUser(msg.from);
-    await saveSeenUser(msg.chat.id, msg.from);
-
-    const count = await getUserCustomCommandCount(msg.from.id);
-    if (count >= MAX_CUSTOM_COMMANDS) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}\nУдалить можно через /deletecommand`
-      );
-      return;
-    }
-
-    const stats = await getUserStats(msg.from.id);
-    if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`
-      );
-      return;
-    }
-
-    const key = getPendingKey(msg.chat.id, msg.from.id);
-    pendingCommandCreation[key] = true;
-
+  if (!target) {
     await safeSendMessage(
       msg.chat.id,
-      `🛠 Создание команды
-
-Цена: ${CUSTOM_COMMAND_COST} монет
-Максимум: ${MAX_CUSTOM_COMMANDS} команд
-
-Напиши в формате:
-команда действие
-
-Пример:
-облил облил водой`
+      "Ответь на сообщение человека или напиши: подарок @username"
     );
-  } catch (error) {
-    console.error("Ошибка /createcommand:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка создания команды.");
+    return;
   }
-});
 
-bot.onText(/^\/mycommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
-  try {
-    await initUser(msg.from);
-    const commands = await getUserCustomCommands(msg.from.id);
+  await initUser(target);
 
-    if (!commands.length) {
-      await safeSendMessage(msg.chat.id, "📜 У тебя пока нет своих команд.");
-      return;
-    }
-
-    const lines = commands.map((cmd, index) =>
-      `${index + 1}. ${escapeHtml(cmd.trigger)} — бот пишет: ${escapeHtml(cmd.action_text)}`
-    );
-
+  if (Number(sender.id) === Number(target.id)) {
     await safeSendMessage(
       msg.chat.id,
-      `📜 Твои команды:\n\n${lines.join("\n")}`,
-      { parse_mode: "HTML" }
-    );
-  } catch (error) {
-    console.error("Ошибка /mycommands:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка при получении команд.");
-  }
-});
-
-bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
-  try {
-    await initUser(msg.from);
-
-    const trigger = normalizeText(match?.[2] || "");
-    if (!trigger) {
-      await safeSendMessage(msg.chat.id, "❌ Напиши так:\n/deletecommand облил");
-      return;
-    }
-
-    const deleted = await deleteCustomCommand(msg.from.id, trigger);
-    if (!deleted) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ У тебя нет команды "${escapeHtml(trigger)}".`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    await safeSendMessage(
-      msg.chat.id,
-      `🗑 Команда "${escapeHtml(deleted.trigger)}" удалена.`,
-      { parse_mode: "HTML" }
-    );
-  } catch (error) {
-    console.error("Ошибка /deletecommand:", error);
-    await safeSendMessage(msg.chat.id, "Ошибка удаления команды.");
-  }
-});
-
-bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
-  try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
-
-    const target = await resolveTargetUserUniversal(msg);
-    const amount = Number(match?.[2] || 0);
-
-    if (!target) {
-      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /givemoney 1000");
-      return;
-    }
-
-    if (!Number.isInteger(amount) || amount <= 0) {
-      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /givemoney 1000");
-      return;
-    }
-
-    await initUser(target);
-    const newBalance = await addCoinsToUser(target.id, amount);
-
-    await safeSendMessage(
-      msg.chat.id,
-      `💸 ${getUserLink(target)} получил(а) ${amount} монет.
-
-Новый баланс: ${newBalance}`,
+      `🎁 ${getUserLink(sender)} подарил(а) подарок самому себе`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
       }
     );
-  } catch (error) {
-    console.error("Ошибка /givemoney:", error);
-    await safeSendMessage(msg.chat.id, "❌ Ошибка выдачи монет.");
+    return;
   }
-});
 
-bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
-  try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
+  const gift = getRandomGift();
 
-    const target = await resolveTargetUserUniversal(msg);
-    const amount = Number(match?.[2] || 0);
+  let out = `🎁 ${getUserLink(sender)} подарил(а) ${getUserLink(target)} ${escapeHtml(gift || "подарок")}`;
+  out = await appendLevelUpIfNeeded(out, sender.id, 2);
 
-    if (!target) {
-      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /takemoney 100");
-      return;
-    }
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
-    if (!Number.isInteger(amount) || amount <= 0) {
-      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /takemoney 100");
-      return;
-    }
+// CUSTOM COMMANDS
+const customCommand = await getCustomCommandByTrigger(lowerText);
+if (customCommand) {
+  const sender = msg.from;
+  const target = await resolveTargetUserUniversal(msg);
 
-    await initUser(target);
-
-    const result = await deductCoinsSafe(target.id, amount);
-
+  if (!target) {
     await safeSendMessage(
       msg.chat.id,
-      `💸 У игрока ${getUserLink(target)} забрано ${result.deducted} монет.
+      "Ответь на сообщение человека или используй @username."
+    );
+    return;
+  }
 
-Новый баланс: ${result.balance}`,
+  await initUser(target);
+
+  if (Number(sender.id) === Number(target.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      `😅 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text || "применил действие к")} самого себя`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
       }
     );
-  } catch (error) {
-    console.error("Ошибка /takemoney:", error);
-    await safeSendMessage(msg.chat.id, "❌ Ошибка снятия монет.");
+    return;
   }
-});
 
-bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/, async (msg, match) => {
-  try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
+  let out = `💬 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text || "сделал действие с")} ${getUserLink(target)}`;
+  out = await appendLevelUpIfNeeded(out, sender.id, 2);
 
-    const cooldownName = String(match?.[2] || "").trim();
-    const rawValue = String(match?.[3] || "").trim();
-    const rawUnit = String(match?.[4] || "").trim();
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
-    const deltaMs = parseTimeEditAmount(rawValue, rawUnit);
-    if (deltaMs === null) {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
-      );
-      return;
-    }
+// RP COMMANDS + @username SUPPORT
+let matchedRpKey = null;
+for (const key of Object.keys(rpCommands || {})) {
+  if (lowerText === key || lowerText.startsWith(`${key} `)) {
+    matchedRpKey = key;
+    break;
+  }
+}
 
-    const deltaMinutes = Math.abs(Math.trunc(deltaMs / 60000));
-    if (deltaMinutes > TIME_EDIT_MAX_MINUTES) {
-      await safeSendMessage(msg.chat.id, `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`);
-      return;
-    }
+if (matchedRpKey) {
+  const command = rpCommands[matchedRpKey];
+  const sender = msg.from;
+  const target = await resolveTargetUserUniversal(msg);
 
-    let targetUser = null;
-    if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
-    if (!targetUser) targetUser = msg.from;
-
-    await initUser(targetUser);
-
-    const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
-    const signText =
-      Math.abs(deltaMs) % (60 * 60 * 1000) === 0
-        ? `${Number(rawValue)} ч`
-        : `${Number(rawValue)} мин`;
-
+  if (!target) {
     await safeSendMessage(
       msg.chat.id,
-      `🕒 Время кулдауна изменено
+      "Ответь на сообщение человека или используй @username."
+    );
+    return;
+  }
 
-👤 Игрок: ${getUserLink(targetUser)}
-⏱ Кулдаун: ${escapeHtml(result.title)}
-🔧 Изменение: ${signText}
-📅 Новое время отсчёта: ${formatDateTime(result.newDate)}
-⌛ Осталось до готовности: ${formatRemainingTime(result.remainingMs)}`,
+  await initUser(target);
+
+  if (Number(sender.id) === Number(target.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      `😅 ${getUserLink(sender)} ${escapeHtml(command?.text || "сделал")} самого себя`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
       }
     );
-  } catch (error) {
-    if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб");
-      return;
-    }
-
-    if (error.message === "COOLDOWN_NOT_USED_YET") {
-      await safeSendMessage(msg.chat.id, "❌ У игрока этот кулдаун ещё не запускался.");
-      return;
-    }
-
-    console.error("Ошибка /timeedit:", error);
-    await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
+    return;
   }
-});
+
+  if (command?.stat) {
+    await incrementStat(target.id, command.stat);
+  }
+
+  let out = `${command?.emoji || "💬"} ${getUserLink(sender)} ${escapeHtml(command?.text || "сделал")} ${getUserLink(target)}`;
+  out = await appendLevelUpIfNeeded(out, sender.id, Number(command?.xp || 0));
+
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
