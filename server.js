@@ -4759,7 +4759,10 @@ bot.onText(/\/help/, (msg) => {
 • оценка
 • прогноз
 • он врет?`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 });
 
