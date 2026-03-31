@@ -9959,17 +9959,19 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // =========================
-// АНТИ-СПАМ С МУТОМ
+// АНТИ-СПАМ С ПРЕДУПРЕЖДЕНИЯМИ И МУТОМ
 // Node-Telegram-Bot-API
 // =========================
 
 const spamSettings = {
   enabled: true,
-  messageLimit: 5,      // сколько сообщений
-  interval: 5000,       // за сколько мс
-  muteTime: 60000,      // мут в мс
-  ignoreAdmins: true,   // игнорировать админов
-  deleteSpamMessage: false // удалять сообщение, на котором сработал антиспам
+  messageLimit: 5,           // сколько сообщений допускается
+  interval: 5000,            // за сколько мс
+  warningsBeforeMute: 2,     // сколько предупреждений до мута
+  muteTime: 60000,           // мут в мс
+  ignoreAdmins: true,        // игнорировать админов
+  deleteSpamMessage: false,  // удалять сообщение, на котором сработал антиспам
+  notifyUnmute: true         // писать в чат когда мут снят
 };
 
 // chatId:userId => [timestamps]
@@ -9977,6 +9979,12 @@ const userMessageMap = new Map();
 
 // chatId:userId => timeout
 const muteTimeouts = new Map();
+
+// chatId:userId => warningsCount
+const userWarnings = new Map();
+
+// кэш id бота
+let BOT_ID = null;
 
 // =========================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -9989,22 +9997,45 @@ function getUserKey(chatId, userId) {
 function formatTime(ms) {
   const sec = Math.floor(ms / 1000);
 
-  if (sec < 60) {
-    return `${sec} сек`;
-  }
+  if (sec < 60) return `${sec} сек`;
 
   const min = Math.floor(sec / 60);
-  if (min < 60) {
-    return `${min} мин`;
-  }
+  if (min < 60) return `${min} мин`;
 
   const hr = Math.floor(min / 60);
-  if (hr < 24) {
-    return `${hr} ч`;
-  }
+  if (hr < 24) return `${hr} ч`;
 
   const days = Math.floor(hr / 24);
-  return `${days} д`;
+  if (days < 7) return `${days} д`;
+
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks} нед`;
+
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} мес`;
+
+  const years = Math.floor(days / 365);
+  return `${years} г`;
+}
+
+function getUserName(user) {
+  if (!user) return 'Пользователь';
+  if (user.first_name) return user.first_name;
+  if (user.username) return `@${user.username}`;
+  return 'Пользователь';
+}
+
+async function getBotId() {
+  if (BOT_ID) return BOT_ID;
+
+  try {
+    const me = await bot.getMe();
+    BOT_ID = me.id;
+    return BOT_ID;
+  } catch (err) {
+    console.error('Ошибка получения bot id:', err.message);
+    return null;
+  }
 }
 
 async function isOwnerOrAdmin(msg) {
@@ -10025,8 +10056,10 @@ async function isOwnerOrAdmin(msg) {
 
 async function canBotRestrict(chatId) {
   try {
-    const me = await bot.getMe();
-    const member = await bot.getChatMember(chatId, me.id);
+    const botId = await getBotId();
+    if (!botId) return false;
+
+    const member = await bot.getChatMember(chatId, botId);
 
     return member.status === 'creator' || (
       member.status === 'administrator' &&
@@ -10048,6 +10081,24 @@ function clearUserMessages(chatId, userId) {
   userMessageMap.delete(key);
 }
 
+function clearUserWarnings(chatId, userId) {
+  const key = getUserKey(chatId, userId);
+  userWarnings.delete(key);
+}
+
+function getWarnings(chatId, userId) {
+  const key = getUserKey(chatId, userId);
+  return userWarnings.get(key) || 0;
+}
+
+function addWarning(chatId, userId) {
+  const key = getUserKey(chatId, userId);
+  const current = userWarnings.get(key) || 0;
+  const next = current + 1;
+  userWarnings.set(key, next);
+  return next;
+}
+
 function addUserMessage(chatId, userId, now) {
   const key = getUserKey(chatId, userId);
 
@@ -10063,6 +10114,24 @@ function addUserMessage(chatId, userId, now) {
   }
 
   return timestamps.length;
+}
+
+async function warnUser(chatId, userId, userName) {
+  const currentWarnings = addWarning(chatId, userId);
+  const left = Math.max(spamSettings.warningsBeforeMute - currentWarnings, 0);
+
+  clearUserMessages(chatId, userId);
+
+  if (left > 0) {
+    await bot.sendMessage(
+      chatId,
+      `⚠️ ${userName}, предупреждение за спам (${currentWarnings}/${spamSettings.warningsBeforeMute})\n` +
+      `Еще ${left} предупрежд. до мута.`
+    );
+    return false;
+  }
+
+  return true;
 }
 
 async function muteUser(chatId, userId, userName, reason = 'спам') {
@@ -10102,10 +10171,11 @@ async function muteUser(chatId, userId, userName, reason = 'спам') {
 
     muteTimeouts.set(key, timeout);
     clearUserMessages(chatId, userId);
+    clearUserWarnings(chatId, userId);
 
     await bot.sendMessage(
       chatId,
-      `🔇 ${userName} лишается права слова на ${formatTime(spamSettings.muteTime)}\n💬 Причина: ${reason}`
+      `🔇 ${userName} получает мут на ${formatTime(spamSettings.muteTime)}\n💬 Причина: ${reason}`
     );
 
     return true;
@@ -10143,8 +10213,12 @@ async function unmuteUser(chatId, userId, userName) {
 
     muteTimeouts.delete(key);
     clearUserMessages(chatId, userId);
+    clearUserWarnings(chatId, userId);
 
-    await bot.sendMessage(chatId, `✅ ${userName} снова может писать в чате`);
+    if (spamSettings.notifyUnmute) {
+      await bot.sendMessage(chatId, `✅ ${userName} снова может писать в чате`);
+    }
+
     return true;
   } catch (err) {
     console.error('Ошибка при снятии мута:', err.message);
@@ -10157,32 +10231,169 @@ async function unmuteUser(chatId, userId, userName) {
 // =========================
 
 bot.onText(/\/antispam (on|off)/, async (msg, match) => {
-  const allowed = await isOwnerOrAdmin(msg);
-  if (!allowed) {
-    return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) {
+      return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+    }
+
+    spamSettings.enabled = match[1] === 'on';
+
+    return bot.sendMessage(
+      msg.chat.id,
+      `✅ Анти-спам ${spamSettings.enabled ? 'включен' : 'выключен'}`
+    );
+  } catch (err) {
+    console.error('Ошибка /antispam:', err.message);
   }
-
-  spamSettings.enabled = match[1] === 'on';
-
-  return bot.sendMessage(
-    msg.chat.id,
-    `✅ Анти-спам ${spamSettings.enabled ? 'включен' : 'выключен'}`
-  );
 });
 
 bot.onText(/\/antispam_status/, async (msg) => {
-  const allowed = await isOwnerOrAdmin(msg);
-  if (!allowed) {
-    return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
-  }
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) {
+      return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+    }
 
-  return bot.sendMessage(
-    msg.chat.id,
-    `⚙️ Анти-спам: ${spamSettings.enabled ? 'включен' : 'выключен'}\n` +
-    `📨 Лимит: ${spamSettings.messageLimit} сообщений\n` +
-    `⏱ Интервал: ${spamSettings.interval / 1000} сек\n` +
-    `🔇 Мут: ${formatTime(spamSettings.muteTime)}`
-  );
+    return bot.sendMessage(
+      msg.chat.id,
+      `⚙️ Анти-спам: ${spamSettings.enabled ? 'включен' : 'выключен'}\n` +
+      `📨 Лимит: ${spamSettings.messageLimit} сообщений\n` +
+      `⏱ Интервал: ${spamSettings.interval / 1000} сек\n` +
+      `⚠️ Предупреждений до мута: ${spamSettings.warningsBeforeMute}\n` +
+      `🔇 Мут: ${formatTime(spamSettings.muteTime)}\n` +
+      `👮 Игнор админов: ${spamSettings.ignoreAdmins ? 'да' : 'нет'}\n` +
+      `🗑 Удалять спам-сообщение: ${spamSettings.deleteSpamMessage ? 'да' : 'нет'}\n` +
+      `🔔 Сообщать о размуте: ${spamSettings.notifyUnmute ? 'да' : 'нет'}`
+    );
+  } catch (err) {
+    console.error('Ошибка /antispam_status:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_limit (\d+)/, async (msg, match) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    const value = parseInt(match[1], 10);
+    if (isNaN(value) || value < 2 || value > 100) {
+      return bot.sendMessage(msg.chat.id, '❌ Укажи лимит от 2 до 100');
+    }
+
+    spamSettings.messageLimit = value;
+    return bot.sendMessage(msg.chat.id, `✅ Лимит сообщений установлен: ${value}`);
+  } catch (err) {
+    console.error('Ошибка /antispam_limit:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_interval (\d+)/, async (msg, match) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    const value = parseInt(match[1], 10);
+    if (isNaN(value) || value < 1 || value > 300) {
+      return bot.sendMessage(msg.chat.id, '❌ Укажи интервал от 1 до 300 секунд');
+    }
+
+    spamSettings.interval = value * 1000;
+    return bot.sendMessage(msg.chat.id, `✅ Интервал установлен: ${value} сек`);
+  } catch (err) {
+    console.error('Ошибка /antispam_interval:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_warns (\d+)/, async (msg, match) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    const value = parseInt(match[1], 10);
+    if (isNaN(value) || value < 0 || value > 20) {
+      return bot.sendMessage(msg.chat.id, '❌ Укажи предупреждения от 0 до 20');
+    }
+
+    spamSettings.warningsBeforeMute = value;
+    return bot.sendMessage(msg.chat.id, `✅ Предупреждений до мута: ${value}`);
+  } catch (err) {
+    console.error('Ошибка /antispam_warns:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_mute (\d+)/, async (msg, match) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    const value = parseInt(match[1], 10);
+    if (isNaN(value) || value < 5 || value > 10080) {
+      return bot.sendMessage(msg.chat.id, '❌ Укажи время мута от 5 до 10080 минут');
+    }
+
+    spamSettings.muteTime = value * 60 * 1000;
+    return bot.sendMessage(msg.chat.id, `✅ Мут установлен: ${formatTime(spamSettings.muteTime)}`);
+  } catch (err) {
+    console.error('Ошибка /antispam_mute:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_delete (on|off)/, async (msg, match) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    spamSettings.deleteSpamMessage = match[1] === 'on';
+    return bot.sendMessage(
+      msg.chat.id,
+      `✅ Удаление спам-сообщения ${spamSettings.deleteSpamMessage ? 'включено' : 'выключено'}`
+    );
+  } catch (err) {
+    console.error('Ошибка /antispam_delete:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_admins (on|off)/, async (msg, match) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    spamSettings.ignoreAdmins = match[1] === 'on';
+    return bot.sendMessage(
+      msg.chat.id,
+      `✅ Игнор админов ${spamSettings.ignoreAdmins ? 'включен' : 'выключен'}`
+    );
+  } catch (err) {
+    console.error('Ошибка /antispam_admins:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_unmute_notice (on|off)/, async (msg, match) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    spamSettings.notifyUnmute = match[1] === 'on';
+    return bot.sendMessage(
+      msg.chat.id,
+      `✅ Уведомление о размуте ${spamSettings.notifyUnmute ? 'включено' : 'выключено'}`
+    );
+  } catch (err) {
+    console.error('Ошибка /antispam_unmute_notice:', err.message);
+  }
+});
+
+bot.onText(/\/antispam_resetwarnings/, async (msg) => {
+  try {
+    const allowed = await isOwnerOrAdmin(msg);
+    if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+    userWarnings.clear();
+    return bot.sendMessage(msg.chat.id, '✅ Все предупреждения сброшены');
+  } catch (err) {
+    console.error('Ошибка /antispam_resetwarnings:', err.message);
+  }
 });
 
 // =========================
@@ -10198,7 +10409,7 @@ bot.on('message', async (msg) => {
 
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    const userName = msg.from.first_name || msg.from.username || 'Пользователь';
+    const userName = getUserName(msg.from);
     const now = Date.now();
 
     if (spamSettings.ignoreAdmins) {
@@ -10206,7 +10417,9 @@ bot.on('message', async (msg) => {
       if (admin) return;
     }
 
-    if (isMuted(chatId, userId)) return;
+    if (isMuted(chatId, userId)) {
+      return;
+    }
 
     const botCanRestrict = await canBotRestrict(chatId);
     if (!botCanRestrict) return;
@@ -10222,7 +10435,15 @@ bot.on('message', async (msg) => {
         }
       }
 
-      await muteUser(chatId, userId, userName, 'спам');
+      if (spamSettings.warningsBeforeMute > 0) {
+        const mustMute = await warnUser(chatId, userId, userName);
+        if (mustMute) {
+          await muteUser(chatId, userId, userName, 'спам');
+        }
+      } else {
+        clearUserMessages(chatId, userId);
+        await muteUser(chatId, userId, userName, 'спам');
+      }
     }
   } catch (err) {
     console.error('Ошибка антиспама:', err.message);
