@@ -10451,88 +10451,54 @@ bot.on('message', async (msg) => {
 });
 
 // =========================
-// /admins
-// Улучшенная версия
+// /admins (только ник)
 // =========================
 
-function escapeHtml(text = '') {
-  return String(text)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function formatAdminName(user) {
-  if (!user) return 'Без имени';
-
-  const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
-  if (user.username) {
-    return `${escapeHtml(fullName || 'Без имени')} (@${escapeHtml(user.username)})`;
-  }
-
-  return escapeHtml(fullName || 'Без имени');
+function getName(user) {
+  return [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || 'Без имени';
 }
 
 bot.onText(/\/admins$/, async (msg) => {
   const chatId = msg.chat.id;
 
   if (msg.chat.type === 'private') {
-    return bot.sendMessage(chatId, '❌ Команда работает только в группе или супергруппе');
+    return bot.sendMessage(chatId, '❌ Только для группы');
   }
 
   try {
     const admins = await bot.getChatAdministrators(chatId);
-    const me = await bot.getMe();
 
-    if (!admins || admins.length === 0) {
-      return bot.sendMessage(chatId, '❌ Не удалось получить список админов');
+    if (!admins.length) {
+      return bot.sendMessage(chatId, '❌ Админы не найдены');
     }
 
-    const owner = admins.find(admin => admin.status === 'creator');
-    const adminList = admins
-      .filter(admin => admin.status === 'administrator')
-      .filter(admin => admin.user.id !== me.id); // если не хочешь показывать бота
+    const owner = admins.find(a => a.status === 'creator');
+    const adminList = admins.filter(a => a.status === 'administrator');
 
-    let text = `👮 <b>Админы группы</b>\n\n`;
+    let text = '👮 Админы группы:\n\n';
 
+    // владелец
     if (owner) {
-      text += `👑 <b>Владелец:</b>\n`;
-      text += `• ${formatAdminName(owner.user)}\n\n`;
+      text += `👑 Владелец:\n`;
+      text += `• ${getName(owner.user)}\n\n`;
     }
 
-    text += `🛡 <b>Администраторы:</b>\n`;
+    // админы
+    text += `🛡 Админы:\n`;
 
     if (adminList.length === 0) {
-      text += `• Нет других админов\n`;
+      text += '• Нет админов\n';
     } else {
       for (const admin of adminList) {
-        let badges = [];
-
-        if (admin.can_delete_messages) badges.push('удаление');
-        if (admin.can_restrict_members) badges.push('мут/бан');
-        if (admin.can_invite_users) badges.push('инвайт');
-        if (admin.can_pin_messages) badges.push('закреп');
-        if (admin.can_manage_topics) badges.push('темы');
-
-        text += `• ${formatAdminName(admin.user)}`;
-
-        if (badges.length > 0) {
-          text += ` — <i>${escapeHtml(badges.join(', '))}</i>`;
-        }
-
-        text += `\n`;
+        text += `• ${getName(admin.user)}\n`;
       }
     }
 
-    text += `\n📊 Всего админов: <b>${admins.filter(a => a.user.id !== me.id).length}</b>`;
+    bot.sendMessage(chatId, text);
 
-    return bot.sendMessage(chatId, text, {
-      parse_mode: 'HTML',
-      disable_web_page_preview: true
-    });
   } catch (err) {
     console.error('Ошибка /admins:', err.message);
-    return bot.sendMessage(chatId, '❌ Не удалось получить список админов');
+    bot.sendMessage(chatId, '❌ Ошибка получения админов');
   }
 });
 
