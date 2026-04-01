@@ -5,6 +5,7 @@ const crypto = require("crypto");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 const token = process.env.BOT_TOKEN;
 const databaseUrl = process.env.DATABASE_URL;
 
