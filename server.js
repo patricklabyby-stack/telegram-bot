@@ -7557,206 +7557,288 @@ ${getUserLink(child)}, выбери ниже:
     }
 
     if (isExactCommand(lowerText, "охота")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return;
+  }
+
+  const result = await runHunt(msg.from.id);
+
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+      return;
+    }
+
+    await safeSendMessage(
+      msg.chat.id,
+      `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
       }
+    );
+    return;
+  }
 
-      const result = await runHunt(msg.from.id);
+  let coinsLine = "😐 0 монет";
+  if (result.hunt.coins > 0) coinsLine = `💰 +${result.hunt.coins} монет`;
+  else if (result.hunt.coins < 0) coinsLine = `💀 ${result.hunt.coins} монет`;
 
-      if (!result.ok) {
-        if (result.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, на охоту снова можно идти через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      let coinsLine = "😐 0 монет";
-      if (result.hunt.coins > 0) coinsLine = `💰 +${result.hunt.coins} монет`;
-      else if (result.hunt.coins < 0) coinsLine = `💀 ${result.hunt.coins} монет`;
-
-      let out = `🏹 ${getUserLink(msg.from)} отправился на охоту...
+  let out = `🏹 ${getUserLink(msg.from)} отправился на охоту...
 
 ${escapeHtml(result.hunt.text)}
 ${coinsLine}
 
 Баланс: ${result.balance} монет`;
 
-      out = await appendLevelUpIfNeeded(out, msg.from.id, 7);
+  out = await appendLevelUpIfNeeded(out, msg.from.id, 7);
 
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
+
+if (isExactCommand(lowerText, "снайпер")) {
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return;
+  }
+
+  const result = await runSniper(msg.from.id);
+
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
       return;
     }
 
-    if (isExactCommand(lowerText, "снайпер")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
+    await safeSendMessage(
+      msg.chat.id,
+      `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
       }
+    );
+    return;
+  }
 
-      const result = await runSniper(msg.from.id);
+  let coinsLine = "😐 0 монет";
+  if (result.sniper.coins > 0) coinsLine = `💰 +${result.sniper.coins} монет`;
 
-      if (!result.ok) {
-        if (result.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, играть в снайпера снова можно через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      let coinsLine = "😐 0 монет";
-      if (result.sniper.coins > 0) coinsLine = `💰 +${result.sniper.coins} монет`;
-
-      let out = `🎯 ${getUserLink(msg.from)} прицелился...
+  let out = `🎯 ${getUserLink(msg.from)} прицелился...
 
 ${escapeHtml(result.sniper.text)}
 ${coinsLine}
 
 Баланс: ${result.balance} монет`;
 
-      out = await appendLevelUpIfNeeded(out, msg.from.id, 6);
+  out = await appendLevelUpIfNeeded(out, msg.from.id, 6);
 
-      await safeSendMessage(msg.chat.id, out, {
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
+
+if (isExactCommand(lowerText, "баскетбол")) {
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return;
+  }
+
+  const cooldown = await getGenericCooldown(
+    msg.from.id,
+    "last_basketball_at",
+    BASKETBALL_COOLDOWN_MS
+  );
+
+  if (cooldown > 0) {
+    await safeSendMessage(
+      msg.chat.id,
+      `⏳ ${getUserLink(msg.from)}, баскетбол снова будет доступен через ${escapeHtml(formatRemainingTime(cooldown))}`,
+      {
         parse_mode: "HTML",
         disable_web_page_preview: true
-      });
-      return;
-    }
-
-    if (isExactCommand(lowerText, "баскетбол")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
       }
+    );
+    return;
+  }
 
-      const result = await runBasketball(msg.from.id);
+  await updateCooldownColumnNow(msg.from.id, "last_basketball_at");
 
-      if (!result.ok) {
-        if (result.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
+  const diceMessage = await bot.sendDice(msg.chat.id, {
+    emoji: "🏀",
+    reply_to_message_id: msg.message_id
+  });
 
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, баскетбол снова будет доступен через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
+  const diceValue = Number(diceMessage?.dice?.value || 0);
+  const game = getBasketballResultByDiceValue(diceValue);
 
-      let coinsLine = "😐 0 монет";
-      if (result.game.coins > 0) coinsLine = `💰 +${result.game.coins} монет`;
-      if (result.game.coins < 0) coinsLine = `💸 ${result.game.coins} монет`;
+  const stats = await getUserStats(msg.from.id);
+  let newBalance = Number(stats?.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
 
-      let out = `🏀 ${getUserLink(msg.from)} бросил(а) мяч в кольцо
+  const updated = await pool.query(
+    `UPDATE users SET balance = $2 WHERE user_id = $1 RETURNING balance`,
+    [msg.from.id, newBalance]
+  );
 
-${escapeHtml(result.game.text)}
-${coinsLine}
+  let coinsLine = "😐 0 монет";
+  if (game.coins > 0) coinsLine = `💰 +${game.coins} монет`;
+  if (game.coins < 0) coinsLine = `💸 ${game.coins} монет`;
 
-Баланс: ${result.balance} монет`;
-
-      out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
-
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
-
-    if (isExactCommand(lowerText, "боулинг")) {
-      const jailText = await getJailBlockText(msg.from.id);
-      if (jailText) {
-        await safeSendMessage(msg.chat.id, jailText);
-        return;
-      }
-
-      const precheck = await runBowling(msg.from.id);
-
-      if (!precheck.ok) {
-        if (precheck.reason === "not_found") {
-          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
-          return;
-        }
-
-        await safeSendMessage(
-          msg.chat.id,
-          `⏳ ${getUserLink(msg.from)}, боулинг снова будет доступен через ${escapeHtml(formatRemainingTime(precheck.remainingMs))}`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      await updateCooldownColumnNow(msg.from.id, "last_bowling_at");
-
-      const diceMessage = await bot.sendDice(msg.chat.id, {
-        emoji: "🎳",
-        reply_to_message_id: msg.message_id
-      });
-
-      const diceValue = Number(diceMessage?.dice?.value || 0);
-      const game = getBowlingResultByDiceValue(diceValue);
-
-      const stats = await getUserStats(msg.from.id);
-      let newBalance = Number(stats?.balance || 0) + Number(game.coins || 0);
-      if (newBalance < 0) newBalance = 0;
-
-      const updated = await pool.query(
-        `UPDATE users SET balance = $2 WHERE user_id = $1 RETURNING balance`,
-        [msg.from.id, newBalance]
-      );
-
-      let coinsLine = "😐 0 монет";
-      if (game.coins > 0) coinsLine = `💰 +${game.coins} монет`;
-      if (game.coins < 0) coinsLine = `💸 ${game.coins} монет`;
-
-      let out = `🎳 ${getUserLink(msg.from)} сыграл(а) в боулинг
+  let out = `🏀 ${getUserLink(msg.from)} сыграл(а) в баскетбол
 
 ${escapeHtml(game.text)}
 ${coinsLine}
 
 Баланс: ${Number(updated.rows[0]?.balance || 0)} монет`;
 
-      out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+  out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
 
-      await safeSendMessage(msg.chat.id, out, {
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
+
+if (isExactCommand(lowerText, "футбол")) {
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return;
+  }
+
+  const cooldown = await getGenericCooldown(
+    msg.from.id,
+    "last_football_at",
+    FOOTBALL_COOLDOWN_MS
+  );
+
+  if (cooldown > 0) {
+    await safeSendMessage(
+      msg.chat.id,
+      `⏳ ${getUserLink(msg.from)}, футбол снова будет доступен через ${escapeHtml(formatRemainingTime(cooldown))}`,
+      {
         parse_mode: "HTML",
         disable_web_page_preview: true
-      });
+      }
+    );
+    return;
+  }
+
+  await updateCooldownColumnNow(msg.from.id, "last_football_at");
+
+  const diceMessage = await bot.sendDice(msg.chat.id, {
+    emoji: "⚽",
+    reply_to_message_id: msg.message_id
+  });
+
+  const diceValue = Number(diceMessage?.dice?.value || 0);
+  const game = getFootballResultByDiceValue(diceValue);
+
+  const stats = await getUserStats(msg.from.id);
+  let newBalance = Number(stats?.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updated = await pool.query(
+    `UPDATE users SET balance = $2 WHERE user_id = $1 RETURNING balance`,
+    [msg.from.id, newBalance]
+  );
+
+  let coinsLine = "😐 0 монет";
+  if (game.coins > 0) coinsLine = `💰 +${game.coins} монет`;
+  if (game.coins < 0) coinsLine = `💸 ${game.coins} монет`;
+
+  let out = `⚽ ${getUserLink(msg.from)} сыграл(а) в футбол
+
+${escapeHtml(game.text)}
+${coinsLine}
+
+Баланс: ${Number(updated.rows[0]?.balance || 0)} монет`;
+
+  out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
+
+if (isExactCommand(lowerText, "боулинг")) {
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return;
+  }
+
+  const precheck = await runBowling(msg.from.id);
+
+  if (!precheck.ok) {
+    if (precheck.reason === "not_found") {
+      await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
       return;
     }
+
+    await safeSendMessage(
+      msg.chat.id,
+      `⏳ ${getUserLink(msg.from)}, боулинг снова будет доступен через ${escapeHtml(formatRemainingTime(precheck.remainingMs))}`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return;
+  }
+
+  await updateCooldownColumnNow(msg.from.id, "last_bowling_at");
+
+  const diceMessage = await bot.sendDice(msg.chat.id, {
+    emoji: "🎳",
+    reply_to_message_id: msg.message_id
+  });
+
+  const diceValue = Number(diceMessage?.dice?.value || 0);
+  const game = getBowlingResultByDiceValue(diceValue);
+
+  const stats = await getUserStats(msg.from.id);
+  let newBalance = Number(stats?.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updated = await pool.query(
+    `UPDATE users SET balance = $2 WHERE user_id = $1 RETURNING balance`,
+    [msg.from.id, newBalance]
+  );
+
+  let coinsLine = "😐 0 монет";
+  if (game.coins > 0) coinsLine = `💰 +${game.coins} монет`;
+  if (game.coins < 0) coinsLine = `💸 ${game.coins} монет`;
+
+  let out = `🎳 ${getUserLink(msg.from)} сыграл(а) в боулинг
+
+${escapeHtml(game.text)}
+${coinsLine}
+
+Баланс: ${Number(updated.rows[0]?.balance || 0)} монет`;
+
+  out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
     if (
       lowerText === "кнб камень" ||
