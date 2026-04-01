@@ -4621,11 +4621,9 @@ const rpCommands = {
 // =========================
 // COMMANDS
 // =========================
-bot.onText(/\/help/, (msg) => {
-  const chatId = msg.chat.id;
-
-  bot.sendMessage(
-    chatId,
+bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  await safeSendMessage(
+    msg.chat.id,
     `🔥 <b>Мини Модератор — бот для Telegram групп</b>
 
 <b>📚 Разделы бота:</b>
@@ -4758,14 +4756,11 @@ bot.onText(/\/help/, (msg) => {
 • кто ...
 • оценка
 • прогноз
-• он врет?
-
-<b>🛡 Модерация</b>
-• /admins
-• /antispam on
-• /antispam off
-`,
-    { parse_mode: "HTML", disable_web_page_preview: true }
+• он врет?`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
   );
 });
 
@@ -9943,72 +9938,40 @@ bot.on("polling_error", (error) => {
   }
 })();
 
-bot.onText(/\/start/, (msg) => {
-  if (msg.chat.type !== 'private') return;
-
-  const chatId = msg.chat.id;
-  const userName = msg.from.first_name || "друг";
-
-  bot.sendMessage(
-    chatId,
-    `👋 Привет, ${userName}!\n\n` +
-    `🔥 Добро пожаловать в Мини Модератор!\n\n` +
-    `📌 Напиши /help, чтобы увидеть все команды.`,
-    { parse_mode: "HTML" }
-  );
-});
-
-// =========================
-// АНТИ-СПАМ С МУТОМ (Node-Telegram-Bot-API)
-// =========================
+// --- АНТИ-СПАМ С МУТОМ для node-telegram-bot-api ---
 const spamSettings = {
   enabled: true,
-  messageLimit: 5,
-  interval: 5000,
-  muteTime: 60000 // 60 сек
+  messageLimit: 5,      // сообщений за интервал
+  interval: 5000,       // интервал проверки в мс
+  muteTime: 60000       // время мута в мс
 };
 
 const userMessageMap = new Map();
 const mutedUsers = new Map();
 
-// формат времени (сек/мин/час)
-function formatTime(ms) {
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec} сек`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} мин`;
-  const hr = Math.floor(min / 60);
-  return `${hr} ч`;
-}
-
-// Проверка админа/владельца
-async function isOwnerOrAdmin(msg) {
+function isOwnerOrAdmin(msg) {
   const userId = msg.from.id;
   if (userId === OWNER_ID) return true;
+  // Для групповых чатов проверка админа через getChatMember
   if (msg.chat.type === 'private') return false;
-
-  try {
-    const member = await bot.getChatMember(msg.chat.id, userId);
-    return ['creator', 'administrator'].includes(member.status);
-  } catch {
-    return false;
-  }
+  return bot.getChatMember(msg.chat.id, userId)
+    .then(member => ['creator', 'administrator'].includes(member.status))
+    .catch(() => false);
 }
 
-// Вкл/выкл антиспам
+// Команда включения/выключения
 bot.onText(/\/antispam (on|off)/, async (msg, match) => {
   const allowed = await isOwnerOrAdmin(msg);
-  if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+  if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец бота могут использовать эту команду.');
 
-  spamSettings.enabled = match[1] === 'on';
+  const arg = match[1];
+  spamSettings.enabled = arg === 'on';
   bot.sendMessage(msg.chat.id, `✅ Анти-спам ${spamSettings.enabled ? 'включен' : 'выключен'}`);
 });
 
-// Проверка сообщений
+// Проверка сообщений на спам
 bot.on('message', async (msg) => {
   if (!spamSettings.enabled) return;
-  if (msg.chat.type === 'private') return;
-  if (msg.text && msg.text.startsWith('/')) return;
 
   const userId = msg.from.id;
   const chatId = msg.chat.id;
@@ -10025,9 +9988,9 @@ bot.on('message', async (msg) => {
   }
 
   if (timestamps.length > spamSettings.messageLimit) {
-    const userName = msg.from.first_name || "Игрок";
-    const muteText = formatTime(spamSettings.muteTime);
+    const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
 
+    // Мут через restrictChatMember
     try {
       await bot.restrictChatMember(chatId, userId, {
         can_send_messages: false,
@@ -10035,11 +9998,9 @@ bot.on('message', async (msg) => {
       });
 
       mutedUsers.set(userId, true);
+      bot.sendMessage(chatId, `🔇 ${userName} лишается права слова. Причина: спам`);
 
-      bot.sendMessage(chatId,
-        `🔇 ${userName} лишается права слова на ${muteText}\n💬 Причина: спам`
-      );
-
+      // Снятие мута через таймер
       setTimeout(async () => {
         try {
           await bot.restrictChatMember(chatId, userId, {
@@ -10052,13 +10013,8 @@ bot.on('message', async (msg) => {
             can_invite_users: true,
             can_pin_messages: false
           });
-
           mutedUsers.delete(userId);
-
-          bot.sendMessage(chatId,
-            `✅ ${userName} снова может писать в чате`
-          );
-
+          bot.sendMessage(chatId, `✅ ${userName} может снова писать в чате`);
         } catch (err) {
           console.error('Ошибка при снятии мута:', err);
         }
@@ -10070,172 +10026,4 @@ bot.on('message', async (msg) => {
 
     userMessageMap.set(userId, []);
   }
-});;
-
-// =========================
-// /admins
-// =========================
-bot.onText(/\/admins/, async (msg) => {
-  const chatId = msg.chat.id;
-
-  if (msg.chat.type === 'private') {
-    return bot.sendMessage(chatId, '❌ Команда только для группы');
-  }
-
-  try {
-    const admins = await bot.getChatAdministrators(chatId);
-    let text = '👮 Админы группы:\n\n';
-    for (const admin of admins) {
-      const user = admin.user;
-      const name = user.first_name || 'Без имени';
-      text += `• ${name}\n`;
-    }
-    bot.sendMessage(chatId, text);
-  } catch (err) {
-    console.error('Ошибка /admins:', err);
-    bot.sendMessage(chatId, '❌ Не удалось получить список админов');
-  }
 });
-
-// =========================
-// /say
-// =========================
-bot.onText(/\/say (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const text = match[1];
-  const userId = msg.from.id;
-
-  let isAdmin = false;
-  if (userId === OWNER_ID) isAdmin = true;
-  else if (msg.chat.type !== 'private') {
-    try {
-      const member = await bot.getChatMember(chatId, userId);
-      isAdmin = ['creator', 'administrator'].includes(member.status);
-    } catch {}
-  }
-
-  if (!isAdmin) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
-
-  bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
-});
-
-// =========================
-// DELETE REPLIED MESSAGE
-// =========================
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from?.id;
-  if (!userId || msg.chat.type === 'private') return;
-
-  async function isAdminOrOwner(userId, chatId) {
-    if (userId === OWNER_ID) return true;
-    try {
-      const member = await bot.getChatMember(chatId, userId);
-      return ['creator', 'administrator'].includes(member.status);
-    } catch {
-      return false;
-    }
-  }
-
-  const allowed = await isAdminOrOwner(userId, chatId);
-
-  // --- Удаление сообщения по -сообщение ---
-  if (msg.text?.startsWith('-сообщение') && msg.reply_to_message && allowed) {
-    try {
-      await bot.deleteMessage(chatId, msg.reply_to_message.message_id);
-      console.log(`Сообщение ${msg.reply_to_message.message_id} удалено по команде от ${userId}`);
-    } catch (err) {
-      console.error('Ошибка при удалении сообщения:', err);
-    }
-  }
-});
-
-// =========================
-// /addmod
-// =========================
-bot.onText(/\/addmod (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const senderId = msg.from.id;
-  const targetUsername = match[1].replace('@', '');
-
-  // Проверяем права отправителя
-  let canPromote = false;
-  if (senderId === OWNER_ID) {
-    canPromote = true; // владелец бота может назначать
-  } else {
-    try {
-      const member = await bot.getChatMember(chatId, senderId);
-      if (['creator', 'administrator'].includes(member.status)) canPromote = true;
-    } catch {}
-  }
-
-  if (!canPromote) return bot.sendMessage(chatId, '❌ Только админ или владелец бота может назначать модеров.');
-
-  try {
-    // Получаем всех участников группы
-    const chatAdmins = await bot.getChatAdministrators(chatId);
-    const targetAdmin = chatAdmins.find(m => m.user.username === targetUsername);
-
-    // Проверка: цель не владелец
-    if (targetAdmin && targetAdmin.status === 'creator') {
-      return bot.sendMessage(chatId, '❌ Невозможно назначить владельца модером.');
-    }
-
-    // Получаем id пользователя по username
-    let targetId;
-    if (targetAdmin) targetId = targetAdmin.user.id;
-    else {
-      // Если цель не в админах, пробуем найти через getChatMember
-      const member = await bot.getChatMember(chatId, targetUsername);
-      targetId = member.user.id;
-    }
-
-    // Назначаем модератором
-    await bot.promoteChatMember(chatId, targetId, {
-      can_change_info: false,
-      can_delete_messages: true,
-      can_invite_users: true,
-      can_restrict_members: true,
-      can_pin_messages: true,
-      can_promote_members: false
-    });
-
-    bot.sendMessage(chatId, `✅ @${targetUsername} теперь модератор.`);
-
-  } catch (err) {
-    console.error('Ошибка при назначении модератора:', err);
-    bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.response?.description || err.message}`);
-  }
-});
-
-// ======= Напоминания =======
-const reminders = []; // массив для хранения активных таймеров
-
-function parseTime(input) {
-    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
-    const match = input.match(regex);
-    if (!match) return null;
-
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-
-    if (unit.startsWith('сек')) return value * 1000;
-    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
-    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
-    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
-    return null;
-}
-
-bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
-
-const userName = msg.from.first_name; // берём имя пользователя
-
-const timer = setTimeout(() => {
-    bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
-    
-    // удаляем таймер из массива после срабатывания
-    const index = reminders.indexOf(timer);
-    if (index > -1) reminders.splice(index, 1);
-}, delay);
-
-reminders.push(timer);
