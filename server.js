@@ -8558,20 +8558,29 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
   }
 });
 
-bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
+bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
   try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
+    if (Number(msg.from.id) !== Number(OWNER_ID)) return;
+
+    const argsText = String(match?.[2] || "").trim();
+    const amountMatch = argsText.match(/(\d+)/);
+    const amount = amountMatch ? Number(amountMatch[1]) : NaN;
 
     const target = await resolveTargetUserUniversal(msg);
-    const amount = Number(match?.[2] || 0);
 
     if (!target) {
-      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /takemoney 100");
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ Ответь на сообщение игрока или укажи @username и сумму.\nПример:\n/takemoney 100 @username"
+      );
       return;
     }
 
     if (!Number.isInteger(amount) || amount <= 0) {
-      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /takemoney 100");
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ Укажи нормальную сумму.\nПример:\n/takemoney 100 @username"
+      );
       return;
     }
 
@@ -8590,18 +8599,38 @@ bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
       }
     );
   } catch (error) {
-    console.error("Ошибка /takemoney:", error);
+    console.error("Ошибка /takemoney:", error?.message || error);
     await safeSendMessage(msg.chat.id, "❌ Ошибка снятия монет.");
   }
 });
 
-bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/, async (msg, match) => {
+bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
   try {
-    if (Number(msg.from.id) !== OWNER_ID) return;
+    if (Number(msg.from.id) !== Number(OWNER_ID)) return;
 
-    const cooldownName = String(match?.[2] || "").trim();
-    const rawValue = String(match?.[3] || "").trim();
-    const rawUnit = String(match?.[4] || "").trim();
+    const argsText = String(match?.[2] || "").trim();
+
+    if (!argsText) {
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
+      );
+      return;
+    }
+
+    const parsed = argsText.match(/^(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/i);
+
+    if (!parsed) {
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
+      );
+      return;
+    }
+
+    const cooldownName = String(parsed[1] || "").trim();
+    const rawValue = String(parsed[2] || "").trim();
+    const rawUnit = String(parsed[3] || "").trim();
 
     const deltaMs = parseTimeEditAmount(rawValue, rawUnit);
     if (deltaMs === null) {
@@ -8614,21 +8643,38 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
 
     const deltaMinutes = Math.abs(Math.trunc(deltaMs / 60000));
     if (deltaMinutes > TIME_EDIT_MAX_MINUTES) {
-      await safeSendMessage(msg.chat.id, `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`);
+      await safeSendMessage(
+        msg.chat.id,
+        `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`
+      );
       return;
     }
 
     let targetUser = null;
-    if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
-    if (!targetUser) targetUser = msg.from;
+
+    if (msg.reply_to_message) {
+      targetUser = await resolveTargetUserFromReply(msg);
+    }
+
+    if (!targetUser) {
+      targetUser = msg.from;
+    }
 
     await initUser(targetUser);
 
     const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
-    const signText =
-      Math.abs(deltaMs) % (60 * 60 * 1000) === 0
-        ? `${Number(rawValue)} ч`
-        : `${Number(rawValue)} мин`;
+
+    const absValue = Math.abs(Number(rawValue));
+    let signText = "";
+
+    if (
+      rawUnit &&
+      ["м", "мин", "минута", "минуты", "минут", "m"].includes(normalizeText(rawUnit))
+    ) {
+      signText = `${Number(rawValue) < 0 ? "-" : "+"}${absValue} мин`;
+    } else {
+      signText = `${Number(rawValue) < 0 ? "-" : "+"}${absValue} ч`;
+    }
 
     await safeSendMessage(
       msg.chat.id,
@@ -8646,7 +8692,10 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб");
+      await safeSendMessage(
+        msg.chat.id,
+        "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб"
+      );
       return;
     }
 
@@ -8655,7 +8704,27 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
       return;
     }
 
-    console.error("Ошибка /timeedit:", error);
+    if (error.message === "USER_NOT_FOUND") {
+      await safeSendMessage(msg.chat.id, "❌ Игрок не найден.");
+      return;
+    }
+
+    console.error("Ошибка /timeedit:", error?.message || error);
     await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
   }
+});
+
+// =========================
+// SERVER (Render fix)
+// =========================
+app.get("/", (req, res) => {
+  res.send("Бот работает ✅");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ ok: true });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅ Server running on port ${PORT}`);
 });
