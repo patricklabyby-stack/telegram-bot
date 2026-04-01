@@ -5,7 +5,6 @@ const crypto = require("crypto");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 const token = process.env.BOT_TOKEN;
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -153,13 +152,13 @@ const ITEM_ALIASES = {
 
 // =========================
 // SERVER
-// ========================
+// =========================
 app.get("/", (req, res) => {
-  res.status(200).send("Бот работает ✅");
+  res.send("Бот работает");
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("Server running on port " + PORT);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
 // =========================
@@ -3534,7 +3533,7 @@ function deleteMarriageRequest(request) {
   delete pendingMarriagesByRequestId[request.requestId];
   delete pendingMarriagesByUserKey[request.userKey];
 }
-he
+
 function findMarriageRequestByUser(chatId, userId) {
   const requestId = pendingMarriagesByUserKey[`${chatId}:${userId}`];
   if (!requestId) return null;
@@ -4759,11 +4758,14 @@ bot.onText(/\/help/, (msg) => {
 • кто ...
 • оценка
 • прогноз
-• он врет?`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
+• он врет?
+
+<b>🛡 Модерация</b>
+• /admins
+• /antispam on
+• /antispam off
+`,
+    { parse_mode: "HTML", disable_web_page_preview: true }
   );
 });
 
@@ -5711,33 +5713,33 @@ ${mood}`;
     }
 
     // FAMILY COMMANDS
-if (lowerText.startsWith("наказать ребенка")) {
-  const parent = msg.from;
-  const child = await resolveTargetUserUniversal(msg);
+    if (lowerText.startsWith("наказать ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
 
-  if (!child) {
-    await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: наказать ребенка 1 @username");
-    return;
-  }
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: наказать ребенка 1 @username");
+        return;
+      }
 
-  const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^наказать ребенка\s+(\d+)$/);
-  const days = match ? Number(match[1]) : NaN;
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^наказать ребенка\s+(\d+)$/);
+      const days = match ? Number(match[1]) : NaN;
 
-  if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
-    await safeSendMessage(msg.chat.id, `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.`);
-    return;
-  }
+      if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
+        await safeSendMessage(msg.chat.id, `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.`);
+        return;
+      }
 
-  const childCheck = await assertChildInMyFamily(parent.id, child.id);
-  if (!childCheck.ok) {
-    await safeSendMessage(msg.chat.id, childCheck.text);
-    return;
-  }
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
 
-  const punishment = await setPunishment(parent.id, child.id, days);
-  await changeChildObedience(child.id, -10);
+      const punishment = await setPunishment(parent.id, child.id, days);
+      await changeChildObedience(child.id, -10);
 
-  let out = `⛔ ${getUserLink(parent)} наказал(а) ${getUserLink(child)} на ${days} дн.
+      let out = `⛔ ${getUserLink(parent)} наказал(а) ${getUserLink(child)} на ${days} дн.
 
 📌 Ограничения:
 • нельзя просить деньги
@@ -5746,68 +5748,68 @@ if (lowerText.startsWith("наказать ребенка")) {
 
 🕒 До: ${formatDateTime(punishment.until_at)}`;
 
-  out = await appendLevelUpIfNeeded(out, parent.id, 4);
+      out = await appendLevelUpIfNeeded(out, parent.id, 4);
 
-  await safeSendMessage(msg.chat.id, out, {
-    parse_mode: "HTML",
-    disable_web_page_preview: true
-  });
-  return;
-}
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
 
-if (isExactCommand(lowerText, "снять наказание")) {
-  const parent = msg.from;
-  const child = await resolveTargetUserUniversal(msg);
+    if (isExactCommand(lowerText, "снять наказание")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
 
-  if (!child) {
-    await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: снять наказание @username");
-    return;
-  }
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: снять наказание @username");
+        return;
+      }
 
-  const childCheck = await assertChildInMyFamily(parent.id, child.id);
-  if (!childCheck.ok) {
-    await safeSendMessage(msg.chat.id, childCheck.text);
-    return;
-  }
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
 
-  const removed = await removePunishment(child.id);
-  if (!removed) {
-    await safeSendMessage(msg.chat.id, "✅ У этого ребёнка и так нет активного наказания.");
-    return;
-  }
+      const removed = await removePunishment(child.id);
+      if (!removed) {
+        await safeSendMessage(msg.chat.id, "✅ У этого ребёнка и так нет активного наказания.");
+        return;
+      }
 
-  await changeChildObedience(child.id, 5);
+      await changeChildObedience(child.id, 5);
 
-  let out = `✅ ${getUserLink(parent)} снял(а) наказание с ${getUserLink(child)}.`;
-  out = await appendLevelUpIfNeeded(out, parent.id, 3);
+      let out = `✅ ${getUserLink(parent)} снял(а) наказание с ${getUserLink(child)}.`;
+      out = await appendLevelUpIfNeeded(out, parent.id, 3);
 
-  await safeSendMessage(msg.chat.id, out, {
-    parse_mode: "HTML",
-    disable_web_page_preview: true
-  });
-  return;
-}
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
 
-if (isExactCommand(lowerText, "наказание")) {
-  let targetUser = msg.from;
+    if (isExactCommand(lowerText, "наказание")) {
+      let targetUser = msg.from;
 
-  if (msg.reply_to_message) {
-    const resolved = await resolveTargetUserFromReply(msg);
-    if (resolved) targetUser = resolved;
-  }
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
 
-  const punishment = await getActivePunishment(targetUser.id);
-  if (!punishment) {
-    await safeSendMessage(msg.chat.id, "✅ Наказания нет.");
-    return;
-  }
+      const punishment = await getActivePunishment(targetUser.id);
+      if (!punishment) {
+        await safeSendMessage(msg.chat.id, "✅ Наказания нет.");
+        return;
+      }
 
-  const punisher = await getStoredUser(Number(punishment.punished_by_user_id));
-  const remaining = new Date(punishment.until_at).getTime() - Date.now();
+      const punisher = await getStoredUser(Number(punishment.punished_by_user_id));
+      const remaining = new Date(punishment.until_at).getTime() - Date.now();
 
-  await safeSendMessage(
-    msg.chat.id,
-    `⛔ Наказание активно
+      await safeSendMessage(
+        msg.chat.id,
+        `⛔ Наказание активно
 
 👶 Ребёнок: ${getUserLink(targetUser)}
 👨 Наказал(а): ${getUserLink(punisher)}
@@ -5818,14 +5820,1290 @@ if (isExactCommand(lowerText, "наказание")) {
 • нельзя просить деньги
 • нельзя получать карманные деньги
 • нельзя брать из семейного бюджета`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
     }
-  );
-  return;
-}
-    
+
+    if (isExactCommand(lowerText, "похвалить ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: похвалить ребенка @username");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const obedience = await changeChildObedience(child.id, 5);
+
+      let out = `🌟 ${getUserLink(parent)} похвалил(а) ${getUserLink(child)}!
+
+📈 Послушание: ${Number(obedience.value || 0)}/100`;
+
+      out = await appendLevelUpIfNeeded(out, parent.id, 3);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (lowerText.startsWith("наградить ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: наградить ребенка 20 @username");
+        return;
+      }
+
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^наградить ребенка\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      try {
+        const transferResult = await transferCoins(parent.id, child.id, amount);
+        const obedience = await changeChildObedience(child.id, 3);
+
+        let out = `🎁 ${getUserLink(parent)} наградил(а) ${getUserLink(child)} на ${amount} монет!
+
+👛 Баланс ${escapeHtml(getUserName(parent))}: ${transferResult.fromBalance}
+👛 Баланс ${escapeHtml(getUserName(child))}: ${transferResult.toBalance}
+📈 Послушание: ${Number(obedience.value || 0)}/100`;
+
+        out = await appendLevelUpIfNeeded(out, parent.id, 5);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка награды ребёнку:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка награждения ребёнка.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("добавить доброе дело")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: добавить доброе дело помог по дому @username");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const cleanedNoMention = cleanupTextWithoutMention(originalText);
+      const deedText = cleanedNoMention.slice("добавить доброе дело".length).trim();
+      if (!deedText || deedText.length < 2) {
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nдобавить доброе дело помог по дому @username");
+        return;
+      }
+
+      if (deedText.length > MAX_GOOD_DEED_LENGTH) {
+        await safeSendMessage(msg.chat.id, `❌ Доброе дело слишком длинное. Максимум ${MAX_GOOD_DEED_LENGTH} символов.`);
+        return;
+      }
+
+      await addGoodDeed(parent.id, child.id, deedText);
+      const obedience = await changeChildObedience(child.id, 3);
+
+      let out = `✅ ${getUserLink(parent)} добавил(а) доброе дело для ${getUserLink(child)}
+
+📔 Дело: ${escapeHtml(deedText)}
+📈 Послушание: ${Number(obedience.value || 0)}/100`;
+
+      out = await appendLevelUpIfNeeded(out, parent.id, 4);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "список добрых дел")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Список добрых дел доступен только ребёнку в семье.");
+        return;
+      }
+
+      const deeds = await getGoodDeeds(targetUser.id);
+      if (!deeds.length) {
+        await safeSendMessage(msg.chat.id, `📔 У ${escapeHtml(getUserName(targetUser))} пока нет добрых дел.`, { parse_mode: "HTML" });
+        return;
+      }
+
+      const lines = deeds.map((deed, index) => `${index + 1}. ${escapeHtml(deed.deed_text)}`);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `📔 Добрые дела ${getUserLink(targetUser)}
+
+${lines.join("\n")}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("удалить доброе дело")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: удалить доброе дело 1 @username");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^удалить доброе дело\s+(\d+)$/);
+      const index = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(index) || index <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи номер.");
+        return;
+      }
+
+      const deleted = await deleteGoodDeedByIndex(child.id, index);
+      if (!deleted) {
+        await safeSendMessage(msg.chat.id, "❌ Доброго дела с таким номером нет.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🗑 ${getUserLink(parent)} удалил(а) доброе дело у ${getUserLink(child)}
+
+Удалено: ${escapeHtml(deleted.deed_text)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "очистить добрые дела")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: очистить добрые дела @username");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const deletedCount = await clearGoodDeeds(child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🧹 ${getUserLink(parent)} очистил(а) список добрых дел ${getUserLink(child)}
+
+Удалено записей: ${deletedCount}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "послушание")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Послушание доступно только ребёнку в семье.");
+        return;
+      }
+
+      const obedience = await getChildObedience(targetUser.id);
+      await safeSendMessage(
+        msg.chat.id,
+        `📈 Послушание ${getUserLink(targetUser)}
+
+Уровень: ${Number(obedience?.value || 0)}/100
+🕒 Обновлено: ${formatDateTime(obedience.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "семейный бюджет")) {
+      const budget = await getFamilyBudget(msg.from.id);
+
+      if (!budget) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье. Семейный бюджет доступен только семье.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏦 Семейный бюджет
+
+👤 Игрок: ${getUserLink(msg.from)}
+💰 В бюджете семьи: ${Number(budget.balance || 0)} монет
+🕒 Обновлён: ${formatDateTime(budget.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("вложить в бюджет")) {
+      const match = lowerText.match(/^вложить в бюджет\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      try {
+        const result = await addToFamilyBudget(msg.from.id, amount);
+
+        let out = `🏦 ${getUserLink(msg.from)} вложил(а) в семейный бюджет ${amount} монет
+
+💰 Бюджет семьи: ${result.familyBalance}
+👛 Твой баланс: ${result.userBalance}
+🕒 Обновлён: ${formatDateTime(result.updatedAt)}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NO_FAMILY") {
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье.");
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка вложения в семейный бюджет:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения семейного бюджета.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("взять с бюджета")) {
+      const match = lowerText.match(/^взять с бюджета\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+      if (childInfo) {
+        const punishmentText = await getPunishedBlockText(msg.from.id);
+        if (punishmentText) {
+          await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания нельзя брать деньги из семейного бюджета.`);
+          return;
+        }
+      }
+
+      try {
+        const result = await takeFromFamilyBudget(msg.from.id, amount);
+
+        let out = `🏦 ${getUserLink(msg.from)} взял(а) из семейного бюджета ${amount} монет
+
+💰 Бюджет семьи: ${result.familyBalance}
+👛 Твой баланс: ${result.userBalance}
+🕒 Обновлён: ${formatDateTime(result.updatedAt)}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NO_FAMILY") {
+          await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье.");
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_FAMILY_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ В семейном бюджете недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка снятия с семейного бюджета:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка снятия денег из семейного бюджета.");
+      }
+
+      return;
+    }
+
+    if (isExactCommand(lowerText, "создать копилку")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      const existing = await getPiggyBank(msg.from.id);
+      if (existing) {
+        await safeSendMessage(msg.chat.id, `🐷 У тебя уже есть копилка.\n💰 В копилке: ${Number(existing.balance || 0)} монет`);
+        return;
+      }
+
+      const piggy = await createPiggyBank(msg.from.id);
+
+      let out = `🐷 ${getUserLink(msg.from)} создал(а) копилку!
+
+💰 В копилке: ${Number(piggy.balance || 0)} монет`;
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "копилка")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      const piggy = await getPiggyBank(msg.from.id);
+      if (!piggy) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🐷 Копилка ${getUserLink(msg.from)}
+
+💰 В копилке: ${Number(piggy.balance || 0)} монет
+🕒 Обновлена: ${formatDateTime(piggy.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("пополнить копилку")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      const match = lowerText.match(/^пополнить копилку\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      try {
+        const result = await addToPiggyBank(msg.from.id, amount);
+
+        let out = `🐷 ${getUserLink(msg.from)} положил(а) в копилку ${amount} монет
+
+💰 В копилке: ${result.piggyBalance}
+👛 Твой баланс: ${result.userBalance}
+🕒 Обновлена: ${formatDateTime(result.updatedAt)}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NO_PIGGY_BANK") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка пополнения копилки:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения копилки.");
+      }
+
+      return;
+    }
+
+    if (isExactCommand(lowerText, "разбить копилку")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Копилка доступна только ребёнку в семье.");
+        return;
+      }
+
+      try {
+        const result = await breakPiggyBank(msg.from.id);
+
+        let out = `💥 ${getUserLink(msg.from)} разбил(а) копилку и достал(а) ${result.taken} монет!
+
+🐷 В копилке: ${result.piggyBalance}
+👛 Твой баланс: ${result.userBalance}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NO_PIGGY_BANK") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет копилки.\nНапиши: создать копилку");
+          return;
+        }
+
+        console.error("Ошибка разбития копилки:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка при разбитии копилки.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("загадать мечту")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта доступна только ребёнку в семье.");
+        return;
+      }
+
+      const dreamText = originalText.slice("загадать мечту".length).trim();
+      if (!dreamText || dreamText.length < 2) {
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nзагадать мечту айфон");
+        return;
+      }
+
+      if (dreamText.length > MAX_DREAM_LENGTH) {
+        await safeSendMessage(msg.chat.id, `❌ Мечта слишком длинная. Максимум ${MAX_DREAM_LENGTH} символов.`);
+        return;
+      }
+
+      const dream = await setChildDream(msg.from.id, dreamText);
+
+      let out = `🌟 ${getUserLink(msg.from)} загадал(а) мечту!
+
+🎯 Мечта: ${escapeHtml(dream.dream_text)}
+💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}`;
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "моя мечта")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта доступна только ребёнку в семье.");
+        return;
+      }
+
+      const dream = await getChildDream(msg.from.id);
+      if (!dream) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет мечты.\nНапиши: загадать мечту айфон");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🌠 Мечта ${getUserLink(msg.from)}
+
+🎯 Мечта: ${escapeHtml(dream.dream_text)}
+💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}
+🕒 Обновлена: ${formatDateTime(dream.updated_at)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "удалить мечту")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Мечта доступна только ребёнку в семье.");
+        return;
+      }
+
+      const deleted = await deleteChildDream(msg.from.id);
+      if (!deleted) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🗑 ${getUserLink(msg.from)} удалил(а) свою мечту.
+
+💰 Монеты, которые были на мечте: ${Number(deleted.dream_balance || 0)}
+ℹ️ Они удалены вместе с мечтой.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("пополнить баланс на мечту")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ Команда доступна только ребёнку в семье.");
+        return;
+      }
+
+      const match = lowerText.match(/^пополнить баланс на мечту\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      try {
+        const result = await addSelfMoneyToDream(msg.from.id, amount);
+
+        let out = `🌟 ${getUserLink(msg.from)} пополнил(а) баланс на мечту на ${amount} монет
+
+🎯 Мечта: ${escapeHtml(result.dreamText)}
+💰 Баланс мечты: ${result.dreamBalance}
+👛 Твой баланс: ${result.userBalance}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NO_DREAM") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет мечты.\nНапиши: загадать мечту айфон");
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка пополнения баланса мечты:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения баланса на мечту.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("на мечту")) {
+      const target = await resolveTargetUserUniversal(msg);
+
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: на мечту 5 @username");
+        return;
+      }
+
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^на мечту\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      try {
+        const result = await addParentMoneyToDream(msg.from.id, target.id, amount);
+
+        let out = `🎁 ${getUserLink(msg.from)} пополнил(а) мечту ${getUserLink(target)} на ${amount} монет
+
+🎯 Мечта: ${escapeHtml(result.dreamText)}
+💰 Баланс мечты: ${result.dreamBalance}
+👛 Твой баланс: ${result.parentBalance}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 5);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NO_DREAM") {
+          await safeSendMessage(msg.chat.id, "❌ У ребёнка нет мечты.");
+          return;
+        }
+
+        if (error.message === "NOT_MY_CHILD") {
+          await safeSendMessage(msg.chat.id, "❌ Это не ваш ребёнок.");
+          return;
+        }
+
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка помощи на мечту:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка пополнения мечты.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("попросить денег")) {
+      const childInfo = await getActiveAdoptionByChildId(msg.from.id);
+
+      if (!childInfo) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет родителей в семье.");
+        return;
+      }
+
+      const punishmentText = await getPunishedBlockText(msg.from.id);
+      if (punishmentText) {
+        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания нельзя просить деньги.`);
+        return;
+      }
+
+      const match = lowerText.match(/^попросить денег\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
+      const parentPartnerInfo = parentUser ? await getMarriagePartner(parentUser.id) : null;
+      const secondParent = parentPartnerInfo
+        ? await getStoredUser(Number(parentPartnerInfo.partnerId))
+        : null;
+
+      let parentsText = "";
+      if (parentUser) parentsText += `${getUserLink(parentUser)}`;
+      if (secondParent) parentsText += ` и ${getUserLink(secondParent)}`;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `👶 ${getUserLink(msg.from)} просит у родителей ${amount} монет.
+
+👨‍👩‍👧 Родители: ${parentsText || "не найдены"}
+💬 Родитель может ответить на сообщение ребёнка командой:
+дать ребенку ${amount}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("дать ребенку")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const target = await resolveTargetUserUniversal(msg);
+
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: дать ребенку 5 @username");
+        return;
+      }
+
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^дать ребенку\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(msg.from.id, target.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const punishmentText = await getPunishedBlockText(target.id);
+      if (punishmentText) {
+        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`);
+        return;
+      }
+
+      try {
+        const transferResult = await transferCoins(msg.from.id, target.id, amount);
+
+        let out = `💸 ${getUserLink(msg.from)} дал(а) ${getUserLink(target)} ${amount} монет
+
+Баланс ${escapeHtml(getUserName(msg.from))}: ${transferResult.fromBalance}
+Баланс ${escapeHtml(getUserName(target))}: ${transferResult.toBalance}`;
+
+        out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка выдачи денег ребёнку:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка перевода монет ребёнку.");
+      }
+
+      return;
+    }
+
+    if (lowerText.startsWith("карманные деньги")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const sender = msg.from;
+      const target = await resolveTargetUserUniversal(msg);
+
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка или напиши: карманные деньги 50 @username");
+        return;
+      }
+
+      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^карманные деньги\s+(\d+)$/);
+      const amount = match ? Number(match[1]) : NaN;
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(sender.id, target.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const punishmentText = await getPunishedBlockText(target.id);
+      if (punishmentText) {
+        await safeSendMessage(msg.chat.id, `${punishmentText}\nВо время наказания карманные деньги выдавать нельзя.`);
+        return;
+      }
+
+      try {
+        const transferResult = await transferCoins(sender.id, target.id, amount);
+
+        let out = `💸 ${getUserLink(sender)} дал(а) ${getUserLink(target)} ${amount} монет
+
+Баланс ${escapeHtml(getUserName(sender))}: ${transferResult.fromBalance}
+Баланс ${escapeHtml(getUserName(target))}: ${transferResult.toBalance}`;
+
+        out = await appendLevelUpIfNeeded(out, sender.id, 4);
+
+        await safeSendMessage(msg.chat.id, out, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+      } catch (error) {
+        if (error.message === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, "❌ У тебя недостаточно монет.");
+          return;
+        }
+
+        console.error("Ошибка карманных денег:", error);
+        await safeSendMessage(msg.chat.id, "❌ Ошибка перевода монет.");
+      }
+
+      return;
+    }
+
+    if (isExactCommand(lowerText, "брак") || isExactCommand(lowerText, "зарегистрироваться в брак")) {
+      const sender = msg.from;
+      const target = await resolveTargetUserUniversal(msg);
+
+      if (!target) {
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или напиши: брак @username");
+        return;
+      }
+
+      await initUser(target);
+
+      if (sender.id === target.id) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя зарегистрироваться в брак с самим собой.");
+        return;
+      }
+
+      const senderMarriage = await isUserMarried(sender.id);
+      if (senderMarriage) {
+        await safeSendMessage(msg.chat.id, "❌ Ты уже состоишь в браке.");
+        return;
+      }
+
+      const targetMarriage = await isUserMarried(target.id);
+      if (targetMarriage) {
+        await safeSendMessage(msg.chat.id, "❌ Этот человек уже состоит в браке.");
+        return;
+      }
+
+      const senderAdoption = await getActiveAdoptionByChildId(sender.id);
+      const targetAdoption = await getActiveAdoptionByChildId(target.id);
+
+      if (senderAdoption || targetAdoption) {
+        await safeSendMessage(msg.chat.id, "❌ Игрок в роли ребёнка не может вступить в брак.");
+        return;
+      }
+
+      const existingReq = findMarriageRequestByUser(msg.chat.id, target.id);
+      if (existingReq) {
+        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активное предложение брака.");
+        return;
+      }
+
+      const requestId = generateRequestId("marriage");
+      const request = {
+        requestId,
+        userKey: `${msg.chat.id}:${target.id}`,
+        fromUser: {
+          id: sender.id,
+          first_name: sender.first_name || "",
+          last_name: sender.last_name || "",
+          username: sender.username || ""
+        },
+        targetUser: {
+          id: target.id,
+          first_name: target.first_name || "",
+          last_name: target.last_name || "",
+          username: target.username || ""
+        },
+        createdAt: Date.now()
+      };
+
+      saveMarriageRequest(request);
+
+      const sent = await safeSendMessage(
+        msg.chat.id,
+        `💍 ${getUserLink(sender)} сделал(а) предложение ${getUserLink(target)}!
+
+${getUserLink(target)}, выбери ниже:
+✅ Да
+❌ Нет
+
+⌛ У вас есть 10 минут.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+          reply_markup: getMarriageDecisionKeyboard(requestId)
+        }
+      );
+
+      if (sent) request.requestMessageId = sent.message_id;
+      return;
+    }
+
+    if (isExactCommand(lowerText, "развод")) {
+      const marriagePartner = await getMarriagePartner(msg.from.id);
+
+      if (!marriagePartner) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в браке.");
+        return;
+      }
+
+      const partnerUser = await getStoredUser(marriagePartner.partnerId);
+
+      await divorceMarriageByUserId(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💔 ${getUserLink(msg.from)} развёлся(ась) с ${getUserLink(partnerUser)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "усыновить")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или напиши: усыновить @username");
+        return;
+      }
+
+      await initUser(child);
+
+      const validation = await canAdoptUser(parent.id, child.id);
+      if (!validation.ok) {
+        await safeSendMessage(msg.chat.id, validation.text);
+        return;
+      }
+
+      const existingReq = findAdoptionRequestByUser(msg.chat.id, child.id);
+      if (existingReq) {
+        await safeSendMessage(msg.chat.id, "⌛ У этого игрока уже есть активный запрос на усыновление.");
+        return;
+      }
+
+      const requestId = generateRequestId("adoption");
+      const request = {
+        requestId,
+        userKey: `${msg.chat.id}:${child.id}`,
+        parentUser: {
+          id: parent.id,
+          first_name: parent.first_name || "",
+          last_name: parent.last_name || "",
+          username: parent.username || ""
+        },
+        childUser: {
+          id: child.id,
+          first_name: child.first_name || "",
+          last_name: child.last_name || "",
+          username: child.username || ""
+        },
+        createdAt: Date.now()
+      };
+
+      saveAdoptionRequest(request);
+
+      const spouseInfo = await getMarriagePartner(parent.id);
+      const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
+
+      let requestText = `👶 ${getUserLink(parent)}`;
+      if (spouseUser) requestText += ` и ${getUserLink(spouseUser)}`;
+      requestText += ` хотят усыновить ${getUserLink(child)}!
+
+${getUserLink(child)}, выбери ниже:
+✅ Да
+❌ Нет
+
+⌛ У вас есть 10 минут.`;
+
+      const sent = await safeSendMessage(msg.chat.id, requestText, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: getAdoptionDecisionKeyboard(requestId)
+      });
+
+      if (sent) request.requestMessageId = sent.message_id;
+      return;
+    }
+
+    if (isExactCommand(lowerText, "отказаться от ребенка")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "Ответь на сообщение ребёнка или напиши: отказаться от ребенка @username");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      const removed = await removeChildFromParent(parent.id, child.id);
+
+      if (!removed) {
+        await safeSendMessage(msg.chat.id, "❌ Этот игрок не является твоим ребёнком.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `💔 ${getUserLink(parent)} отказался(ась) от ребёнка ${getUserLink(child)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "сбежать из семьи")) {
+      const child = msg.from;
+      const activeAdoption = await getActiveAdoptionByChildId(child.id);
+
+      if (!activeAdoption) {
+        await safeSendMessage(msg.chat.id, "❌ Ты не состоишь в семье как ребёнок.");
+        return;
+      }
+
+      const parentUser = await getStoredUser(Number(activeAdoption.parent_user_id));
+      await childEscapeFamily(child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🏃 ${getUserLink(child)} сбежал(а) из семьи ${getUserLink(parentUser)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "любимый ребенок")) {
+      const parent = msg.from;
+      const child = await resolveTargetUserUniversal(msg);
+
+      if (!child) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение своего ребёнка или напиши: любимый ребенок @username");
+        return;
+      }
+
+      const childCheck = await assertChildInMyFamily(parent.id, child.id);
+      if (!childCheck.ok) {
+        await safeSendMessage(msg.chat.id, childCheck.text);
+        return;
+      }
+
+      await setFavoriteChild(parent.id, child.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⭐ ${getUserLink(parent)} выбрал(а) ${getUserLink(child)} любимым ребёнком!`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "убрать любимого ребенка")) {
+      const removedFavorite = await removeFavoriteChild(msg.from.id);
+
+      if (!removedFavorite) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя пока нет любимого ребёнка.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⭐ ${getUserLink(msg.from)} убрал(а) любимого ребёнка.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "семья")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const partnerInfo = await getMarriagePartner(targetUser.id);
+      const childInfo = await getActiveAdoptionByChildId(targetUser.id);
+
+      if (childInfo) {
+        const parentUser = await getStoredUser(Number(childInfo.parent_user_id));
+        const parentPartnerInfo = await getMarriagePartner(parentUser.id);
+        const secondParent = parentPartnerInfo
+          ? await getStoredUser(Number(parentPartnerInfo.partnerId))
+          : null;
+        const punishment = await getActivePunishment(targetUser.id);
+        const obedience = await getChildObedience(targetUser.id);
+
+        let textFamily = `🏡 Семья
+
+👶 Ребёнок: ${getUserLink(targetUser)}
+👨 Родитель: ${getUserLink(parentUser)}`;
+
+        if (secondParent) {
+          textFamily += `\n👩 Второй родитель: ${getUserLink(secondParent)}`;
+        }
+
+        textFamily += `\n📅 В семье с: ${formatDate(childInfo.created_at)}`;
+        textFamily += `\n📈 Послушание: ${Number(obedience?.value || 0)}/100`;
+
+        if (punishment) {
+          const remaining = new Date(punishment.until_at).getTime() - Date.now();
+          textFamily += `\n\n⛔ Наказание: активно`;
+          textFamily += `\n🕒 До: ${formatDateTime(punishment.until_at)}`;
+          textFamily += `\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
+        } else {
+          textFamily += `\n\n⛔ Наказание: нет`;
+        }
+
+        await safeSendMessage(msg.chat.id, textFamily, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      const parentIds = await getFamilyParentIds(targetUser.id);
+      const children = await getChildrenByParentIds(parentIds);
+
+      if (!partnerInfo && !children.length) {
+        await safeSendMessage(
+          msg.chat.id,
+          `${getUserLink(targetUser)} пока не состоит в семье.`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      let familyText = `🏡 Семья
+
+👤 Игрок: ${getUserLink(targetUser)}`;
+
+      if (partnerInfo) {
+        const partnerUser = await getStoredUser(partnerInfo.partnerId);
+        const coupleState = await getCoupleState(targetUser.id, partnerInfo.partnerId);
+        familyText += `\n💍 Супруг(а): ${getUserLink(partnerUser)}`;
+        familyText += `\n📅 Брак с: ${formatDate(partnerInfo.marriage.created_at)}`;
+        familyText += `\n💚 Ревность: ${Number(coupleState?.jealousy || 0)}/100`;
+      }
+
+      if (children.length) {
+        const favoriteChild = await getFavoriteChild(targetUser.id);
+        const favoriteChildId = favoriteChild ? Number(favoriteChild.child_user_id) : null;
+
+        const childLines = [];
+        for (const childRow of children) {
+          const childUser = await getStoredUser(Number(childRow.child_user_id));
+          const childId = Number(childRow.child_user_id);
+          const punishment = await getActivePunishment(childId);
+          const obedience = await getChildObedience(childId);
+
+          let line = "";
+          if (favoriteChildId && favoriteChildId === childId) {
+            line += `⭐ ${getUserLink(childUser)} — любимый`;
+          } else {
+            line += `• ${getUserLink(childUser)}`;
+          }
+
+          line += `\n   📈 Послушание: ${Number(obedience?.value || 0)}/100`;
+
+          if (punishment) {
+            const remaining = new Date(punishment.until_at).getTime() - Date.now();
+            line += `\n   ⛔ Наказан(а)`;
+            line += `\n   ⏳ Осталось: ${formatRemainingTime(remaining)}`;
+          }
+
+          childLines.push(line);
+        }
+
+        familyText += `\n\n👶 Дети:\n${childLines.join("\n")}`;
+      } else {
+        familyText += `\n\n👶 Дети: нет`;
+      }
+
+      await safeSendMessage(msg.chat.id, familyText, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
     // JAIL COMMANDS
     if (isExactCommand(lowerText, "тюрьма")) {
       let targetUser = msg.from;
@@ -7997,7 +9275,7 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
       return;
     }
 
- // OTHER / FUN
+    // OTHER / FUN
     if (isExactCommand(lowerText, "бомба")) {
       const bombKey = getBombChatKey(msg.chat.id);
 
@@ -8157,83 +9435,74 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
       return;
     }
 
-  // ===== ПРОГНОЗ =====
-if (isExactCommand(lowerText, "прогноз")) {
-  const prediction = getRandomPrediction();
+    if (isExactCommand(lowerText, "прогноз")) {
+      const prediction = getRandomPrediction();
 
-  await safeSendMessage(
-    msg.chat.id,
-    `🔮 ${getUserLink(msg.from)}\n${escapeHtml(prediction)}`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
+      await safeSendMessage(
+        msg.chat.id,
+        `🔮 ${getUserLink(msg.from)}
+${escapeHtml(prediction)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
     }
-  );
-  return;
-}
 
-// ===== ОЦЕНКА =====
-if (lowerText === "оценка" || lowerText.startsWith("оценка ")) {
-  let target = msg.from;
+    if (lowerText.startsWith("оценка")) {
+      let target = null;
 
-  if (msg.reply_to_message?.from) {
-    target = msg.reply_to_message.from;
-  } else {
-    const parts = (originalText || "").trim().split(/\s+/);
+      if (msg.reply_to_message && msg.reply_to_message.from) {
+        target = msg.reply_to_message.from;
+      } else {
+        const parts = originalText.split(" ");
+        if (parts.length > 1) {
+          target = { first_name: parts.slice(1).join(" ") };
+        } else {
+          target = msg.from;
+        }
+      }
 
-    if (parts.length > 1) {
-      target = {
-        first_name: parts.slice(1).join(" ")
-      };
+      const rating = getRandomRating();
+
+      await safeSendMessage(
+        msg.chat.id,
+        `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
     }
-  }
 
-  const rating = getRandomRating();
+    if (lowerText.startsWith("кто ")) {
+      const subject = originalText.slice(4).trim();
 
-  await safeSendMessage(
-    msg.chat.id,
-    `📊 Оценка ${escapeHtml(getUserName(target))}: ${rating}/10 😎`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
+      if (!subject) {
+        await safeSendMessage(msg.chat.id, "Напиши, например: кто лучший");
+        return;
+      }
+
+      const randomUser = getRandomChatMember(msg.chat.id);
+
+      if (!randomUser) {
+        await safeSendMessage(msg.chat.id, "Пока некого выбрать 🤔");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🤔 ${escapeHtml(subject)}? Думаю это ${getUserLink(randomUser)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
     }
-  );
-  return;
-}
 
-// ===== КТО =====
-if (lowerText === "кто" || lowerText.startsWith("кто ")) {
-  const subject = (originalText || "").slice(3).trim();
-
-  if (!subject) {
-    await safeSendMessage(
-      msg.chat.id,
-      "Напиши, например: кто лучший"
-    );
-    return;
-  }
-
-  const randomUser = getRandomChatMember(msg.chat.id);
-
-  if (!randomUser) {
-    await safeSendMessage(
-      msg.chat.id,
-      "Пока некого выбрать 🤔"
-    );
-    return;
-  }
-
-  await safeSendMessage(
-    msg.chat.id,
-    `🤔 ${escapeHtml(subject)}?\nДумаю это ${getUserLink(randomUser)}`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-  return;
-}
-    
     if (lowerText.startsWith("подарок")) {
       const sender = msg.from;
       const target = await resolveTargetUserUniversal(msg);
@@ -8546,29 +9815,20 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
   }
 });
 
-bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => {
   try {
-    if (Number(msg.from.id) !== Number(OWNER_ID)) return;
-
-    const argsText = String(match?.[2] || "").trim();
-    const amountMatch = argsText.match(/(\d+)/);
-    const amount = amountMatch ? Number(amountMatch[1]) : NaN;
+    if (Number(msg.from.id) !== OWNER_ID) return;
 
     const target = await resolveTargetUserUniversal(msg);
+    const amount = Number(match?.[2] || 0);
 
     if (!target) {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ Ответь на сообщение игрока или укажи @username и сумму.\nПример:\n/takemoney 100 @username"
-      );
+      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /takemoney 100");
       return;
     }
 
     if (!Number.isInteger(amount) || amount <= 0) {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ Укажи нормальную сумму.\nПример:\n/takemoney 100 @username"
-      );
+      await safeSendMessage(msg.chat.id, "❌ Укажи нормальную сумму.\nПример: /takemoney 100");
       return;
     }
 
@@ -8587,38 +9847,18 @@ bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => 
       }
     );
   } catch (error) {
-    console.error("Ошибка /takemoney:", error?.message || error);
+    console.error("Ошибка /takemoney:", error);
     await safeSendMessage(msg.chat.id, "❌ Ошибка снятия монет.");
   }
 });
 
-bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
+bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/, async (msg, match) => {
   try {
-    if (Number(msg.from.id) !== Number(OWNER_ID)) return;
+    if (Number(msg.from.id) !== OWNER_ID) return;
 
-    const argsText = String(match?.[2] || "").trim();
-
-    if (!argsText) {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
-      );
-      return;
-    }
-
-    const parsed = argsText.match(/^(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/i);
-
-    if (!parsed) {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
-      );
-      return;
-    }
-
-    const cooldownName = String(parsed[1] || "").trim();
-    const rawValue = String(parsed[2] || "").trim();
-    const rawUnit = String(parsed[3] || "").trim();
+    const cooldownName = String(match?.[2] || "").trim();
+    const rawValue = String(match?.[3] || "").trim();
+    const rawUnit = String(match?.[4] || "").trim();
 
     const deltaMs = parseTimeEditAmount(rawValue, rawUnit);
     if (deltaMs === null) {
@@ -8631,38 +9871,21 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
 
     const deltaMinutes = Math.abs(Math.trunc(deltaMs / 60000));
     if (deltaMinutes > TIME_EDIT_MAX_MINUTES) {
-      await safeSendMessage(
-        msg.chat.id,
-        `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`
-      );
+      await safeSendMessage(msg.chat.id, `❌ Можно менять максимум на ${TIME_EDIT_MAX_MINUTES} минут за раз.`);
       return;
     }
 
     let targetUser = null;
-
-    if (msg.reply_to_message) {
-      targetUser = await resolveTargetUserFromReply(msg);
-    }
-
-    if (!targetUser) {
-      targetUser = msg.from;
-    }
+    if (msg.reply_to_message) targetUser = await resolveTargetUserFromReply(msg);
+    if (!targetUser) targetUser = msg.from;
 
     await initUser(targetUser);
 
     const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
-
-    const absValue = Math.abs(Number(rawValue));
-    let signText = "";
-
-    if (
-      rawUnit &&
-      ["м", "мин", "минута", "минуты", "минут", "m"].includes(normalizeText(rawUnit))
-    ) {
-      signText = `${Number(rawValue) < 0 ? "-" : "+"}${absValue} мин`;
-    } else {
-      signText = `${Number(rawValue) < 0 ? "-" : "+"}${absValue} ч`;
-    }
+    const signText =
+      Math.abs(deltaMs) % (60 * 60 * 1000) === 0
+        ? `${Number(rawValue)} ч`
+        : `${Number(rawValue)} мин`;
 
     await safeSendMessage(
       msg.chat.id,
@@ -8680,10 +9903,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(
-        msg.chat.id,
-        "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб"
-      );
+      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб");
       return;
     }
 
@@ -8692,12 +9912,330 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
       return;
     }
 
-    if (error.message === "USER_NOT_FOUND") {
-      await safeSendMessage(msg.chat.id, "❌ Игрок не найден.");
-      return;
-    }
-
-    console.error("Ошибка /timeedit:", error?.message || error);
+    console.error("Ошибка /timeedit:", error);
     await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
   }
 });
+
+bot.on("polling_error", (error) => {
+  console.error("Polling error:", error?.message || error);
+});
+
+// =========================
+// STARTUP
+// =========================
+(async () => {
+  try {
+    const test = await pool.query("SELECT NOW()");
+    console.log("✅ DB connected:", test.rows[0]);
+
+    await initDb();
+    await clampAllShieldsToMax();
+    await cleanupExpiredPunishments();
+    await cleanupExpiredJail();
+    await processLayLowReductions();
+    await processPassiveWantedDecay();
+
+    console.log("✅ Shields clamped to max =", MAX_SHIELDS);
+    console.log("✅ Bot started");
+  } catch (error) {
+    console.error("❌ Ошибка запуска:", error);
+  }
+})();
+
+bot.onText(/\/start/, (msg) => {
+  if (msg.chat.type !== 'private') return;
+
+  const chatId = msg.chat.id;
+  const userName = msg.from.first_name || "друг";
+
+  bot.sendMessage(
+    chatId,
+    `👋 Привет, ${userName}!\n\n` +
+    `🔥 Добро пожаловать в Мини Модератор!\n\n` +
+    `📌 Напиши /help, чтобы увидеть все команды.`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// =========================
+// АНТИ-СПАМ С МУТОМ (Node-Telegram-Bot-API)
+// =========================
+const spamSettings = {
+  enabled: true,
+  messageLimit: 5,
+  interval: 5000,
+  muteTime: 60000 // 60 сек
+};
+
+const userMessageMap = new Map();
+const mutedUsers = new Map();
+
+// формат времени (сек/мин/час)
+function formatTime(ms) {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec} сек`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} мин`;
+  const hr = Math.floor(min / 60);
+  return `${hr} ч`;
+}
+
+// Проверка админа/владельца
+async function isOwnerOrAdmin(msg) {
+  const userId = msg.from.id;
+  if (userId === OWNER_ID) return true;
+  if (msg.chat.type === 'private') return false;
+
+  try {
+    const member = await bot.getChatMember(msg.chat.id, userId);
+    return ['creator', 'administrator'].includes(member.status);
+  } catch {
+    return false;
+  }
+}
+
+// Вкл/выкл антиспам
+bot.onText(/\/antispam (on|off)/, async (msg, match) => {
+  const allowed = await isOwnerOrAdmin(msg);
+  if (!allowed) return bot.sendMessage(msg.chat.id, '❌ Только админы или владелец');
+
+  spamSettings.enabled = match[1] === 'on';
+  bot.sendMessage(msg.chat.id, `✅ Анти-спам ${spamSettings.enabled ? 'включен' : 'выключен'}`);
+});
+
+// Проверка сообщений
+bot.on('message', async (msg) => {
+  if (!spamSettings.enabled) return;
+  if (msg.chat.type === 'private') return;
+  if (msg.text && msg.text.startsWith('/')) return;
+
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const now = Date.now();
+
+  if (mutedUsers.has(userId)) return;
+
+  if (!userMessageMap.has(userId)) userMessageMap.set(userId, []);
+  const timestamps = userMessageMap.get(userId);
+  timestamps.push(now);
+
+  while (timestamps.length && now - timestamps[0] > spamSettings.interval) {
+    timestamps.shift();
+  }
+
+  if (timestamps.length > spamSettings.messageLimit) {
+    const userName = msg.from.first_name || "Игрок";
+    const muteText = formatTime(spamSettings.muteTime);
+
+    try {
+      await bot.restrictChatMember(chatId, userId, {
+        can_send_messages: false,
+        until_date: Math.floor((now + spamSettings.muteTime) / 1000)
+      });
+
+      mutedUsers.set(userId, true);
+
+      bot.sendMessage(chatId,
+        `🔇 ${userName} лишается права слова на ${muteText}\n💬 Причина: спам`
+      );
+
+      setTimeout(async () => {
+        try {
+          await bot.restrictChatMember(chatId, userId, {
+            can_send_messages: true,
+            can_send_media_messages: true,
+            can_send_polls: true,
+            can_send_other_messages: true,
+            can_add_web_page_previews: true,
+            can_change_info: false,
+            can_invite_users: true,
+            can_pin_messages: false
+          });
+
+          mutedUsers.delete(userId);
+
+          bot.sendMessage(chatId,
+            `✅ ${userName} снова может писать в чате`
+          );
+
+        } catch (err) {
+          console.error('Ошибка при снятии мута:', err);
+        }
+      }, spamSettings.muteTime);
+
+    } catch (err) {
+      console.error('Ошибка при муте:', err);
+    }
+
+    userMessageMap.set(userId, []);
+  }
+});;
+
+// =========================
+// /admins
+// =========================
+bot.onText(/\/admins/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  if (msg.chat.type === 'private') {
+    return bot.sendMessage(chatId, '❌ Команда только для группы');
+  }
+
+  try {
+    const admins = await bot.getChatAdministrators(chatId);
+    let text = '👮 Админы группы:\n\n';
+    for (const admin of admins) {
+      const user = admin.user;
+      const name = user.first_name || 'Без имени';
+      text += `• ${name}\n`;
+    }
+    bot.sendMessage(chatId, text);
+  } catch (err) {
+    console.error('Ошибка /admins:', err);
+    bot.sendMessage(chatId, '❌ Не удалось получить список админов');
+  }
+});
+
+// =========================
+// /say
+// =========================
+bot.onText(/\/say (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const text = match[1];
+  const userId = msg.from.id;
+
+  let isAdmin = false;
+  if (userId === OWNER_ID) isAdmin = true;
+  else if (msg.chat.type !== 'private') {
+    try {
+      const member = await bot.getChatMember(chatId, userId);
+      isAdmin = ['creator', 'administrator'].includes(member.status);
+    } catch {}
+  }
+
+  if (!isAdmin) return bot.sendMessage(chatId, '❌ Только админы или владелец могут использовать эту команду.');
+
+  bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+});
+
+// =========================
+// DELETE REPLIED MESSAGE
+// =========================
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from?.id;
+  if (!userId || msg.chat.type === 'private') return;
+
+  async function isAdminOrOwner(userId, chatId) {
+    if (userId === OWNER_ID) return true;
+    try {
+      const member = await bot.getChatMember(chatId, userId);
+      return ['creator', 'administrator'].includes(member.status);
+    } catch {
+      return false;
+    }
+  }
+
+  const allowed = await isAdminOrOwner(userId, chatId);
+
+  // --- Удаление сообщения по -сообщение ---
+  if (msg.text?.startsWith('-сообщение') && msg.reply_to_message && allowed) {
+    try {
+      await bot.deleteMessage(chatId, msg.reply_to_message.message_id);
+      console.log(`Сообщение ${msg.reply_to_message.message_id} удалено по команде от ${userId}`);
+    } catch (err) {
+      console.error('Ошибка при удалении сообщения:', err);
+    }
+  }
+});
+
+// =========================
+// /addmod
+// =========================
+bot.onText(/\/addmod (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const senderId = msg.from.id;
+  const targetUsername = match[1].replace('@', '');
+
+  // Проверяем права отправителя
+  let canPromote = false;
+  if (senderId === OWNER_ID) {
+    canPromote = true; // владелец бота может назначать
+  } else {
+    try {
+      const member = await bot.getChatMember(chatId, senderId);
+      if (['creator', 'administrator'].includes(member.status)) canPromote = true;
+    } catch {}
+  }
+
+  if (!canPromote) return bot.sendMessage(chatId, '❌ Только админ или владелец бота может назначать модеров.');
+
+  try {
+    // Получаем всех участников группы
+    const chatAdmins = await bot.getChatAdministrators(chatId);
+    const targetAdmin = chatAdmins.find(m => m.user.username === targetUsername);
+
+    // Проверка: цель не владелец
+    if (targetAdmin && targetAdmin.status === 'creator') {
+      return bot.sendMessage(chatId, '❌ Невозможно назначить владельца модером.');
+    }
+
+    // Получаем id пользователя по username
+    let targetId;
+    if (targetAdmin) targetId = targetAdmin.user.id;
+    else {
+      // Если цель не в админах, пробуем найти через getChatMember
+      const member = await bot.getChatMember(chatId, targetUsername);
+      targetId = member.user.id;
+    }
+
+    // Назначаем модератором
+    await bot.promoteChatMember(chatId, targetId, {
+      can_change_info: false,
+      can_delete_messages: true,
+      can_invite_users: true,
+      can_restrict_members: true,
+      can_pin_messages: true,
+      can_promote_members: false
+    });
+
+    bot.sendMessage(chatId, `✅ @${targetUsername} теперь модератор.`);
+
+  } catch (err) {
+    console.error('Ошибка при назначении модератора:', err);
+    bot.sendMessage(chatId, `❌ Не удалось назначить модератора: ${err.response?.description || err.message}`);
+  }
+});
+
+// ======= Напоминания =======
+const reminders = []; // массив для хранения активных таймеров
+
+function parseTime(input) {
+    const regex = /(\d+)\s*(сек|секунд|мин|м|минут|ч|час|часов|д|дн|дней)/i;
+    const match = input.match(regex);
+    if (!match) return null;
+
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+
+    if (unit.startsWith('сек')) return value * 1000;
+    if (unit.startsWith('мин') || unit === 'м') return value * 60 * 1000;
+    if (unit.startsWith('ч')) return value * 60 * 60 * 1000;
+    if (unit.startsWith('д')) return value * 24 * 60 * 60 * 1000;
+    return null;
+}
+
+bot.sendMessage(chatId, `✅ Напоминание установлено на ${timeStr}`);
+
+const userName = msg.from.first_name; // берём имя пользователя
+
+const timer = setTimeout(() => {
+    bot.sendMessage(chatId, `⏰ ${userName}, напоминание: ${reminderText}`);
+    
+    // удаляем таймер из массива после срабатывания
+    const index = reminders.indexOf(timer);
+    if (index > -1) reminders.splice(index, 1);
+}, delay);
+
+reminders.push(timer);
