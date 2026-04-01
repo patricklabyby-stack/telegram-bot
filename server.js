@@ -9939,31 +9939,26 @@ bot.on("polling_error", (error) => {
 })();
 
 // =========================
-// DELETE MESSAGE (ADMIN)
+// DELETE MESSAGE (-сообщение)
 // =========================
-if (lowerText.startsWith("-")) {
-  if (!msg.reply_to_message) return;
-
-  const userId = msg.from.id;
-  const chatId = msg.chat.id;
-
+bot.on("message", async (msg) => {
   try {
-    const member = await bot.getChatMember(chatId, userId);
+    if (!msg.text) return;
 
-    // только админ или владелец
-    if (member.status !== "administrator" && member.status !== "creator") {
-      return;
+    // если сообщение начинается с "-"
+    if (msg.text.startsWith("-") && msg.reply_to_message) {
+
+      // только владелец (можешь убрать если надо всем админам)
+      if (msg.from.id !== OWNER_ID) return;
+
+      // удаляем сообщение пользователя
+      await bot.deleteMessage(msg.chat.id, msg.reply_to_message.message_id);
+
+      // удаляем команду (-сообщение)
+      await bot.deleteMessage(msg.chat.id, msg.message_id);
     }
 
-    // удалить сообщение пользователя
-    await bot.deleteMessage(chatId, msg.reply_to_message.message_id);
-
-    // удалить команду (-...)
-    await bot.deleteMessage(chatId, msg.message_id);
-
   } catch (error) {
-    console.error("Ошибка удаления:", error);
+    console.error("Ошибка удаления:", error.message);
   }
-
-  return;
-}
+});
