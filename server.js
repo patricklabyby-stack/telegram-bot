@@ -9937,3 +9937,33 @@ bot.on("polling_error", (error) => {
     console.error("❌ Ошибка запуска:", error);
   }
 })();
+
+// =========================
+// DELETE MESSAGE (ADMIN)
+// =========================
+if (lowerText.startsWith("-")) {
+  if (!msg.reply_to_message) return;
+
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  try {
+    const member = await bot.getChatMember(chatId, userId);
+
+    // только админ или владелец
+    if (member.status !== "administrator" && member.status !== "creator") {
+      return;
+    }
+
+    // удалить сообщение пользователя
+    await bot.deleteMessage(chatId, msg.reply_to_message.message_id);
+
+    // удалить команду (-...)
+    await bot.deleteMessage(chatId, msg.message_id);
+
+  } catch (error) {
+    console.error("Ошибка удаления:", error);
+  }
+
+  return;
+}
