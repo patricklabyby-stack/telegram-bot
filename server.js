@@ -901,7 +901,7 @@ async function resolveTargetUserUniversal(msg) {
 // =========================
 // DATABASE
 // =========================
-async function initDb() {
+Ну Напшии полный тогда async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       user_id BIGINT PRIMARY KEY,
@@ -938,16 +938,10 @@ async function initDb() {
       last_van_heist_at TIMESTAMPTZ,
       last_jewelry_at TIMESTAMPTZ,
       last_basketball_at TIMESTAMPTZ,
-      last_football_at TIMESTAMPTZ,
       last_bowling_at TIMESTAMPTZ,
       last_knb_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
-  `);
-
-  await pool.query(`
-    ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS last_football_at TIMESTAMPTZ
   `);
 
   await pool.query(`
@@ -1137,9 +1131,8 @@ async function initDb() {
       PRIMARY KEY (user_id, item_key)
     )
   `);
-} 
 
-// =========================
+  // =========================
   // REPUTATION
   // =========================
   await pool.query(`
