@@ -8714,17 +8714,10 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
   }
 });
 
-// =========================
-// SERVER (Render fix)
-// =========================
 app.get("/", (req, res) => {
   res.send("Бот работает ✅");
 });
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ ok: true });
-});
-
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log("Server running on port " + PORT);
 });
