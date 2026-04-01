@@ -44,6 +44,7 @@ const ATM_HACK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 const VAN_HEIST_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const JEWELRY_HEIST_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
+const FOOTBALL_COOLDOWN_MS = 60 * 60 * 1000;
 const BOWLING_COOLDOWN_MS = 60 * 60 * 1000;
 const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -427,29 +428,79 @@ function getLieResult() {
   return { percent, text: "✅ Скорее говорит правду" };
 }
 
-function getBasketballResult() {
-  const roll = Math.random();
+function getBasketballResultByDiceValue(value) {
+  const dice = Number(value || 0);
 
-  if (roll < 0.08) {
+  if (dice === 5) {
     return {
       type: "jackpot",
-      text: "🏀 Идеальный дальний бросок!",
-      coins: Math.floor(Math.random() * 21) + 20
+      text: "🏀 Идеальный бросок! Мяч чисто залетел в кольцо! 🔥",
+      coins: Math.floor(Math.random() * 10) + 15
     };
   }
 
-  if (roll < 0.28) {
+  if (dice === 4) {
     return {
       type: "win",
-      text: "🏀 Попал! Хороший бросок.",
-      coins: Math.floor(Math.random() * 8) + 6
+      text: "🏀 Отличный бросок! Попадание!",
+      coins: Math.floor(Math.random() * 7) + 8
+    };
+  }
+
+  if (dice === 3) {
+    return {
+      type: "normal",
+      text: "🏀 Неплохо, мяч почти идеально зашёл.",
+      coins: Math.floor(Math.random() * 4) + 4
     };
   }
 
   return {
     type: "fail",
-    text: "❌ Промах. Мяч отскочил от кольца.",
+    text: "❌ Промах. Мяч не залетел в кольцо.",
     coins: -(Math.floor(Math.random() * 5) + 3)
+  };
+}
+
+function getFootballResultByDiceValue(value) {
+  const dice = Number(value || 0);
+
+  if (dice === 6) {
+    return {
+      type: "jackpot",
+      text: "⚽ ГООООЛ! Мяч влетел в девятку! 🔥",
+      coins: Math.floor(Math.random() * 12) + 18
+    };
+  }
+
+  if (dice === 5) {
+    return {
+      type: "win",
+      text: "⚽ Отличный удар, это гол!",
+      coins: Math.floor(Math.random() * 8) + 10
+    };
+  }
+
+  if (dice === 4) {
+    return {
+      type: "normal",
+      text: "⚽ Удар хороший, мяч всё-таки в сетке.",
+      coins: Math.floor(Math.random() * 5) + 5
+    };
+  }
+
+  if (dice === 3) {
+    return {
+      type: "save",
+      text: "🧤 Вратарь отбил мяч!",
+      coins: -(Math.floor(Math.random() * 3) + 2)
+    };
+  }
+
+  return {
+    type: "fail",
+    text: "🥅 Мимо ворот!",
+    coins: -(Math.floor(Math.random() * 5) + 4)
   };
 }
 
@@ -573,39 +624,42 @@ function getCooldownColumnAndMsByName(rawName, userId = null) {
 
   const name = normalizeText(rawName);
 
-  if (["деньги", "монеты", "money", "daily"].includes(name)) {
-    return { column: "last_daily_at", cooldownMs: MONEY_COOLDOWN_MS, title: "деньги" };
-  }
-  if (["охота", "hunt"].includes(name)) {
-    return { column: "last_hunt_at", cooldownMs: HUNT_COOLDOWN_MS, title: "охота" };
-  }
-  if (["снайпер", "sniper"].includes(name)) {
-    return { column: "last_sniper_at", cooldownMs: SNIPER_COOLDOWN_MS, title: "снайпер" };
-  }
-  if (["ограбление", "ограбить", "robbery"].includes(name)) {
-    return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
-  }
-  if (["ограбление банка", "банк", "bank", "heist"].includes(name)) {
-    return { column: "last_bank_at", cooldownMs: BANK_HEIST_COOLDOWN_MS, title: "ограбление банка" };
-  }
-  if (["банкомат", "взлом банкомата", "atm"].includes(name)) {
-    return { column: "last_atm_hack_at", cooldownMs: ATM_HACK_COOLDOWN_MS, title: "взлом банкомата" };
-  }
-  if (["инкассация", "нападение на инкассацию", "van"].includes(name)) {
-    return { column: "last_van_heist_at", cooldownMs: VAN_HEIST_COOLDOWN_MS, title: "нападение на инкассацию" };
-  }
-  if (["ювелирка", "ограбление ювелирки", "ювелирный", "jewelry"].includes(name)) {
-    return { column: "last_jewelry_at", cooldownMs: JEWELRY_HEIST_COOLDOWN_MS, title: "ограбление ювелирки" };
-  }
-  if (["баскетбол", "basketball"].includes(name)) {
-    return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
-  }
-  if (["боулинг", "bowling"].includes(name)) {
-    return { column: "last_bowling_at", cooldownMs: BOWLING_COOLDOWN_MS, title: "боулинг" };
-  }
-  if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
-    return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
-  }
+if (["деньги", "монеты", "money", "daily"].includes(name)) {
+  return { column: "last_daily_at", cooldownMs: MONEY_COOLDOWN_MS, title: "деньги" };
+}
+if (["охота", "hunt"].includes(name)) {
+  return { column: "last_hunt_at", cooldownMs: HUNT_COOLDOWN_MS, title: "охота" };
+}
+if (["снайпер", "sniper"].includes(name)) {
+  return { column: "last_sniper_at", cooldownMs: SNIPER_COOLDOWN_MS, title: "снайпер" };
+}
+if (["ограбление", "ограбить", "robbery"].includes(name)) {
+  return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
+}
+if (["ограбление банка", "банк", "bank", "heist"].includes(name)) {
+  return { column: "last_bank_at", cooldownMs: BANK_HEIST_COOLDOWN_MS, title: "ограбление банка" };
+}
+if (["банкомат", "взлом банкомата", "atm"].includes(name)) {
+  return { column: "last_atm_hack_at", cooldownMs: ATM_HACK_COOLDOWN_MS, title: "взлом банкомата" };
+}
+if (["инкассация", "нападение на инкассацию", "van"].includes(name)) {
+  return { column: "last_van_heist_at", cooldownMs: VAN_HEIST_COOLDOWN_MS, title: "нападение на инкассацию" };
+}
+if (["ювелирка", "ограбление ювелирки", "ювелирный", "jewelry"].includes(name)) {
+  return { column: "last_jewelry_at", cooldownMs: JEWELRY_HEIST_COOLDOWN_MS, title: "ограбление ювелирки" };
+}
+if (["баскетбол", "basketball"].includes(name)) {
+  return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
+}
+if (["футбол", "football"].includes(name)) {
+  return { column: "last_football_at", cooldownMs: FOOTBALL_COOLDOWN_MS, title: "футбол" };
+}
+if (["боулинг", "bowling"].includes(name)) {
+  return { column: "last_bowling_at", cooldownMs: BOWLING_COOLDOWN_MS, title: "боулинг" };
+}
+if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
+  return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
+}
 
   return null;
 }
