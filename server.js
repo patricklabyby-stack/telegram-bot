@@ -1137,8 +1137,9 @@ async function initDb() {
       PRIMARY KEY (user_id, item_key)
     )
   `);
-}
-  // =========================
+} 
+
+// =========================
   // REPUTATION
   // =========================
   await pool.query(`
