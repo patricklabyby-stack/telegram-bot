@@ -127,43 +127,27 @@ const ITEMS = {
     emoji: "📴",
     price: 160,
     description: "Помогает против сигнализации"
-  },
-  handcuffs: {
-    key: "handcuffs",
-    title: "Наручники",
-    emoji: "⛓",
-    price: 70,
-    description: "Позволяют заковать игрока ответом на сообщение"
   }
 };
 
 const ITEM_ALIASES = {
   "маска": "mask",
   "mask": "mask",
-
   "отмычка": "lockpick",
   "отмычки": "lockpick",
   "lockpick": "lockpick",
-
   "рация": "radio",
   "radio": "radio",
-
   "бронежилет": "armor",
   "броня": "armor",
   "armor": "armor",
-
   "фальшивый паспорт": "fake_passport",
   "фальшивыйпаспорт": "fake_passport",
   "поддельный паспорт": "fake_passport",
   "паспорт": "fake_passport",
   "fake_passport": "fake_passport",
-
   "глушилка": "jammer",
-  "jammer": "jammer",
-
-  "наручники": "handcuffs",
-  "наручник": "handcuffs",
-  "handcuffs": "handcuffs"
+  "jammer": "jammer"
 };
 
 // =========================
@@ -4631,8 +4615,7 @@ const rpCommands = {
   "разбудить": { text: "разбудил", stat: "wakes", emoji: "⏰", xp: 2 },
   "заморозить": { text: "заморозил", stat: "freezes", emoji: "🧊", xp: 2 },
   "спасти": { text: "спас", stat: "saves", emoji: "🛡️", xp: 2 },
-  "кинуть снежок": { text: "кинул снежок в", stat: "snowballs", emoji: "❄️", xp: 2 },
-  "наручники": { text: "надел наручники на", stat: "handcuffs", emoji: "⛓", xp: 2 }
+  "кинуть снежок": { text: "кинул снежок в", stat: "snowballs", emoji: "❄️", xp: 2 }
 };
 
 // =========================
@@ -5504,14 +5487,12 @@ ${lines.join("\n")}`,
 ${lines.join("\n\n")}
 
 Купить:
-Купить:
 • купить маска
 • купить отмычка
 • купить рация
 • купить бронежилет
 • купить фальшивый паспорт
-• купить глушилка
-• купить наручники`,
+• купить глушилка`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
