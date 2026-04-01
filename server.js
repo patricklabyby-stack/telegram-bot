@@ -3398,7 +3398,6 @@ function getRandomBribeOutcome(wantedLevel = 0, hasPassport = false) {
 // GAME COOLDOWNS
 // =========================
 async function updateCooldownColumnNow(userId, column) {
-  // Если владелец, не обновляем кулдаун
   if (isOwner(userId)) return;
   await pool.query(`UPDATE users SET ${column} = NOW() WHERE user_id = $1`, [userId]);
 }
@@ -3408,7 +3407,7 @@ function isOwner(userId) {
 }
 
 async function getGenericCooldown(userId, column, cooldownMs) {
-  if (isOwner(userId)) return 0; // владелец всегда может играть
+  if (isOwner(userId)) return 0;
 
   const result = await pool.query(
     `SELECT ${column} AS value FROM users WHERE user_id = $1`,
@@ -3506,6 +3505,7 @@ async function getCooldownText(userId) {
 🚚 Инкассация: ${getRemaining(stats.last_van_heist_at, VAN_HEIST_COOLDOWN_MS)}
 💎 Ювелирка: ${getRemaining(stats.last_jewelry_at, JEWELRY_HEIST_COOLDOWN_MS)}
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
+⚽ Футбол: ${getRemaining(stats.last_football_at, FOOTBALL_COOLDOWN_MS)}
 🎳 Боулинг: ${getRemaining(stats.last_bowling_at, BOWLING_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
 }
