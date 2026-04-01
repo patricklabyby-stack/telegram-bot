@@ -9432,7 +9432,7 @@ ${getUserLink(firstUser)} + ${getUserLink(secondUser)}
       return;
     }
 
-   // ===== ПРОГНОЗ =====
+  // ===== ПРОГНОЗ =====
 if (isExactCommand(lowerText, "прогноз")) {
   const prediction = getRandomPrediction();
 
