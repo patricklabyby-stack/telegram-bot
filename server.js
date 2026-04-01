@@ -155,11 +155,11 @@ const ITEM_ALIASES = {
 // SERVER
 // =========================
 app.get("/", (req, res) => {
-  res.send("Бот работает");
+  res.status(200).send("Бот работает ✅");
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("Server running on port " + PORT);
 });
 
 // =========================
