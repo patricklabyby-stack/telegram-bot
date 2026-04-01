@@ -127,27 +127,43 @@ const ITEMS = {
     emoji: "📴",
     price: 160,
     description: "Помогает против сигнализации"
+  },
+  handcuffs: {
+    key: "handcuffs",
+    title: "Наручники",
+    emoji: "⛓",
+    price: 70,
+    description: "Позволяют заковать игрока ответом на сообщение"
   }
 };
 
 const ITEM_ALIASES = {
   "маска": "mask",
   "mask": "mask",
+
   "отмычка": "lockpick",
   "отмычки": "lockpick",
   "lockpick": "lockpick",
+
   "рация": "radio",
   "radio": "radio",
+
   "бронежилет": "armor",
   "броня": "armor",
   "armor": "armor",
+
   "фальшивый паспорт": "fake_passport",
   "фальшивыйпаспорт": "fake_passport",
   "поддельный паспорт": "fake_passport",
   "паспорт": "fake_passport",
   "fake_passport": "fake_passport",
+
   "глушилка": "jammer",
-  "jammer": "jammer"
+  "jammer": "jammer",
+
+  "наручники": "handcuffs",
+  "наручник": "handcuffs",
+  "handcuffs": "handcuffs"
 };
 
 // =========================
@@ -9915,6 +9931,71 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
 bot.on("polling_error", (error) => {
   console.error("Polling error:", error?.message || error);
 });
+
+// =========================
+// НАРУЧНИКИ
+// =========================
+
+// покупка
+if (lowerText === "купить наручники") {
+  const price = 100;
+
+  const user = await getUser(msg.from.id);
+
+  if (user.balance < price) {
+    return bot.sendMessage(msg.chat.id, "❌ Недостаточно монет");
+  }
+
+  await pool.query(
+    `UPDATE users 
+     SET balance = balance - $1,
+         handcuffs = COALESCE(handcuffs, 0) + 1
+     WHERE user_id = $2`,
+    [price, msg.from.id]
+  );
+
+  return bot.sendMessage(msg.chat.id, "⛓ Вы купили наручники");
+}
+
+
+// использование
+if (lowerText === "наручники") {
+  if (!msg.reply_to_message) {
+    return bot.sendMessage(msg.chat.id, "❌ Ответь на сообщение игрока");
+  }
+
+  const userId = msg.from.id;
+  const target = msg.reply_to_message.from;
+
+  if (target.id === userId) {
+    return bot.sendMessage(msg.chat.id, "🤨 Себя нельзя заковать");
+  }
+
+  const user = await getUser(userId);
+
+  if (!user.handcuffs || user.handcuffs <= 0) {
+    return bot.sendMessage(
+      msg.chat.id,
+      "❌ У вас нет наручников! Напишите: купить наручники"
+    );
+  }
+
+  // уменьшаем предмет
+  await pool.query(
+    `UPDATE users 
+     SET handcuffs = handcuffs - 1
+     WHERE user_id = $1`,
+    [userId]
+  );
+
+  const senderName = getUserName(msg.from);
+  const targetName = getUserName(target);
+
+  return bot.sendMessage(
+    msg.chat.id,
+    `⛓ ${senderName} надел наручники на ${targetName} 😈`
+  );
+}
 
 // =========================
 // STARTUP
