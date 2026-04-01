@@ -8701,11 +8701,3 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i, async (msg, match) => {
     await safeSendMessage(msg.chat.id, "❌ Ошибка изменения времени кулдауна.");
   }
 });
-
-app.get("/", (req, res) => {
-  res.status(200).send("Бот работает ✅");
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("Server running on port " + PORT);
-});
