@@ -9589,52 +9589,60 @@ ${escapeHtml(prediction)}`,
 
     // RP COMMANDS + @username SUPPORT
     let matchedRpKey = null;
-    for (const key of Object.keys(rpCommands)) {
-      if (lowerText === key || lowerText.startsWith(`${key} `)) {
-        matchedRpKey = key;
-        break;
-      }
-    }
+for (const key of Object.keys(rpCommands)) {
+  if (lowerText === key || lowerText.startsWith(`${key} `)) {
+    matchedRpKey = key;
+    break;
+  }
+}
 
-    if (matchedRpKey) {
-      const command = rpCommands[matchedRpKey];
-      const sender = msg.from;
-      const target = await resolveTargetUserUniversal(msg);
+if (matchedRpKey) {
+  const command = rpCommands[matchedRpKey];
+  const sender = msg.from;
+  const target = await resolveTargetUserUniversal(msg);
 
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
-        return;
-      }
+  if (!target) {
+    await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
+    return;
+  }
 
-      await initUser(target);
+  await initUser(target);
 
-      if (sender.id === target.id) {
-        await safeSendMessage(
-          msg.chat.id,
-          `😅 ${getUserLink(sender)} ${command.text} самого себя`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
-
-      await incrementStat(target.id, command.stat);
-
-      let out = `${command.emoji} ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`;
-      out = await appendLevelUpIfNeeded(out, sender.id, command.xp);
-
-      await safeSendMessage(msg.chat.id, out, {
+  if (sender.id === target.id) {
+    await safeSendMessage(
+      msg.chat.id,
+      `😅 ${getUserLink(sender)} ${command.text} самого себя`,
+      {
         parse_mode: "HTML",
         disable_web_page_preview: true
-      });
+      }
+    );
+    return;
+  }
+
+  // 🔥 ВОТ ЭТО ГЛАВНОЕ ДОБАВЛЕНИЕ
+  if (matchedRpKey === "наручники") {
+    const inventory = await getFullInventory(sender.id);
+
+    if ((inventory.handcuffs || 0) <= 0) {
+      await safeSendMessage(msg.chat.id, "❌ У тебя нет наручников");
       return;
     }
-  } catch (error) {
-    console.error("Ошибка обработки сообщения:", error);
+
+    await removeInventoryItem(sender.id, "handcuffs", 1);
   }
-});
+
+  await incrementStat(target.id, command.stat);
+
+  let out = `${command.emoji} ${getUserLink(sender)} ${command.text} ${getUserLink(target)}`;
+  out = await appendLevelUpIfNeeded(out, sender.id, command.xp);
+
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
 // =========================
 // CUSTOM COMMAND DB HELPERS
