@@ -44,7 +44,6 @@ const ATM_HACK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 const VAN_HEIST_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const JEWELRY_HEIST_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const BASKETBALL_COOLDOWN_MS = 60 * 60 * 1000;
-const FOOTBALL_COOLDOWN_MS = 60 * 60 * 1000;
 const BOWLING_COOLDOWN_MS = 60 * 60 * 1000;
 const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -428,87 +427,29 @@ function getLieResult() {
   return { percent, text: "✅ Скорее говорит правду" };
 }
 
-function getBasketballResultByDiceValue(value) {
-  const dice = Number(value || 0);
+function getBasketballResult() {
+  const roll = Math.random();
 
-  if (dice === 5) {
+  if (roll < 0.08) {
     return {
       type: "jackpot",
-      text: "🏀 Идеальный бросок! Мяч чисто залетел в кольцо! 🔥",
-      coins: Math.floor(Math.random() * 10) + 15
+      text: "🏀 Идеальный дальний бросок!",
+      coins: Math.floor(Math.random() * 21) + 20
     };
   }
 
-  if (dice === 4) {
+  if (roll < 0.28) {
     return {
       type: "win",
-      text: "🏀 Отличный бросок! Попадание!",
-      coins: Math.floor(Math.random() * 7) + 8
-    };
-  }
-
-  if (dice === 3) {
-    return {
-      type: "normal",
-      text: "🏀 Неплохо, мяч почти идеально зашёл.",
-      coins: Math.floor(Math.random() * 4) + 4
+      text: "🏀 Попал! Хороший бросок.",
+      coins: Math.floor(Math.random() * 8) + 6
     };
   }
 
   return {
     type: "fail",
-    text: "❌ Промах. Мяч не залетел в кольцо.",
+    text: "❌ Промах. Мяч отскочил от кольца.",
     coins: -(Math.floor(Math.random() * 5) + 3)
-  };
-}
-
-function getFootballResultByDiceValue(value) {
-  const dice = Number(value || 0);
-
-  if (dice === 6) {
-    return {
-      type: "jackpot",
-      text: "⚽ ГООООЛ! Мяч влетел в девятку!",
-      coins: Math.floor(Math.random() * 6) + 10
-    };
-  }
-
-  if (dice === 5) {
-    return {
-      type: "great",
-      text: "⚽ Отличный удар, это гол!",
-      coins: Math.floor(Math.random() * 5) + 8
-    };
-  }
-
-  if (dice === 4) {
-    return {
-      type: "good",
-      text: "⚽ Хороший удар!",
-      coins: Math.floor(Math.random() * 4) + 5
-    };
-  }
-
-  if (dice === 3) {
-    return {
-      type: "normal",
-      text: "🧤 Вратарь отбил мяч.",
-      coins: Math.floor(Math.random() * 3) + 2
-    };
-  }
-
-  if (dice === 2) {
-    return {
-      type: "bad",
-      text: "😬 Удар слабый, мяч не долетел как надо.",
-      coins: -(Math.floor(Math.random() * 3) + 2)
-    };
-  }
-
-  return {
-    type: "fail",
-    text: "🥅 Мимо ворот!",
-    coins: -(Math.floor(Math.random() * 5) + 4)
   };
 }
 
@@ -623,7 +564,9 @@ function parseTimeEditAmount(rawValue, rawUnit = "") {
   return null;
 }
 
+// Добавляем проверку на владельца прямо здесь
 function getCooldownColumnAndMsByName(rawName, userId = null) {
+  // Если это владелец — кулдаун не нужен
   if (Number(userId) === OWNER_ID) {
     return { column: null, cooldownMs: 0, title: "для владельца нет кулдауна" };
   }
@@ -656,9 +599,6 @@ function getCooldownColumnAndMsByName(rawName, userId = null) {
   }
   if (["баскетбол", "basketball"].includes(name)) {
     return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
-  }
-  if (["футбол", "football"].includes(name)) {
-    return { column: "last_football_at", cooldownMs: FOOTBALL_COOLDOWN_MS, title: "футбол" };
   }
   if (["боулинг", "bowling"].includes(name)) {
     return { column: "last_bowling_at", cooldownMs: BOWLING_COOLDOWN_MS, title: "боулинг" };
@@ -746,6 +686,165 @@ function getLevelInfoByXp(xp) {
 }
 
 // =========================
+// CHAT USERS
+// =========================
+function addChatMember(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = String(chatId);
+  if (!chatMembers[key]) chatMembers[key] = {};
+
+  chatMembers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || ""
+  };
+}
+
+function getRandomChatMember(chatId) {
+  const key = String(chatId);
+  const members = Object.values(chatMembers[key] || {});
+  if (!members.length) return null;
+  return members[Math.floor(Math.random() * members.length)];
+}
+
+function addRecentActiveUser(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  const key = String(chatId);
+  if (!recentActiveUsers[key]) recentActiveUsers[key] = {};
+
+  recentActiveUsers[key][String(user.id)] = {
+    id: user.id,
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || "",
+    last_seen_at: Date.now()
+  };
+}
+
+function getRecentActiveCandidates(chatId, excludeUserIds = []) {
+  const key = String(chatId);
+  const users = Object.values(recentActiveUsers[key] || {});
+  const now = Date.now();
+
+  return users.filter((user) => {
+    if (!user || !user.id) return false;
+    if (excludeUserIds.includes(user.id)) return false;
+    return now - (user.last_seen_at || 0) <= ACTIVE_WINDOW_MS;
+  });
+}
+
+// =========================
+// MENTION / TARGET RESOLVE
+// =========================
+function extractMentionUsername(text) {
+  const match = String(text || "").match(/(^|\s)@([A-Za-z0-9_]{4,32})(?=\s|$)/);
+  return match ? String(match[2]).toLowerCase() : null;
+}
+
+function cleanupTextWithoutMention(text) {
+  return String(text || "")
+    .replace(/(^|\s)@([A-Za-z0-9_]{4,32})(?=\s|$)/, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildStoredUser(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.user_id || row.id),
+    first_name: row.first_name || "",
+    last_name: row.last_name || "",
+    username: row.username || ""
+  };
+}
+
+async function findUserByUsername(chatId, username) {
+  const uname = String(username || "").replace(/^@/, "").trim().toLowerCase();
+  if (!uname) return null;
+
+  const chatKey = String(chatId);
+
+  const liveChatMembers = Object.values(chatMembers[chatKey] || {});
+  const liveMember = liveChatMembers.find(
+    (u) => String(u.username || "").toLowerCase() === uname
+  );
+  if (liveMember) return liveMember;
+
+  const liveActiveMembers = Object.values(recentActiveUsers[chatKey] || {});
+  const liveActiveMember = liveActiveMembers.find(
+    (u) => String(u.username || "").toLowerCase() === uname
+  );
+  if (liveActiveMember) return liveActiveMember;
+
+  const seen = await pool.query(
+    `
+    SELECT user_id, first_name, last_name, username
+    FROM chat_seen_users
+    WHERE chat_id = $1
+      AND LOWER(username) = LOWER($2)
+    LIMIT 1
+    `,
+    [chatId, uname]
+  );
+  if (seen.rows[0]) return buildStoredUser(seen.rows[0]);
+
+  const users = await pool.query(
+    `
+    SELECT user_id, first_name, last_name, username
+    FROM users
+    WHERE LOWER(username) = LOWER($1)
+    LIMIT 1
+    `,
+    [uname]
+  );
+  if (users.rows[0]) return buildStoredUser(users.rows[0]);
+
+  return null;
+}
+
+async function resolveTargetUserFromReply(msg) {
+  if (!msg.reply_to_message) return null;
+
+  const replyMsg = msg.reply_to_message;
+
+  if (replyMsg.from && !replyMsg.from.is_bot && replyMsg.from.id) {
+    await initUser(replyMsg.from);
+    await saveSeenUser(msg.chat.id, replyMsg.from);
+
+    return {
+      id: Number(replyMsg.from.id),
+      first_name: replyMsg.from.first_name || "",
+      last_name: replyMsg.from.last_name || "",
+      username: replyMsg.from.username || ""
+    };
+  }
+
+  const profileOwnerId = await getProfileOwnerByMessageId(replyMsg.message_id);
+  if (profileOwnerId) {
+    const storedUser = await getStoredUser(profileOwnerId);
+    if (storedUser) return storedUser;
+  }
+
+  return null;
+}
+
+async function resolveTargetUserUniversal(msg) {
+  const byReply = await resolveTargetUserFromReply(msg);
+  if (byReply) return byReply;
+
+  const mentionedUsername = extractMentionUsername(msg.text || "");
+  if (mentionedUsername) {
+    const byMention = await findUserByUsername(msg.chat.id, mentionedUsername);
+    if (byMention) return byMention;
+  }
+
+  return null;
+}
+
+// =========================
 // DATABASE
 // =========================
 async function initDb() {
@@ -785,10 +884,224 @@ async function initDb() {
       last_van_heist_at TIMESTAMPTZ,
       last_jewelry_at TIMESTAMPTZ,
       last_basketball_at TIMESTAMPTZ,
-      last_football_at TIMESTAMPTZ,
       last_bowling_at TIMESTAMPTZ,
       last_knb_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wanted_status (
+      user_id BIGINT PRIMARY KEY,
+      level INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lay_low_status (
+      user_id BIGINT PRIMARY KEY,
+      until_at TIMESTAMPTZ NOT NULL,
+      last_reduce_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT FALSE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS profile_messages (
+      message_id BIGINT PRIMARY KEY,
+      target_user_id BIGINT NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_seen_users (
+      chat_id BIGINT NOT NULL,
+      user_id BIGINT NOT NULL,
+      first_name TEXT DEFAULT '',
+      last_name TEXT DEFAULT '',
+      username TEXT DEFAULT '',
+      PRIMARY KEY (chat_id, user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS star_purchases (
+      telegram_payment_charge_id TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      payload TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS custom_commands (
+      id SERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      trigger TEXT NOT NULL UNIQUE,
+      action_text TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS marriages (
+      id SERIAL PRIMARY KEY,
+      user1_id BIGINT NOT NULL,
+      user2_id BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS adoptions (
+      id SERIAL PRIMARY KEY,
+      parent_user_id BIGINT NOT NULL,
+      child_user_id BIGINT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS favorite_children (
+      parent_user_id BIGINT PRIMARY KEY,
+      child_user_id BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS family_budgets (
+      family_key TEXT PRIMARY KEY,
+      balance INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS piggy_banks (
+      child_user_id BIGINT PRIMARY KEY,
+      balance INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_dreams (
+      child_user_id BIGINT PRIMARY KEY,
+      dream_text TEXT NOT NULL,
+      dream_balance INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_punishments (
+      child_user_id BIGINT PRIMARY KEY,
+      punished_by_user_id BIGINT NOT NULL,
+      until_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_good_deeds (
+      id SERIAL PRIMARY KEY,
+      child_user_id BIGINT NOT NULL,
+      added_by_user_id BIGINT NOT NULL,
+      deed_text TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS child_obedience (
+      child_user_id BIGINT PRIMARY KEY,
+      value INTEGER DEFAULT 50,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS police_jail (
+      user_id BIGINT PRIMARY KEY,
+      until_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_shields (
+      user_id BIGINT PRIMARY KEY,
+      count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS jail_actions (
+      user_id BIGINT PRIMARY KEY,
+      last_escape_at TIMESTAMPTZ,
+      last_lawyer_at TIMESTAMPTZ,
+      last_bribe_at TIMESTAMPTZ,
+      last_pray_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS couple_states (
+      couple_key TEXT PRIMARY KEY,
+      user1_id BIGINT NOT NULL,
+      user2_id BIGINT NOT NULL,
+      jealousy INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventories (
+      user_id BIGINT NOT NULL,
+      item_key TEXT NOT NULL,
+      count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, item_key)
+    )
+  `);
+
+  // =========================
+  // REPUTATION
+  // =========================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_reputation (
+      user_id BIGINT PRIMARY KEY,
+      jail_entries INTEGER DEFAULT 0,
+      jail_time_ms_total BIGINT DEFAULT 0,
+      successful_escapes INTEGER DEFAULT 0,
+      failed_escapes INTEGER DEFAULT 0,
+      lawyer_uses INTEGER DEFAULT 0,
+      bribe_uses INTEGER DEFAULT 0,
+      prayers_count INTEGER DEFAULT 0,
+      successful_robberies INTEGER DEFAULT 0,
+      failed_robberies INTEGER DEFAULT 0,
+      successful_bank_heists INTEGER DEFAULT 0,
+      failed_bank_heists INTEGER DEFAULT 0,
+      successful_van_heists INTEGER DEFAULT 0,
+      failed_van_heists INTEGER DEFAULT 0,
+      successful_jewelry_heists INTEGER DEFAULT 0,
+      failed_jewelry_heists INTEGER DEFAULT 0,
+      successful_atm_hacks INTEGER DEFAULT 0,
+      failed_atm_hacks INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
 
@@ -802,17 +1115,2236 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_van_heist_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_jewelry_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_basketball_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_football_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bowling_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS last_pray_at TIMESTAMPTZ`);
 
   console.log("✅ Database ready");
+}
+
+async function initUser(user) {
+  if (!user || !user.id) return;
+
+  await pool.query(
+    `
+    INSERT INTO users (user_id, first_name, last_name, username)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE users.first_name END,
+      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE users.last_name END,
+      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE users.username END
+    `,
+    [
+      user.id,
+      (user.first_name || "").trim(),
+      (user.last_name || "").trim(),
+      (user.username || "").trim()
+    ]
+  );
+
+  await ensureWantedRow(user.id);
+  await ensureLayLowRow(user.id);
+  await ensureShieldRow(user.id);
+  await ensureReputationRow(user.id);
+}
+
+async function saveSeenUser(chatId, user) {
+  if (!chatId || !user || !user.id || user.is_bot) return;
+
+  await pool.query(
+    `
+    INSERT INTO chat_seen_users (chat_id, user_id, first_name, last_name, username)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (chat_id, user_id)
+    DO UPDATE SET
+      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE chat_seen_users.first_name END,
+      last_name = CASE WHEN EXCLUDED.last_name <> '' THEN EXCLUDED.last_name ELSE chat_seen_users.last_name END,
+      username = CASE WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE chat_seen_users.username END
+    `,
+    [
+      chatId,
+      user.id,
+      (user.first_name || "").trim(),
+      (user.last_name || "").trim(),
+      (user.username || "").trim()
+    ]
+  );
+}
+
+async function getUserStats(userId) {
+  const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
+  return result.rows[0] || null;
+}
+
+async function getStoredUser(userId) {
+  const stats = await getUserStats(userId);
+  if (!stats) return null;
+
+  return {
+    id: Number(stats.user_id),
+    first_name: stats.first_name || "",
+    last_name: stats.last_name || "",
+    username: stats.username || ""
+  };
+}
+
+async function saveProfileMessage(messageId, targetUserId) {
+  await pool.query(
+    `
+    INSERT INTO profile_messages (message_id, target_user_id)
+    VALUES ($1, $2)
+    ON CONFLICT (message_id)
+    DO UPDATE SET target_user_id = EXCLUDED.target_user_id
+    `,
+    [messageId, targetUserId]
+  );
+}
+
+async function getProfileOwnerByMessageId(messageId) {
+  const result = await pool.query(
+    `SELECT target_user_id FROM profile_messages WHERE message_id = $1`,
+    [messageId]
+  );
+  return result.rows[0] ? Number(result.rows[0].target_user_id) : null;
+}
+
+async function addXpToUser(userId, amount) {
+  const safeAmount = Math.max(0, Number(amount || 0));
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const row = await client.query(
+      `SELECT xp, level FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const oldXp = Number(row.rows[0].xp || 0);
+    const oldLevel = Number(row.rows[0].level || 1);
+
+    const newXp = oldXp + safeAmount;
+    const newLevel = getLevelByXp(newXp);
+
+    await client.query(
+      `UPDATE users SET xp = $2, level = $3 WHERE user_id = $1`,
+      [userId, newXp, newLevel]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      oldLevel,
+      newLevel,
+      xp: newXp,
+      leveledUp: newLevel > oldLevel
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function appendLevelUpIfNeeded(text, userId, xpAmount) {
+  try {
+    const result = await addXpToUser(userId, xpAmount);
+    if (result.leveledUp) {
+      return `${text}\n\n🎉 Новый уровень: ${result.newLevel}`;
+    }
+    return text;
+  } catch (error) {
+    console.error("Ошибка XP:", error);
+    return text;
+  }
+}
+
+async function transferCoins(fromUserId, toUserId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const fromResult = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [fromUserId]
+    );
+    const toResult = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [toUserId]
+    );
+
+    if (!fromResult.rows[0] || !toResult.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const fromBalance = Number(fromResult.rows[0].balance || 0);
+    if (fromBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    const updatedFrom = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [fromUserId, amount]
+    );
+
+    const updatedTo = await client.query(
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
+      [toUserId, amount]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      fromBalance: Number(updatedFrom.rows[0].balance || 0),
+      toBalance: Number(updatedTo.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function addCoinsToUser(userId, amount) {
+  const result = await pool.query(
+    `UPDATE users SET balance = COALESCE(balance, 0) + $2 WHERE user_id = $1 RETURNING balance`,
+    [userId, amount]
+  );
+  return Number(result.rows[0]?.balance || 0);
+}
+
+async function deductCoinsSafe(userId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const row = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const currentBalance = Number(row.rows[0].balance || 0);
+    const toDeduct = Math.min(currentBalance, amount);
+
+    const updated = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [userId, toDeduct]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      deducted: toDeduct,
+      balance: Number(updated.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function deductCoinsExact(userId, amount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const row = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const current = Number(row.rows[0].balance || 0);
+    if (current < amount) {
+      await client.query("ROLLBACK");
+      return { ok: false, balance: current };
+    }
+
+    const updated = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [userId, amount]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      ok: true,
+      balance: Number(updated.rows[0]?.balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function incrementStat(targetUserId, statField) {
+  const allowedFields = [
+    "kills", "hugs", "kisses", "hits", "bites", "pats", "kicks", "slaps",
+    "punches", "licks", "steals", "scams", "destroys", "wakes", "freezes",
+    "saves", "snowballs"
+  ];
+
+  if (!allowedFields.includes(statField)) return;
+
+  await pool.query(
+    `
+    UPDATE users
+    SET ${statField} = ${statField} + 1,
+        total = total + 1
+    WHERE user_id = $1
+    `,
+    [targetUserId]
+  );
+}
+
+// =========================
+// REPUTATION
+// =========================
+async function ensureReputationRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO user_reputation (user_id, updated_at)
+    VALUES ($1, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getUserReputation(userId) {
+  await ensureReputationRow(userId);
+  const result = await pool.query(
+    `SELECT * FROM user_reputation WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function incrementReputationField(userId, field, amount = 1) {
+  const allowed = [
+    "jail_entries",
+    "successful_escapes",
+    "failed_escapes",
+    "lawyer_uses",
+    "bribe_uses",
+    "prayers_count",
+    "successful_robberies",
+    "failed_robberies",
+    "successful_bank_heists",
+    "failed_bank_heists",
+    "successful_van_heists",
+    "failed_van_heists",
+    "successful_jewelry_heists",
+    "failed_jewelry_heists",
+    "successful_atm_hacks",
+    "failed_atm_hacks"
+  ];
+
+  if (!allowed.includes(field)) return;
+  await ensureReputationRow(userId);
+
+  await pool.query(
+    `
+    UPDATE user_reputation
+    SET ${field} = ${field} + $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, amount]
+  );
+}
+
+async function addJailTimeToReputation(userId, ms) {
+  await ensureReputationRow(userId);
+  await pool.query(
+    `
+    UPDATE user_reputation
+    SET jail_time_ms_total = COALESCE(jail_time_ms_total, 0) + $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, Number(ms || 0)]
+  );
+}
+
+async function getReputationText(user) {
+  await initUser(user);
+  const rep = await getUserReputation(user.id);
+  const wanted = await getWantedRow(user.id);
+  const stats = await getUserStats(user.id);
+
+  return `😈 Репутация игрока
+
+Игрок: ${getUserLink(user)}
+💰 Баланс: ${Number(stats?.balance || 0)}
+🚨 Розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
+
+🚔 Тюрьма:
+• Посадок: ${Number(rep?.jail_entries || 0)}
+• Всего отсидел: ${formatDurationLong(rep?.jail_time_ms_total || 0)}
+• Удачных побегов: ${Number(rep?.successful_escapes || 0)}
+• Неудачных побегов: ${Number(rep?.failed_escapes || 0)}
+
+🕵️ Преступления:
+• Успешных ограблений: ${Number(rep?.successful_robberies || 0)}
+• Провальных ограблений: ${Number(rep?.failed_robberies || 0)}
+• Успешных взломов банкомата: ${Number(rep?.successful_atm_hacks || 0)}
+• Провальных взломов банкомата: ${Number(rep?.failed_atm_hacks || 0)}
+• Успешных ограблений ювелирки: ${Number(rep?.successful_jewelry_heists || 0)}
+• Провальных ограблений ювелирки: ${Number(rep?.failed_jewelry_heists || 0)}
+• Успешных ограблений банка: ${Number(rep?.successful_bank_heists || 0)}
+• Провальных ограблений банка: ${Number(rep?.failed_bank_heists || 0)}
+• Успешных нападений на инкассацию: ${Number(rep?.successful_van_heists || 0)}
+• Провальных нападений на инкассацию: ${Number(rep?.failed_van_heists || 0)}
+
+⚖️ Действия в тюрьме:
+• Адвокат: ${Number(rep?.lawyer_uses || 0)}
+• Подкуп охраны: ${Number(rep?.bribe_uses || 0)}
+• Молитвы: ${Number(rep?.prayers_count || 0)}`;
+}
+
+// =========================
+// INVENTORY / BLACK MARKET
+// =========================
+async function ensureInventoryRow(userId, itemKey) {
+  await pool.query(
+    `
+    INSERT INTO inventories (user_id, item_key, count, updated_at)
+    VALUES ($1, $2, 0, NOW())
+    ON CONFLICT (user_id, item_key) DO NOTHING
+    `,
+    [userId, itemKey]
+  );
+}
+
+async function getInventoryItem(userId, itemKey) {
+  await ensureInventoryRow(userId, itemKey);
+  const result = await pool.query(
+    `SELECT user_id, item_key, count, updated_at FROM inventories WHERE user_id = $1 AND item_key = $2 LIMIT 1`,
+    [userId, itemKey]
+  );
+  return result.rows[0] || null;
+}
+
+async function getFullInventory(userId) {
+  const result = await pool.query(
+    `
+    SELECT item_key, count, updated_at
+    FROM inventories
+    WHERE user_id = $1
+    ORDER BY item_key ASC
+    `,
+    [userId]
+  );
+
+  const byKey = {};
+  for (const row of result.rows) {
+    byKey[row.item_key] = Number(row.count || 0);
+  }
+
+  for (const key of Object.keys(ITEMS)) {
+    if (typeof byKey[key] === "undefined") byKey[key] = 0;
+  }
+
+  return byKey;
+}
+
+async function addItemToInventory(userId, itemKey, amount = 1) {
+  await ensureInventoryRow(userId, itemKey);
+  const result = await pool.query(
+    `
+    UPDATE inventories
+    SET count = count + $3,
+        updated_at = NOW()
+    WHERE user_id = $1 AND item_key = $2
+    RETURNING count
+    `,
+    [userId, itemKey, amount]
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+async function removeItemFromInventory(userId, itemKey, amount = 1) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+      INSERT INTO inventories (user_id, item_key, count, updated_at)
+      VALUES ($1, $2, 0, NOW())
+      ON CONFLICT (user_id, item_key) DO NOTHING
+      `,
+      [userId, itemKey]
+    );
+
+    const row = await client.query(
+      `SELECT count FROM inventories WHERE user_id = $1 AND item_key = $2 FOR UPDATE`,
+      [userId, itemKey]
+    );
+
+    const current = Number(row.rows[0]?.count || 0);
+    if (current < amount) {
+      await client.query("ROLLBACK");
+      return { ok: false, count: current };
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE inventories
+      SET count = count - $3,
+          updated_at = NOW()
+      WHERE user_id = $1 AND item_key = $2
+      RETURNING count
+      `,
+      [userId, itemKey, amount]
+    );
+
+    await client.query("COMMIT");
+    return { ok: true, count: Number(updated.rows[0]?.count || 0) };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function buyBlackMarketItem(userId, itemKey) {
+  const item = ITEMS[itemKey];
+  if (!item) throw new Error("BAD_ITEM");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO inventories (user_id, item_key, count, updated_at)
+      VALUES ($1, $2, 0, NOW())
+      ON CONFLICT (user_id, item_key) DO NOTHING
+      `,
+      [userId, itemKey]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const balance = Number(userRow.rows[0].balance || 0);
+    if (balance < item.price) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, item.price]
+    );
+
+    const itemRow = await client.query(
+      `
+      UPDATE inventories
+      SET count = count + 1,
+          updated_at = NOW()
+      WHERE user_id = $1 AND item_key = $2
+      RETURNING count
+      `,
+      [userId, itemKey]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      itemCount: Number(itemRow.rows[0]?.count || 0),
+      balance: Number(updatedUser.rows[0]?.balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function resolveItemKey(raw) {
+  const normalized = normalizeText(raw).replace(/\s+/g, " ");
+  if (ITEM_ALIASES[normalized]) return ITEM_ALIASES[normalized];
+
+  const compact = normalized.replace(/\s+/g, "");
+  if (ITEM_ALIASES[compact]) return ITEM_ALIASES[compact];
+
+  return null;
+}
+
+// =========================
+// WANTED / LAY LOW
+// =========================
+function getWantedStatusText(level) {
+  const val = Number(level || 0);
+  if (val <= 0) return "чист";
+  if (val === 1) return "подозреваемый";
+  if (val === 2) return "заметный преступник";
+  if (val === 3) return "опасный преступник";
+  if (val === 4) return "очень опасный";
+  return "максимальный розыск";
+}
+
+function getWantedEffectText(level) {
+  const val = Number(level || 0);
+  if (val <= 0) return "• полиция почти не реагирует";
+  if (val === 1) return "• полиция иногда реагирует\n• шанс штрафа выше";
+  if (val === 2) return "• полиция чаще реагирует\n• штрафы выше\n• криминал опаснее";
+  if (val === 3) return "• высокий шанс ареста\n• банк и инкассация очень опасны";
+  if (val === 4) return "• полиция почти всегда рядом\n• провалы и тюрьма вероятнее";
+  return "• почти любое преступление может закончиться арестом";
+}
+
+async function ensureWantedRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO wanted_status (user_id, level, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getWantedRow(userId) {
+  const result = await pool.query(
+    `SELECT user_id, level, updated_at FROM wanted_status WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function changeWantedLevel(userId, diff) {
+  await ensureWantedRow(userId);
+
+  const row = await getWantedRow(userId);
+  const current = Number(row?.level || 0);
+  const updated = clamp(current + Number(diff || 0), 0, MAX_WANTED_LEVEL);
+
+  const result = await pool.query(
+    `
+    UPDATE wanted_status
+    SET level = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING user_id, level, updated_at
+    `,
+    [userId, updated]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function setWantedLevel(userId, level) {
+  await ensureWantedRow(userId);
+
+  const result = await pool.query(
+    `
+    UPDATE wanted_status
+    SET level = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING user_id, level, updated_at
+    `,
+    [userId, clamp(Number(level || 0), 0, MAX_WANTED_LEVEL)]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function ensureLayLowRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO lay_low_status (user_id, until_at, last_reduce_at, created_at, updated_at, is_active)
+    VALUES ($1, NOW(), NOW(), NOW(), NOW(), FALSE)
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getLayLowStatus(userId) {
+  await ensureLayLowRow(userId);
+
+  const result = await pool.query(
+    `
+    SELECT user_id, until_at, last_reduce_at, created_at, updated_at, is_active
+    FROM lay_low_status
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  const row = result.rows[0] || null;
+  if (!row) return null;
+
+  if (row.is_active && new Date(row.until_at).getTime() <= Date.now()) {
+    await deactivateLayLow(userId);
+    return { ...row, is_active: false };
+  }
+
+  return row;
+}
+
+async function activateLayLow(userId) {
+  await ensureLayLowRow(userId);
+
+  const result = await pool.query(
+    `
+    UPDATE lay_low_status
+    SET until_at = NOW() + ($2 || ' milliseconds')::interval,
+        last_reduce_at = NOW(),
+        updated_at = NOW(),
+        created_at = NOW(),
+        is_active = TRUE
+    WHERE user_id = $1
+    RETURNING user_id, until_at, last_reduce_at, created_at, updated_at, is_active
+    `,
+    [userId, String(LAY_LOW_DURATION_MS)]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deactivateLayLow(userId) {
+  await ensureLayLowRow(userId);
+
+  const result = await pool.query(
+    `
+    UPDATE lay_low_status
+    SET is_active = FALSE,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING user_id, until_at, last_reduce_at, created_at, updated_at, is_active
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getLayLowBlockText(userId) {
+  const status = await getLayLowStatus(userId);
+  if (!status || !status.is_active) return null;
+
+  const remain = new Date(status.until_at).getTime() - Date.now();
+  return `❌ Ты сейчас залёг на дно.\n⏳ Осталось: ${formatRemainingTime(remain)}\nПока скрытность активна, преступления запрещены.`;
+}
+
+async function processLayLowReductions() {
+  const result = await pool.query(`
+    SELECT user_id, until_at, last_reduce_at, is_active
+    FROM lay_low_status
+    WHERE is_active = TRUE
+  `);
+
+  for (const row of result.rows) {
+    const userId = Number(row.user_id);
+    const untilMs = new Date(row.until_at).getTime();
+    const lastReduceMs = row.last_reduce_at ? new Date(row.last_reduce_at).getTime() : Date.now();
+    const now = Date.now();
+
+    if (untilMs <= now) {
+      await deactivateLayLow(userId);
+      continue;
+    }
+
+    const steps = Math.floor((now - lastReduceMs) / LAY_LOW_REDUCE_STEP_MS);
+    if (steps <= 0) continue;
+
+    const wanted = await getWantedRow(userId);
+    const currentWanted = Number(wanted?.level || 0);
+    const newWanted = Math.max(0, currentWanted - steps);
+
+    await pool.query(
+      `
+      UPDATE wanted_status
+      SET level = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+      `,
+      [userId, newWanted]
+    );
+
+    const newLastReduce = new Date(lastReduceMs + steps * LAY_LOW_REDUCE_STEP_MS);
+
+    await pool.query(
+      `
+      UPDATE lay_low_status
+      SET last_reduce_at = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+      `,
+      [userId, newLastReduce.toISOString()]
+    );
+  }
+}
+
+async function processPassiveWantedDecay() {
+  const result = await pool.query(`
+    SELECT w.user_id, w.level, w.updated_at, COALESCE(l.is_active, FALSE) AS lay_low_active
+    FROM wanted_status w
+    LEFT JOIN lay_low_status l ON l.user_id = w.user_id
+    WHERE w.level > 0
+  `);
+
+  for (const row of result.rows) {
+    const userId = Number(row.user_id);
+    const isLayLow = row.lay_low_active === true || row.lay_low_active === "t";
+    if (isLayLow) continue;
+
+    const updatedMs = row.updated_at ? new Date(row.updated_at).getTime() : Date.now();
+    const now = Date.now();
+    const steps = Math.floor((now - updatedMs) / WANTED_PASSIVE_DECAY_MS);
+
+    if (steps <= 0) continue;
+
+    const currentWanted = Number(row.level || 0);
+    const newWanted = Math.max(0, currentWanted - steps);
+
+    await pool.query(
+      `
+      UPDATE wanted_status
+      SET level = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+      `,
+      [userId, newWanted]
+    );
+  }
+}
+
+// =========================
+// SHIELDS
+// =========================
+async function ensureShieldRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO user_shields (user_id, count, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getShieldRow(userId) {
+  await ensureShieldRow(userId);
+
+  const result = await pool.query(
+    `SELECT user_id, count, updated_at FROM user_shields WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function buyShield(userId) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO user_shields (user_id, count, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (user_id) DO NOTHING
+      `,
+      [userId]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    const shieldRow = await client.query(
+      `SELECT count FROM user_shields WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const currentBalance = Number(userRow.rows[0].balance || 0);
+    const currentShields = Number(shieldRow.rows[0]?.count || 0);
+
+    if (currentShields >= MAX_SHIELDS) throw new Error("MAX_SHIELDS_REACHED");
+    if (currentBalance < SHIELD_COST) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, SHIELD_COST]
+    );
+
+    const updatedShield = await client.query(
+      `
+      UPDATE user_shields
+      SET count = count + 1,
+          updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING count, updated_at
+      `,
+      [userId]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      shieldCount: Number(updatedShield.rows[0].count || 0),
+      updatedAt: updatedShield.rows[0].updated_at,
+      userBalance: Number(updatedUser.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function useShieldOnce(userId) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO user_shields (user_id, count, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (user_id) DO NOTHING
+      `,
+      [userId]
+    );
+
+    const row = await client.query(
+      `SELECT count FROM user_shields WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    const current = Number(row.rows[0]?.count || 0);
+    if (current <= 0) {
+      await client.query("ROLLBACK");
+      return { used: false, count: 0 };
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE user_shields
+      SET count = count - 1,
+          updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING count
+      `,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      used: true,
+      count: Number(updated.rows[0]?.count || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function clampAllShieldsToMax() {
+  await pool.query(
+    `UPDATE user_shields SET count = $1, updated_at = NOW() WHERE count > $1`,
+    [MAX_SHIELDS]
+  );
+}
+
+// =========================
+// MARRIAGE / FAMILY
+// =========================
+async function getActiveMarriageByUserId(userId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM marriages
+    WHERE is_active = TRUE
+      AND (user1_id = $1 OR user2_id = $1)
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function isUserMarried(userId) {
+  return !!(await getActiveMarriageByUserId(userId));
+}
+
+async function createMarriage(user1Id, user2Id) {
+  const smaller = Math.min(Number(user1Id), Number(user2Id));
+  const bigger = Math.max(Number(user1Id), Number(user2Id));
+
+  const result = await pool.query(
+    `
+    INSERT INTO marriages (user1_id, user2_id, is_active)
+    VALUES ($1, $2, TRUE)
+    RETURNING *
+    `,
+    [smaller, bigger]
+  );
+
+  return result.rows[0];
+}
+
+async function divorceMarriageByUserId(userId) {
+  const result = await pool.query(
+    `
+    UPDATE marriages
+    SET is_active = FALSE
+    WHERE is_active = TRUE
+      AND (user1_id = $1 OR user2_id = $1)
+    RETURNING *
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getMarriagePartner(userId) {
+  const marriage = await getActiveMarriageByUserId(userId);
+  if (!marriage) return null;
+
+  const partnerId =
+    Number(marriage.user1_id) === Number(userId)
+      ? Number(marriage.user2_id)
+      : Number(marriage.user1_id);
+
+  return { marriage, partnerId };
+}
+
+async function isSpouse(userId, targetUserId) {
+  const marriage = await getActiveMarriageByUserId(userId);
+  if (!marriage) return false;
+
+  return (
+    Number(marriage.user1_id) === Number(targetUserId) ||
+    Number(marriage.user2_id) === Number(targetUserId)
+  );
+}
+
+async function getActiveAdoptionByChildId(childUserId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM adoptions
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getChildrenByParentIds(parentIds) {
+  if (!parentIds.length) return [];
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM adoptions
+    WHERE is_active = TRUE
+      AND parent_user_id = ANY($1::bigint[])
+    ORDER BY created_at ASC
+    `,
+    [parentIds]
+  );
+
+  return result.rows;
+}
+
+async function getFamilyParentIds(userId) {
+  const marriagePartner = await getMarriagePartner(userId);
+  if (!marriagePartner) return [Number(userId)];
+  return [Number(userId), Number(marriagePartner.partnerId)];
+}
+
+async function getFamilyChildrenCount(userId) {
+  const parentIds = await getFamilyParentIds(userId);
+  const children = await getChildrenByParentIds(parentIds);
+  return children.length;
+}
+
+async function createAdoption(parentUserId, childUserId) {
+  const existingActive = await getActiveAdoptionByChildId(childUserId);
+  if (existingActive) return { ok: false, reason: "already_adopted" };
+
+  const familyParentIds = await getFamilyParentIds(parentUserId);
+  const mainParentId = Number(familyParentIds[0]);
+
+  const existingAny = await pool.query(
+    `SELECT * FROM adoptions WHERE child_user_id = $1 LIMIT 1`,
+    [childUserId]
+  );
+
+  if (existingAny.rows[0]) {
+    const updated = await pool.query(
+      `
+      UPDATE adoptions
+      SET parent_user_id = $1,
+          is_active = TRUE,
+          created_at = NOW()
+      WHERE child_user_id = $2
+      RETURNING *
+      `,
+      [mainParentId, childUserId]
+    );
+
+    return { ok: true, adoption: updated.rows[0] };
+  }
+
+  const inserted = await pool.query(
+    `
+    INSERT INTO adoptions (parent_user_id, child_user_id, is_active)
+    VALUES ($1, $2, TRUE)
+    RETURNING *
+    `,
+    [mainParentId, childUserId]
+  );
+
+  return { ok: true, adoption: inserted.rows[0] };
+}
+
+async function removeChildFromParent(parentUserId, childUserId) {
+  const parentIds = await getFamilyParentIds(parentUserId);
+
+  const result = await pool.query(
+    `
+    UPDATE adoptions
+    SET is_active = FALSE
+    WHERE parent_user_id = ANY($1::bigint[])
+      AND child_user_id = $2
+      AND is_active = TRUE
+    RETURNING *
+    `,
+    [parentIds, childUserId]
+  );
+
+  for (const pid of parentIds) {
+    await removeFavoriteIfMatches(Number(pid), childUserId);
+  }
+
+  return result.rows[0] || null;
+}
+
+async function childEscapeFamily(childUserId) {
+  const existing = await getActiveAdoptionByChildId(childUserId);
+
+  const result = await pool.query(
+    `
+    UPDATE adoptions
+    SET is_active = FALSE
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+    RETURNING *
+    `,
+    [childUserId]
+  );
+
+  if (existing?.parent_user_id) {
+    const parentIds = await getFamilyParentIds(Number(existing.parent_user_id));
+    for (const pid of parentIds) {
+      await removeFavoriteIfMatches(Number(pid), childUserId);
+    }
+  }
+
+  return result.rows[0] || null;
+}
+
+async function isChildInMyFamily(parentUserId, childUserId) {
+  const parentIds = await getFamilyParentIds(parentUserId);
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM adoptions
+    WHERE parent_user_id = ANY($1::bigint[])
+      AND child_user_id = $2
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [parentIds, childUserId]
+  );
+
+  return !!result.rows[0];
+}
+
+async function assertChildInMyFamily(parentUserId, childUserId) {
+  const isChild = await isChildInMyFamily(parentUserId, childUserId);
+  if (!isChild) {
+    return {
+      ok: false,
+      text: "❌ Это не ваш ребёнок. Ответь на сообщение именно своего ребёнка."
+    };
+  }
+  return { ok: true };
+}
+
+async function setFavoriteChild(parentUserId, childUserId) {
+  const result = await pool.query(
+    `
+    INSERT INTO favorite_children (parent_user_id, child_user_id)
+    VALUES ($1, $2)
+    ON CONFLICT (parent_user_id)
+    DO UPDATE SET
+      child_user_id = EXCLUDED.child_user_id,
+      created_at = NOW()
+    RETURNING *
+    `,
+    [parentUserId, childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function removeFavoriteChild(parentUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM favorite_children
+    WHERE parent_user_id = $1
+    RETURNING *
+    `,
+    [parentUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getFavoriteChild(parentUserId) {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM favorite_children
+    WHERE parent_user_id = $1
+    LIMIT 1
+    `,
+    [parentUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function removeFavoriteIfMatches(parentUserId, childUserId) {
+  await pool.query(
+    `DELETE FROM favorite_children WHERE parent_user_id = $1 AND child_user_id = $2`,
+    [parentUserId, childUserId]
+  );
+}
+
+async function isUserChild(userId) {
+  return !!(await getActiveAdoptionByChildId(userId));
+}
+
+async function canAdoptUser(parentUserId, targetUserId) {
+  if (Number(parentUserId) === Number(targetUserId)) {
+    return { ok: false, text: "❌ Нельзя усыновить самого себя." };
+  }
+
+  const parentMarriage = await getMarriagePartner(parentUserId);
+  if (!parentMarriage) {
+    return { ok: false, text: "❌ Усыновлять ребёнка могут только люди в браке." };
+  }
+
+  const parentIsChild = await isUserChild(parentUserId);
+  if (parentIsChild) {
+    return { ok: false, text: "❌ Ребёнок не может усыновлять других игроков." };
+  }
+
+  const targetIsSpouse = await isSpouse(parentUserId, targetUserId);
+  if (targetIsSpouse) {
+    return { ok: false, text: "❌ Нельзя усыновить своего супруга(у)." };
+  }
+
+  const targetMarriage = await getMarriagePartner(targetUserId);
+  if (targetMarriage) {
+    return { ok: false, text: "❌ Нельзя усыновить игрока, который состоит в браке." };
+  }
+
+  const activeAdoption = await getActiveAdoptionByChildId(targetUserId);
+  if (activeAdoption) {
+    return { ok: false, text: "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка." };
+  }
+
+  const childrenCount = await getFamilyChildrenCount(parentUserId);
+  if (childrenCount >= MAX_CHILDREN_PER_FAMILY) {
+    return { ok: false, text: `❌ В семье уже максимум ${MAX_CHILDREN_PER_FAMILY} ребёнка(детей).` };
+  }
+
+  return { ok: true };
+}
+
+// =========================
+// COUPLE STATE
+// =========================
+async function ensureCoupleState(user1Id, user2Id) {
+  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
+  const ids = [Number(user1Id), Number(user2Id)].sort((a, b) => a - b);
+
+  await pool.query(
+    `
+    INSERT INTO couple_states (couple_key, user1_id, user2_id, jealousy, updated_at)
+    VALUES ($1, $2, $3, 0, NOW())
+    ON CONFLICT (couple_key) DO NOTHING
+    `,
+    [coupleKey, ids[0], ids[1]]
+  );
+
+  return coupleKey;
+}
+
+async function getCoupleState(user1Id, user2Id) {
+  const coupleKey = await ensureCoupleState(user1Id, user2Id);
+
+  const result = await pool.query(
+    `
+    SELECT couple_key, user1_id, user2_id, jealousy, updated_at
+    FROM couple_states
+    WHERE couple_key = $1
+    LIMIT 1
+    `,
+    [coupleKey]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function changeCoupleJealousy(user1Id, user2Id, diff) {
+  const state = await getCoupleState(user1Id, user2Id);
+  const current = Number(state?.jealousy || 0);
+  const updatedValue = clamp(current + Number(diff || 0), 0, 100);
+  const coupleKey = getCoupleKeyByUserIds(user1Id, user2Id);
+
+  const result = await pool.query(
+    `
+    UPDATE couple_states
+    SET jealousy = $2,
+        updated_at = NOW()
+    WHERE couple_key = $1
+    RETURNING couple_key, user1_id, user2_id, jealousy, updated_at
+    `,
+    [coupleKey, updatedValue]
+  );
+
+  return result.rows[0] || null;
+}
+
+// =========================
+// PUNISHMENTS / GOOD DEEDS
+// =========================
+async function cleanupExpiredPunishments() {
+  await pool.query(`
+    UPDATE child_punishments
+    SET is_active = FALSE
+    WHERE is_active = TRUE
+      AND until_at <= NOW()
+  `);
+}
+
+async function getActivePunishment(childUserId) {
+  await cleanupExpiredPunishments();
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM child_punishments
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+      AND until_at > NOW()
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function setPunishment(parentUserId, childUserId, days) {
+  const result = await pool.query(
+    `
+    INSERT INTO child_punishments (
+      child_user_id,
+      punished_by_user_id,
+      until_at,
+      created_at,
+      is_active
+    )
+    VALUES ($1, $2, NOW() + ($3 || ' days')::interval, NOW(), TRUE)
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET
+      punished_by_user_id = EXCLUDED.punished_by_user_id,
+      until_at = EXCLUDED.until_at,
+      created_at = NOW(),
+      is_active = TRUE
+    RETURNING *
+    `,
+    [childUserId, parentUserId, String(days)]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function removePunishment(childUserId) {
+  const result = await pool.query(
+    `
+    UPDATE child_punishments
+    SET is_active = FALSE
+    WHERE child_user_id = $1
+      AND is_active = TRUE
+    RETURNING *
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getPunishedBlockText(childUserId) {
+  const punishment = await getActivePunishment(childUserId);
+  if (!punishment) return null;
+
+  const remaining = new Date(punishment.until_at).getTime() - Date.now();
+  return `❌ Ребёнок сейчас наказан(а).\n⏳ Осталось: ${formatRemainingTime(remaining)}`;
+}
+
+async function ensureChildObedience(childUserId) {
+  await pool.query(
+    `
+    INSERT INTO child_obedience (child_user_id, value, updated_at)
+    VALUES ($1, 50, NOW())
+    ON CONFLICT (child_user_id) DO NOTHING
+    `,
+    [childUserId]
+  );
+}
+
+async function getChildObedience(childUserId) {
+  await ensureChildObedience(childUserId);
+
+  const result = await pool.query(
+    `
+    SELECT child_user_id, value, updated_at
+    FROM child_obedience
+    WHERE child_user_id = $1
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function changeChildObedience(childUserId, diff) {
+  await ensureChildObedience(childUserId);
+
+  const current = await getChildObedience(childUserId);
+  const currentValue = Number(current?.value || 50);
+  const newValue = clamp(currentValue + Number(diff || 0), 0, 100);
+
+  const result = await pool.query(
+    `
+    UPDATE child_obedience
+    SET value = $2,
+        updated_at = NOW()
+    WHERE child_user_id = $1
+    RETURNING child_user_id, value, updated_at
+    `,
+    [childUserId, newValue]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function addGoodDeed(parentUserId, childUserId, deedText) {
+  const cleaned = String(deedText || "").trim();
+  const result = await pool.query(
+    `
+    INSERT INTO child_good_deeds (child_user_id, added_by_user_id, deed_text)
+    VALUES ($1, $2, $3)
+    RETURNING *
+    `,
+    [childUserId, parentUserId, cleaned]
+  );
+  return result.rows[0] || null;
+}
+
+async function getGoodDeeds(childUserId) {
+  const result = await pool.query(
+    `
+    SELECT id, child_user_id, added_by_user_id, deed_text, created_at
+    FROM child_good_deeds
+    WHERE child_user_id = $1
+    ORDER BY created_at ASC, id ASC
+    `,
+    [childUserId]
+  );
+  return result.rows;
+}
+
+async function deleteGoodDeedByIndex(childUserId, index) {
+  const deeds = await getGoodDeeds(childUserId);
+  if (!deeds[index - 1]) return null;
+
+  const deedId = Number(deeds[index - 1].id);
+
+  const result = await pool.query(
+    `
+    DELETE FROM child_good_deeds
+    WHERE id = $1 AND child_user_id = $2
+    RETURNING *
+    `,
+    [deedId, childUserId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function clearGoodDeeds(childUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM child_good_deeds
+    WHERE child_user_id = $1
+    RETURNING id
+    `,
+    [childUserId]
+  );
+  return result.rowCount || 0;
+}
+
+// =========================
+// FAMILY MONEY / PIGGY / DREAMS
+// =========================
+async function getFamilyKeyByUserId(userId) {
+  const childInfo = await getActiveAdoptionByChildId(userId);
+
+  if (childInfo) {
+    const parentId = Number(childInfo.parent_user_id);
+    const partnerInfo = await getMarriagePartner(parentId);
+
+    if (partnerInfo) {
+      const ids = [parentId, Number(partnerInfo.partnerId)].sort((a, b) => a - b);
+      return `married:${ids[0]}:${ids[1]}`;
+    }
+
+    return `single:${parentId}`;
+  }
+
+  const marriageInfo = await getMarriagePartner(userId);
+  if (marriageInfo) {
+    const ids = [Number(userId), Number(marriageInfo.partnerId)].sort((a, b) => a - b);
+    return `married:${ids[0]}:${ids[1]}`;
+  }
+
+  return null;
+}
+
+async function getFamilyBudget(userId) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) return null;
+
+  await pool.query(
+    `
+    INSERT INTO family_budgets (family_key, balance, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (family_key) DO NOTHING
+    `,
+    [familyKey]
+  );
+
+  const result = await pool.query(
+    `SELECT family_key, balance, updated_at FROM family_budgets WHERE family_key = $1 LIMIT 1`,
+    [familyKey]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function addToFamilyBudget(userId, amount) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) throw new Error("NO_FAMILY");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO family_budgets (family_key, balance, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (family_key) DO NOTHING
+      `,
+      [familyKey]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const currentBalance = Number(userRow.rows[0].balance || 0);
+    if (currentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, amount]
+    );
+
+    const familyBudgetRow = await client.query(
+      `
+      UPDATE family_budgets
+      SET balance = balance + $2,
+          updated_at = NOW()
+      WHERE family_key = $1
+      RETURNING balance, updated_at
+      `,
+      [familyKey, amount]
+    );
+
+    const updatedUserRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      familyKey,
+      familyBalance: Number(familyBudgetRow.rows[0].balance || 0),
+      userBalance: Number(updatedUserRow.rows[0].balance || 0),
+      updatedAt: familyBudgetRow.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function takeFromFamilyBudget(userId, amount) {
+  const familyKey = await getFamilyKeyByUserId(userId);
+  if (!familyKey) throw new Error("NO_FAMILY");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO family_budgets (family_key, balance, updated_at)
+      VALUES ($1, 0, NOW())
+      ON CONFLICT (family_key) DO NOTHING
+      `,
+      [familyKey]
+    );
+
+    const budgetRow = await client.query(
+      `SELECT balance FROM family_budgets WHERE family_key = $1 FOR UPDATE`,
+      [familyKey]
+    );
+
+    if (!budgetRow.rows[0]) throw new Error("BUDGET_NOT_FOUND");
+
+    const currentBudget = Number(budgetRow.rows[0].balance || 0);
+    if (currentBudget < amount) throw new Error("NOT_ENOUGH_FAMILY_MONEY");
+
+    await client.query(
+      `
+      UPDATE family_budgets
+      SET balance = balance - $2,
+          updated_at = NOW()
+      WHERE family_key = $1
+      `,
+      [familyKey, amount]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const updatedUser = await client.query(
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
+      [userId, amount]
+    );
+
+    const updatedBudget = await client.query(
+      `SELECT balance, updated_at FROM family_budgets WHERE family_key = $1`,
+      [familyKey]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      familyKey,
+      familyBalance: Number(updatedBudget.rows[0].balance || 0),
+      userBalance: Number(updatedUser.rows[0].balance || 0),
+      updatedAt: updatedBudget.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function getPiggyBank(childUserId) {
+  const result = await pool.query(
+    `SELECT child_user_id, balance, updated_at FROM piggy_banks WHERE child_user_id = $1 LIMIT 1`,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function createPiggyBank(childUserId) {
+  const result = await pool.query(
+    `
+    INSERT INTO piggy_banks (child_user_id, balance, updated_at)
+    VALUES ($1, 0, NOW())
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET updated_at = piggy_banks.updated_at
+    RETURNING child_user_id, balance, updated_at
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function addToPiggyBank(childUserId, amount) {
+  const existing = await getPiggyBank(childUserId);
+  if (!existing) throw new Error("NO_PIGGY_BANK");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [childUserId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const userBalance = Number(userRow.rows[0].balance || 0);
+    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [childUserId, amount]
+    );
+
+    const piggy = await client.query(
+      `
+      UPDATE piggy_banks
+      SET balance = balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      piggyBalance: Number(piggy.rows[0].balance || 0),
+      userBalance: Number(updatedUser.rows[0].balance || 0),
+      updatedAt: piggy.rows[0].updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function breakPiggyBank(childUserId) {
+  const existing = await getPiggyBank(childUserId);
+  if (!existing) throw new Error("NO_PIGGY_BANK");
+
+  const amount = Number(existing.balance || 0);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    if (amount > 0) {
+      await client.query(
+        `UPDATE users SET balance = balance + $2 WHERE user_id = $1`,
+        [childUserId, amount]
+      );
+    }
+
+    await client.query(
+      `
+      UPDATE piggy_banks
+      SET balance = 0,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      `,
+      [childUserId]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    const piggy = await client.query(
+      `SELECT balance, updated_at FROM piggy_banks WHERE child_user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      taken: amount,
+      userBalance: Number(updatedUser.rows[0]?.balance || 0),
+      piggyBalance: Number(piggy.rows[0]?.balance || 0),
+      updatedAt: piggy.rows[0]?.updated_at
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function getChildDream(childUserId) {
+  const result = await pool.query(
+    `
+    SELECT child_user_id, dream_text, dream_balance, created_at, updated_at
+    FROM child_dreams
+    WHERE child_user_id = $1
+    LIMIT 1
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function setChildDream(childUserId, dreamText) {
+  const cleaned = String(dreamText || "").trim();
+
+  const result = await pool.query(
+    `
+    INSERT INTO child_dreams (child_user_id, dream_text, dream_balance, created_at, updated_at)
+    VALUES ($1, $2, 0, NOW(), NOW())
+    ON CONFLICT (child_user_id)
+    DO UPDATE SET
+      dream_text = EXCLUDED.dream_text,
+      updated_at = NOW()
+    RETURNING child_user_id, dream_text, dream_balance, created_at, updated_at
+    `,
+    [childUserId, cleaned]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deleteChildDream(childUserId) {
+  const result = await pool.query(
+    `
+    DELETE FROM child_dreams
+    WHERE child_user_id = $1
+    RETURNING child_user_id, dream_balance
+    `,
+    [childUserId]
+  );
+  return result.rows[0] || null;
+}
+
+async function addSelfMoneyToDream(childUserId, amount) {
+  const dream = await getChildDream(childUserId);
+  if (!dream) throw new Error("NO_DREAM");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [childUserId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const userBalance = Number(userRow.rows[0].balance || 0);
+    if (userBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [childUserId, amount]
+    );
+
+    const dreamRow = await client.query(
+      `
+      UPDATE child_dreams
+      SET dream_balance = dream_balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING dream_text, dream_balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [childUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      dreamText: dreamRow.rows[0].dream_text,
+      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
+      updatedAt: dreamRow.rows[0].updated_at,
+      userBalance: Number(updatedUser.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function addParentMoneyToDream(parentUserId, childUserId, amount) {
+  const dream = await getChildDream(childUserId);
+  if (!dream) throw new Error("NO_DREAM");
+
+  const childCheck = await assertChildInMyFamily(parentUserId, childUserId);
+  if (!childCheck.ok) throw new Error("NOT_MY_CHILD");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const parentRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [parentUserId]
+    );
+
+    if (!parentRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const parentBalance = Number(parentRow.rows[0].balance || 0);
+    if (parentBalance < amount) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [parentUserId, amount]
+    );
+
+    const dreamRow = await client.query(
+      `
+      UPDATE child_dreams
+      SET dream_balance = dream_balance + $2,
+          updated_at = NOW()
+      WHERE child_user_id = $1
+      RETURNING dream_text, dream_balance, updated_at
+      `,
+      [childUserId, amount]
+    );
+
+    const updatedParent = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [parentUserId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      dreamText: dreamRow.rows[0].dream_text,
+      dreamBalance: Number(dreamRow.rows[0].dream_balance || 0),
+      updatedAt: dreamRow.rows[0].updated_at,
+      parentBalance: Number(updatedParent.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// =========================
+// JAIL
+// =========================
+async function cleanupExpiredJail() {
+  await pool.query(`
+    DELETE FROM police_jail
+    WHERE until_at <= NOW()
+  `);
+}
+
+async function getJailStatus(userId) {
+  await cleanupExpiredJail();
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM police_jail
+    WHERE user_id = $1
+      AND until_at > NOW()
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
+  await incrementReputationField(userId, "jail_entries", 1);
+  await addJailTimeToReputation(userId, ms);
+
+  const result = await pool.query(
+    `
+    INSERT INTO police_jail (user_id, until_at, created_at, updated_at)
+    VALUES ($1, NOW() + ($2 || ' milliseconds')::interval, NOW(), NOW())
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      until_at = EXCLUDED.until_at,
+      updated_at = NOW()
+    RETURNING *
+    `,
+    [userId, String(ms)]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function extendJailTime(userId, ms) {
+  await addJailTimeToReputation(userId, ms);
+
+  const result = await pool.query(
+    `
+    UPDATE police_jail
+    SET until_at = until_at + ($2 || ' milliseconds')::interval,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING *
+    `,
+    [userId, String(ms)]
+  );
+  return result.rows[0] || null;
+}
+
+async function reduceJailTime(userId, ms) {
+  const jail = await getJailStatus(userId);
+  if (!jail) return null;
+
+  const currentUntil = new Date(jail.until_at).getTime();
+  const now = Date.now();
+  const newUntil = new Date(Math.max(now + 1000, currentUntil - ms));
+
+  const result = await pool.query(
+    `
+    UPDATE police_jail
+    SET until_at = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING *
+    `,
+    [userId, newUntil.toISOString()]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function removeUserFromJail(userId) {
+  const result = await pool.query(
+    `
+    DELETE FROM police_jail
+    WHERE user_id = $1
+    RETURNING *
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getJailBlockText(userId) {
+  const jail = await getJailStatus(userId);
+  if (!jail) return null;
+
+  const remainingMs = new Date(jail.until_at).getTime() - Date.now();
+  return `🚔 Ты сейчас в тюрьме.\n⏳ До освобождения: ${formatRemainingTime(remainingMs)}`;
+}
+
+async function ensureJailActionRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO jail_actions (user_id, updated_at)
+    VALUES ($1, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getJailActionRow(userId) {
+  await ensureJailActionRow(userId);
+  const result = await pool.query(
+    `
+    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, last_pray_at, updated_at
+    FROM jail_actions
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function setJailActionUsed(userId, actionField) {
+  const allowed = ["last_escape_at", "last_lawyer_at", "last_bribe_at", "last_pray_at"];
+  if (!allowed.includes(actionField)) return;
+
+  await ensureJailActionRow(userId);
+  await pool.query(
+    `
+    UPDATE jail_actions
+    SET ${actionField} = NOW(),
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId]
+  );
+}
+
+function getActionRemaining(lastAt, cooldownMs) {
+  if (!lastAt) return 0;
+  const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+  const diff = nextTime.getTime() - Date.now();
+  return diff > 0 ? diff : 0;
+}
+
+function getRandomPoliceOutcome(wantedLevel = 0) {
+  const wanted = Number(wantedLevel || 0);
+  const roll = Math.random();
+
+  const noneBorder = Math.max(0.06, 0.42 - wanted * 0.08);
+  const fineBorder = Math.max(noneBorder + 0.12, 0.78 - wanted * 0.05);
+  const returnBorder = Math.max(fineBorder + 0.05, 0.89 - wanted * 0.03);
+
+  if (roll < noneBorder) return { type: "none" };
+  if (roll < fineBorder) return { type: "fine", amount: Math.floor(Math.random() * 8) + 4 + wanted * 2 };
+  if (roll < returnBorder) return { type: "return" };
+  return { type: "jail" };
+}
+
+function getRandomEscapeOutcome(wantedLevel = 0, hasArmor = false, hasPassport = false) {
+  const wanted = Number(wantedLevel || 0);
+
+  let successChance = 0.50;
+  successChance -= wanted * 0.04;
+  if (hasArmor) successChance += 0.03;
+  if (hasPassport) successChance += 0.03;
+
+  successChance = clamp(successChance, 0.35, 0.60);
+
+  const roll = Math.random();
+
+  if (roll < successChance) {
+    return { type: "success" };
+  }
+
+  if (roll < successChance + 0.30) {
+    return { type: "fail" };
+  }
+
+  return { type: "caught_more_time", extraMs: 20 * 60 * 1000 };
+}
+
+function getRandomLawyerOutcome() {
+  const roll = Math.random();
+
+  if (roll < 0.20) return { type: "free" };
+  if (roll < 0.75) return { type: "reduce", reduceMs: (15 + Math.floor(Math.random() * 21)) * 60 * 1000 };
+  return { type: "fail" };
+}
+
+function getRandomBribeOutcome(wantedLevel = 0, hasPassport = false) {
+  const wanted = Number(wantedLevel || 0);
+
+  let freeChance = 0.38;
+  freeChance -= wanted * 0.04;
+  if (hasPassport) freeChance += 0.04;
+
+  freeChance = clamp(freeChance, 0.20, 0.50);
+
+  const roll = Math.random();
+
+  if (roll < freeChance) return { type: "free" };
+  if (roll < freeChance + 0.35) return { type: "fail" };
+  return { type: "caught_more_time", extraMs: 25 * 60 * 1000 };
 }
 
 // =========================
 // GAME COOLDOWNS
 // =========================
 async function updateCooldownColumnNow(userId, column) {
+  // Если владелец, не обновляем кулдаун
   if (isOwner(userId)) return;
   await pool.query(`UPDATE users SET ${column} = NOW() WHERE user_id = $1`, [userId]);
 }
@@ -822,7 +3354,7 @@ function isOwner(userId) {
 }
 
 async function getGenericCooldown(userId, column, cooldownMs) {
-  if (isOwner(userId)) return 0;
+  if (isOwner(userId)) return 0; // владелец всегда может играть
 
   const result = await pool.query(
     `SELECT ${column} AS value FROM users WHERE user_id = $1`,
@@ -920,33 +3452,1022 @@ async function getCooldownText(userId) {
 🚚 Инкассация: ${getRemaining(stats.last_van_heist_at, VAN_HEIST_COOLDOWN_MS)}
 💎 Ювелирка: ${getRemaining(stats.last_jewelry_at, JEWELRY_HEIST_COOLDOWN_MS)}
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
-⚽ Футбол: ${getRemaining(stats.last_football_at, FOOTBALL_COOLDOWN_MS)}
 🎳 Боулинг: ${getRemaining(stats.last_bowling_at, BOWLING_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
 }
 
 // =========================
+// PROFILE
+// =========================
+async function getProfileText(user) {
+  await initUser(user);
+  const stats = await getUserStats(user.id);
+  const shield = await getShieldRow(user.id);
+  const levelInfo = getLevelInfoByXp(Number(stats.xp || 0));
+  const wanted = await getWantedRow(user.id);
+  const layLow = await getLayLowStatus(user.id);
+
+  const layLowText =
+    layLow && layLow.is_active
+      ? `✅ Да (${formatRemainingTime(new Date(layLow.until_at).getTime() - Date.now())})`
+      : "❌ Нет";
+
+  return `👤 Профиль пользователя
+
+Имя: ${getUserLink(user)}
+ID: ${user.id}
+
+💰 Монеты: ${stats.balance || 0}
+🤝 Респект: ${stats.respect || 0}
+🛡 Щиты: ${Number(shield?.count || 0)}/${MAX_SHIELDS}
+⭐ Уровень: ${Number(stats.level || 1)}
+🚨 Розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
+🕶 Скрытность: ${layLowText}
+
+📊 Статистика:
+💀 Убили: ${stats.kills}
+❤️ Обняли: ${stats.hugs}
+💋 Поцеловали: ${stats.kisses}
+👊 Ударили: ${stats.hits}
+😈 Укусили: ${stats.bites}
+🤲 Погладили: ${stats.pats}
+🦵 Пнули: ${stats.kicks}
+🖐 Шлёпнули: ${stats.slaps}
+🥊 Врезали: ${stats.punches}
+👅 Лизнули: ${stats.licks}
+🕵️ Обокрали: ${stats.steals}
+💸 Заскамили: ${stats.scams}
+☠️ Уничтожили: ${stats.destroys}
+⏰ Разбудили: ${stats.wakes}
+🧊 Заморозили: ${stats.freezes}
+🛡️ Спасли: ${stats.saves}
+❄️ Кинули снежок: ${stats.snowballs}
+
+🔥 Всего взаимодействий: ${stats.total}
+📈 Опыт: ${levelInfo.xp}${levelInfo.isMax ? " (макс)" : ` | до след. уровня: ${levelInfo.remaining}`}`;
+}
+
+async function sendProfile(chatId, targetUser, replyToMessageId = undefined) {
+  const text = await getProfileText(targetUser);
+
+  const sent = await bot.sendMessage(chatId, text, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_to_message_id: replyToMessageId
+  });
+
+  await saveProfileMessage(sent.message_id, targetUser.id);
+  return sent;
+}
+
+// =========================
+// REQUEST HELPERS
+// =========================
+function saveMarriageRequest(request) {
+  pendingMarriagesByRequestId[request.requestId] = request;
+  pendingMarriagesByUserKey[request.userKey] = request.requestId;
+}
+
+function deleteMarriageRequest(request) {
+  if (!request) return;
+  delete pendingMarriagesByRequestId[request.requestId];
+  delete pendingMarriagesByUserKey[request.userKey];
+}
+
+function findMarriageRequestByUser(chatId, userId) {
+  const requestId = pendingMarriagesByUserKey[`${chatId}:${userId}`];
+  if (!requestId) return null;
+  return pendingMarriagesByRequestId[requestId] || null;
+}
+
+function saveAdoptionRequest(request) {
+  pendingAdoptionsByRequestId[request.requestId] = request;
+  pendingAdoptionsByUserKey[request.userKey] = request.requestId;
+}
+
+function deleteAdoptionRequest(request) {
+  if (!request) return;
+  delete pendingAdoptionsByRequestId[request.requestId];
+  delete pendingAdoptionsByUserKey[request.userKey];
+}
+
+function findAdoptionRequestByUser(chatId, userId) {
+  const requestId = pendingAdoptionsByUserKey[`${chatId}:${userId}`];
+  if (!requestId) return null;
+  return pendingAdoptionsByRequestId[requestId] || null;
+}
+
+async function finalizeMarriageAccept(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (isRequestExpired(request.createdAt, MARRIAGE_REQUEST_MS)) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "⌛ Предложение брака устарело.");
+    return;
+  }
+
+  const senderMarried = await isUserMarried(request.fromUser.id);
+  const targetMarried = await isUserMarried(request.targetUser.id);
+
+  if (senderMarried || targetMarried) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "❌ Кто-то из вас уже состоит в браке.");
+    return;
+  }
+
+  const senderChildRole = await getActiveAdoptionByChildId(request.fromUser.id);
+  const targetChildRole = await getActiveAdoptionByChildId(request.targetUser.id);
+
+  if (senderChildRole || targetChildRole) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteMarriageRequest(request);
+    await safeSendMessage(chatId, "❌ Игрок в роли ребёнка не может вступить в брак.");
+    return;
+  }
+
+  const marriage = await createMarriage(request.fromUser.id, request.targetUser.id);
+  await ensureCoupleState(request.fromUser.id, request.targetUser.id);
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+  deleteMarriageRequest(request);
+
+  let text = `💍 Брак зарегистрирован!
+
+${getUserLink(request.fromUser)} + ${getUserLink(request.targetUser)}
+
+📅 Дата: ${formatDate(marriage.created_at)}
+🏡 Теперь вы семья!`;
+
+  text = await appendLevelUpIfNeeded(text, request.fromUser.id, 15);
+  text = await appendLevelUpIfNeeded(text, request.targetUser.id, 15);
+
+  await safeSendMessage(chatId, text, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+}
+
+async function finalizeMarriageDecline(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  await safeSendMessage(
+    chatId,
+    `💔 ${getUserLink(request.targetUser)} отказал(а) ${getUserLink(request.fromUser)} в браке.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  deleteMarriageRequest(request);
+}
+
+async function finalizeAdoptionAccept(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (isRequestExpired(request.createdAt, ADOPTION_REQUEST_MS)) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "⌛ Предложение усыновления устарело.");
+    return;
+  }
+
+  const validation = await canAdoptUser(request.parentUser.id, request.childUser.id);
+
+  if (!validation.ok) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, validation.text);
+    return;
+  }
+
+  let creation;
+  try {
+    creation = await createAdoption(request.parentUser.id, request.childUser.id);
+  } catch (error) {
+    console.error("Ошибка createAdoption:", error);
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "❌ Ошибка усыновления. Попробуй ещё раз.");
+    return;
+  }
+
+  if (!creation.ok) {
+    if (messageId) await removeInlineKeyboard(chatId, messageId);
+    deleteAdoptionRequest(request);
+    await safeSendMessage(chatId, "❌ Этот ребёнок уже усыновлён. Выбери другого ребёнка.");
+    return;
+  }
+
+  await ensureChildObedience(request.childUser.id);
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  const spouseInfo = await getMarriagePartner(request.parentUser.id);
+  const spouseUser = spouseInfo ? await getStoredUser(spouseInfo.partnerId) : null;
+
+  let successText = `👶 Усыновление прошло успешно!
+
+${getUserLink(request.parentUser)} теперь родитель для ${getUserLink(request.childUser)}`;
+
+  if (spouseUser) {
+    successText += `\n💍 Второй родитель: ${getUserLink(spouseUser)}`;
+  }
+
+  successText += `\n📅 Дата: ${formatDate(creation.adoption.created_at)}`;
+
+  deleteAdoptionRequest(request);
+
+  successText = await appendLevelUpIfNeeded(successText, request.parentUser.id, 15);
+  successText = await appendLevelUpIfNeeded(successText, request.childUser.id, 12);
+
+  await safeSendMessage(chatId, successText, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+}
+
+async function finalizeAdoptionDecline(request, chatId, messageId = null) {
+  if (!request) return;
+
+  if (messageId) await removeInlineKeyboard(chatId, messageId);
+
+  await safeSendMessage(
+    chatId,
+    `❌ ${getUserLink(request.childUser)} отказал(а) ${getUserLink(request.parentUser)} в усыновлении.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  deleteAdoptionRequest(request);
+}
+
+// =========================
+// BOMB
+// =========================
+function getBombChatKey(chatId) {
+  return String(chatId);
+}
+
+function clearBomb(chatId) {
+  const key = getBombChatKey(chatId);
+  if (activeBombs[key]?.timer) clearTimeout(activeBombs[key].timer);
+  delete activeBombs[key];
+}
+
+async function explodeBomb(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
+
+  const holder = bomb.holder;
+  clearBomb(chatId);
+
+  await safeSendMessage(
+    chatId,
+    `💥 Бомба взорвалась!\n${getUserLink(holder)} не успел передать бомбу.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+}
+
+async function startBombTimer(chatId) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return;
+
+  if (bomb.timer) clearTimeout(bomb.timer);
+
+  bomb.timer = setTimeout(async () => {
+    try {
+      await explodeBomb(chatId);
+    } catch (error) {
+      console.error("Ошибка взрыва бомбы:", error);
+    }
+  }, BOMB_TIMER_MS);
+}
+
+async function passBomb(chatId, fromUser) {
+  const key = getBombChatKey(chatId);
+  const bomb = activeBombs[key];
+  if (!bomb) return false;
+
+  const excludeIds = [fromUser.id];
+  if (bomb.previousHolderId) excludeIds.push(bomb.previousHolderId);
+
+  let candidates = getRecentActiveCandidates(chatId, excludeIds);
+  if (!candidates.length) candidates = getRecentActiveCandidates(chatId, [fromUser.id]);
+
+  if (!candidates.length) {
+    clearBomb(chatId);
+
+    await safeSendMessage(
+      chatId,
+      `💣 ${getUserLink(fromUser)} попытался передать бомбу, но рядом никого не оказалось.\n\nБомба исчезла.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return true;
+  }
+
+  const nextHolder = getRandomFromArray(candidates);
+
+  activeBombs[key] = {
+    holder: nextHolder,
+    previousHolderId: fromUser.id,
+    timer: null
+  };
+
+  await safeSendMessage(
+    chatId,
+    `💣 ${getUserLink(fromUser)} передал бомбу!
+
+🔥 Теперь бомба у: ${getUserLink(nextHolder)}
+⏳ У него 5 секунд, чтобы написать: передать`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+
+  await startBombTimer(chatId);
+  return true;
+}
+
+// =========================
+// ROBBERY DIFFICULTY
+// =========================
+async function getCrimeBonuses(userId) {
+  const inventory = await getFullInventory(userId);
+
+  return {
+    mask: Number(inventory.mask || 0) > 0,
+    lockpick: Number(inventory.lockpick || 0) > 0,
+    radio: Number(inventory.radio || 0) > 0,
+    armor: Number(inventory.armor || 0) > 0,
+    fakePassport: Number(inventory.fake_passport || 0) > 0,
+    jammer: Number(inventory.jammer || 0) > 0
+  };
+}
+
+function getRandomRobberyResult(targetBalance, wantedLevel, bonuses) {
+  const wanted = Number(wantedLevel || 0);
+  let successChance = 0.30;
+  let bigChance = 0.07;
+
+  if (bonuses.mask) successChance += 0.05;
+  if (bonuses.lockpick) successChance += 0.03;
+  if (bonuses.radio) successChance += 0.02;
+  if (bonuses.armor) successChance += 0.02;
+
+  successChance -= wanted * 0.04;
+  bigChance -= wanted * 0.01;
+
+  successChance = clamp(successChance, 0.10, 0.46);
+  bigChance = clamp(bigChance, 0.02, 0.10);
+
+  const roll = Math.random();
+
+  if (roll > successChance) {
+    return { type: "fail", amount: 0 };
+  }
+
+  const isBig = Math.random() < bigChance;
+  const maxSteal = Math.max(1, Math.floor(targetBalance * (isBig ? 0.22 : 0.10)));
+  const minSteal = isBig ? 12 : 2;
+  const amount = clamp(Math.floor(Math.random() * maxSteal) + minSteal, 1, targetBalance);
+
+  return {
+    type: isBig ? "big" : "small",
+    amount
+  };
+}
+
+async function robberyTransfer(thiefId, victimId, requestedAmount) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const thiefRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [thiefId]
+    );
+    const victimRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [victimId]
+    );
+
+    if (!thiefRow.rows[0] || !victimRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const victimBalance = Number(victimRow.rows[0].balance || 0);
+    const actualAmount = Math.min(victimBalance, requestedAmount);
+
+    if (actualAmount <= 0) throw new Error("VICTIM_NO_MONEY");
+
+    const updatedVictim = await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1 RETURNING balance`,
+      [victimId, actualAmount]
+    );
+
+    const updatedThief = await client.query(
+      `UPDATE users SET balance = balance + $2 WHERE user_id = $1 RETURNING balance`,
+      [thiefId, actualAmount]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      stolen: actualAmount,
+      thiefBalance: Number(updatedThief.rows[0].balance || 0),
+      victimBalance: Number(updatedVictim.rows[0].balance || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// =========================
+// ATM HACK
+// =========================
+function getAtmHackOutcome(wantedLevel, bonuses) {
+  const wanted = Number(wantedLevel || 0);
+
+  let successChance = 0.24;
+  let jackpotChance = 0.03;
+
+  if (bonuses.lockpick) successChance += 0.08;
+  if (bonuses.jammer) successChance += 0.05;
+  if (bonuses.mask) successChance += 0.03;
+  if (bonuses.radio) successChance += 0.02;
+
+  successChance -= wanted * 0.04;
+  jackpotChance -= wanted * 0.005;
+
+  successChance = clamp(successChance, 0.08, 0.44);
+  jackpotChance = clamp(jackpotChance, 0.01, 0.05);
+
+  const roll = Math.random();
+
+  if (roll > successChance) {
+    return { type: "fail", coins: 0 };
+  }
+
+  if (Math.random() < jackpotChance) {
+    return { type: "jackpot", coins: Math.floor(Math.random() * 21) + 25 };
+  }
+
+  return { type: "success", coins: Math.floor(Math.random() * 12) + 8 };
+}
+
+// =========================
+// JEWELRY HEIST
+// =========================
+function getJewelryHeistOutcome(wantedLevel, bonuses) {
+  const wanted = Number(wantedLevel || 0);
+
+  let successChance = 0.22;
+  let jackpotChance = 0.04;
+
+  if (bonuses.mask) successChance += 0.05;
+  if (bonuses.armor) successChance += 0.04;
+  if (bonuses.jammer) successChance += 0.04;
+  if (bonuses.fakePassport) successChance += 0.02;
+  if (bonuses.radio) successChance += 0.02;
+
+  successChance -= wanted * 0.045;
+  jackpotChance -= wanted * 0.006;
+
+  successChance = clamp(successChance, 0.08, 0.42);
+  jackpotChance = clamp(jackpotChance, 0.01, 0.05);
+
+  const roll = Math.random();
+
+  if (roll > successChance) {
+    if (roll > 0.92) return { type: "disaster", coins: 0 };
+    return { type: "fail", coins: 0 };
+  }
+
+  if (Math.random() < jackpotChance) {
+    return { type: "jackpot", coins: Math.floor(Math.random() * 51) + 80 };
+  }
+
+  if (Math.random() < 0.35) {
+    return { type: "big", coins: Math.floor(Math.random() * 31) + 35 };
+  }
+
+  return { type: "small", coins: Math.floor(Math.random() * 16) + 15 };
+}
+
+// =========================
+// BANK HEIST
+// =========================
+function getBankHeistChatKey(chatId) {
+  return String(chatId);
+}
+
+function getBankHeist(chatId) {
+  return activeBankHeists[getBankHeistChatKey(chatId)] || null;
+}
+
+function clearBankHeist(chatId) {
+  delete activeBankHeists[getBankHeistChatKey(chatId)];
+}
+
+function createBankHeist(chatId, leaderUser) {
+  const key = getBankHeistChatKey(chatId);
+
+  activeBankHeists[key] = {
+    chatId,
+    leaderId: Number(leaderUser.id),
+    stage: "gathering",
+    policeAlert: false,
+    loot: 0,
+    createdAt: Date.now(),
+    members: {
+      [String(leaderUser.id)]: {
+        id: Number(leaderUser.id),
+        first_name: leaderUser.first_name || "",
+        last_name: leaderUser.last_name || "",
+        username: leaderUser.username || ""
+      }
+    }
+  };
+
+  return activeBankHeists[key];
+}
+
+function getHeistMembersList(heist) {
+  return Object.values(heist?.members || {});
+}
+
+function getHeistMemberCount(heist) {
+  return getHeistMembersList(heist).length;
+}
+
+function isHeistParticipant(heist, userId) {
+  return !!heist?.members?.[String(userId)];
+}
+
+async function getHeistTeamStats(heist) {
+  const members = getHeistMembersList(heist);
+
+  let masks = 0;
+  let radios = 0;
+  let armors = 0;
+  let jammers = 0;
+  let passports = 0;
+  let lockpicks = 0;
+  let wantedSum = 0;
+
+  for (const user of members) {
+    const inv = await getFullInventory(user.id);
+    if (Number(inv.mask || 0) > 0) masks++;
+    if (Number(inv.radio || 0) > 0) radios++;
+    if (Number(inv.armor || 0) > 0) armors++;
+    if (Number(inv.jammer || 0) > 0) jammers++;
+    if (Number(inv.fake_passport || 0) > 0) passports++;
+    if (Number(inv.lockpick || 0) > 0) lockpicks++;
+
+    const wanted = await getWantedRow(user.id);
+    wantedSum += Number(wanted?.level || 0);
+  }
+
+  return {
+    members: members.length,
+    masks,
+    radios,
+    armors,
+    jammers,
+    passports,
+    lockpicks,
+    avgWanted: members.length ? wantedSum / members.length : 0
+  };
+}
+
+function getBankEntryOutcome(stats) {
+  let successChance = 0.20;
+  successChance += stats.masks * 0.04;
+  successChance += stats.radios * 0.03;
+  successChance += stats.jammers * 0.04;
+  successChance += stats.armors * 0.02;
+  successChance -= stats.avgWanted * 0.05;
+
+  successChance = clamp(successChance, 0.08, 0.46);
+
+  const roll = Math.random();
+
+  if (roll < successChance * 0.45) return { type: "clean_success" };
+  if (roll < successChance) return { type: "noisy_success" };
+  if (roll < 0.82) return { type: "partial_fail_alarm" };
+  return { type: "total_fail" };
+}
+
+function getVaultOutcome(stats, policeAlert) {
+  let jackpotChance = 0.01;
+  let fullChance = 0.08;
+  let mediumChance = 0.20;
+  let smallChance = 0.25;
+
+  fullChance += stats.lockpicks * 0.02;
+  fullChance += stats.jammers * 0.02;
+  mediumChance += stats.radios * 0.02;
+  mediumChance += stats.masks * 0.01;
+  fullChance -= stats.avgWanted * 0.03;
+  mediumChance -= stats.avgWanted * 0.02;
+
+  if (policeAlert) {
+    jackpotChance -= 0.003;
+    fullChance -= 0.04;
+    mediumChance -= 0.05;
+    smallChance -= 0.05;
+  }
+
+  jackpotChance = clamp(jackpotChance, 0.005, 0.02);
+  fullChance = clamp(fullChance, 0.03, 0.16);
+  mediumChance = clamp(mediumChance, 0.08, 0.28);
+  smallChance = clamp(smallChance, 0.10, 0.30);
+
+  const roll = Math.random();
+
+  if (roll < jackpotChance) {
+    return { type: "jackpot", loot: Math.floor(Math.random() * 61) + 180 };
+  }
+
+  if (roll < jackpotChance + fullChance) {
+    return { type: "success", loot: Math.floor(Math.random() * 61) + 95 };
+  }
+
+  if (roll < jackpotChance + fullChance + mediumChance) {
+    return { type: "medium", loot: Math.floor(Math.random() * 36) + 45 };
+  }
+
+  if (roll < jackpotChance + fullChance + mediumChance + smallChance) {
+    return { type: "small", loot: Math.floor(Math.random() * 16) + 12 };
+  }
+
+  if (roll < 0.90) {
+    return { type: "fail_alarm", loot: 0 };
+  }
+
+  return { type: "disaster", loot: 0 };
+}
+
+function getBankEscapeOutcome(stats, loot, policeAlert) {
+  let fullEscapeChance = 0.10;
+  fullEscapeChance += stats.radios * 0.04;
+  fullEscapeChance += stats.armors * 0.03;
+  fullEscapeChance += stats.masks * 0.02;
+  fullEscapeChance += stats.passports * 0.03;
+  fullEscapeChance -= stats.avgWanted * 0.04;
+
+  if (policeAlert) fullEscapeChance -= 0.08;
+  if (loot >= 60) fullEscapeChance -= 0.02;
+  if (loot >= 100) fullEscapeChance -= 0.03;
+  if (loot >= 160) fullEscapeChance -= 0.05;
+
+  fullEscapeChance = clamp(fullEscapeChance, 0.02, 0.28);
+
+  const partialEscapeChance = fullEscapeChance + 0.24;
+  const oneCaughtChance = partialEscapeChance + 0.28;
+
+  const roll = Math.random();
+
+  if (roll < fullEscapeChance) return { type: "full_escape" };
+  if (roll < partialEscapeChance) return { type: "half_escape" };
+  if (roll < oneCaughtChance) return { type: "one_caught" };
+  return { type: "all_caught" };
+}
+
+// =========================
+// VAN HEIST
+// =========================
+function getVanHeistChatKey(chatId) {
+  return String(chatId);
+}
+
+function getVanHeist(chatId) {
+  return activeVanHeists[getVanHeistChatKey(chatId)] || null;
+}
+
+function clearVanHeist(chatId) {
+  delete activeVanHeists[getVanHeistChatKey(chatId)];
+}
+
+function createVanHeist(chatId, leaderUser) {
+  const key = getVanHeistChatKey(chatId);
+
+  activeVanHeists[key] = {
+    chatId,
+    leaderId: Number(leaderUser.id),
+    stage: "gathering",
+    policeAlert: false,
+    loot: 0,
+    createdAt: Date.now(),
+    members: {
+      [String(leaderUser.id)]: {
+        id: Number(leaderUser.id),
+        first_name: leaderUser.first_name || "",
+        last_name: leaderUser.last_name || "",
+        username: leaderUser.username || ""
+      }
+    }
+  };
+
+  return activeVanHeists[key];
+}
+
+function getVanMembersList(van) {
+  return Object.values(van?.members || {});
+}
+
+function getVanMemberCount(van) {
+  return getVanMembersList(van).length;
+}
+
+function isVanParticipant(van, userId) {
+  return !!van?.members?.[String(userId)];
+}
+
+async function getVanTeamStats(van) {
+  const members = getVanMembersList(van);
+
+  let masks = 0;
+  let radios = 0;
+  let armors = 0;
+  let jammers = 0;
+  let passports = 0;
+  let wantedSum = 0;
+
+  for (const user of members) {
+    const inv = await getFullInventory(user.id);
+    if (Number(inv.mask || 0) > 0) masks++;
+    if (Number(inv.radio || 0) > 0) radios++;
+    if (Number(inv.armor || 0) > 0) armors++;
+    if (Number(inv.jammer || 0) > 0) jammers++;
+    if (Number(inv.fake_passport || 0) > 0) passports++;
+
+    const wanted = await getWantedRow(user.id);
+    wantedSum += Number(wanted?.level || 0);
+  }
+
+  return {
+    members: members.length,
+    masks,
+    radios,
+    armors,
+    jammers,
+    passports,
+    avgWanted: members.length ? wantedSum / members.length : 0
+  };
+}
+
+function getVanAttackOutcome(stats) {
+  let successChance = 0.18;
+  successChance += stats.masks * 0.04;
+  successChance += stats.radios * 0.03;
+  successChance += stats.armors * 0.04;
+  successChance += stats.jammers * 0.03;
+  successChance -= stats.avgWanted * 0.04;
+
+  successChance = clamp(successChance, 0.08, 0.42);
+
+  const roll = Math.random();
+  if (roll < successChance * 0.35) return { type: "clean_success" };
+  if (roll < successChance) return { type: "success_alarm" };
+  if (roll < 0.82) return { type: "partial_fail" };
+  return { type: "disaster" };
+}
+
+function getVanEscapeOutcome(stats, loot, policeAlert) {
+  let chance = 0.12;
+  chance += stats.radios * 0.05;
+  chance += stats.armors * 0.04;
+  chance += stats.passports * 0.03;
+  chance -= stats.avgWanted * 0.04;
+
+  if (policeAlert) chance -= 0.08;
+  if (loot >= 50) chance -= 0.03;
+  if (loot >= 90) chance -= 0.04;
+
+  chance = clamp(chance, 0.03, 0.28);
+
+  const roll = Math.random();
+  if (roll < chance) return { type: "full_escape" };
+  if (roll < chance + 0.25) return { type: "partial_escape" };
+  if (roll < chance + 0.53) return { type: "one_caught" };
+  return { type: "all_caught" };
+}
+
+// =========================
 // GAME ACTIONS
 // =========================
-async function runFootball(userId) {
-  const result = await pool.query(
-    `SELECT balance, last_football_at FROM users WHERE user_id = $1`,
-    [userId]
-  );
+async function claimDailyCoins(userId) {
+  const result = await pool.query(`SELECT balance, last_daily_at FROM users WHERE user_id = $1`, [userId]);
   if (!result.rows[0]) return { ok: false, reason: "not_found" };
 
   const row = result.rows[0];
   const now = new Date();
-  const lastAt = row.last_football_at ? new Date(row.last_football_at) : null;
+  const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
+
+  if (lastDailyAt) {
+    const nextTime = new Date(lastDailyAt.getTime() + MONEY_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const coins = getRandomCoins();
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = balance + $2,
+        last_daily_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, coins]
+  );
+
+  return { ok: true, coins, balance: Number(updateResult.rows[0].balance || 0) };
+}
+
+async function runHunt(userId) {
+  const result = await pool.query(`SELECT balance, last_hunt_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
+
+  if (lastHuntAt) {
+    const nextTime = new Date(lastHuntAt.getTime() + HUNT_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const hunt = getHuntResult();
+  let newBalance = Number(row.balance || 0) + hunt.coins;
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_hunt_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return { ok: true, hunt, balance: Number(updateResult.rows[0].balance || 0) };
+}
+
+async function runSniper(userId) {
+  const result = await pool.query(`SELECT balance, last_sniper_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
+
+  if (lastSniperAt) {
+    const nextTime = new Date(lastSniperAt.getTime() + SNIPER_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const sniper = getSniperResult();
+  const newBalance = Number(row.balance || 0) + sniper.coins;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_sniper_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return { ok: true, sniper, balance: Number(updateResult.rows[0].balance || 0) };
+}
+
+async function runBasketball(userId) {
+  const result = await pool.query(`SELECT balance, last_basketball_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastAt = row.last_basketball_at ? new Date(row.last_basketball_at) : null;
 
   if (lastAt) {
-    const nextTime = new Date(lastAt.getTime() + FOOTBALL_COOLDOWN_MS);
+    const nextTime = new Date(lastAt.getTime() + BASKETBALL_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const game = getBasketballResult();
+  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_basketball_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return {
+    ok: true,
+    game,
+    balance: Number(updateResult.rows[0].balance || 0)
+  };
+}
+
+async function runBowling(userId) {
+  const result = await pool.query(
+    `SELECT balance, last_bowling_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastAt = row.last_bowling_at ? new Date(row.last_bowling_at) : null;
+
+  if (lastAt) {
+    const nextTime = new Date(lastAt.getTime() + BOWLING_COOLDOWN_MS);
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
   }
 
   return { ok: true };
+}
+
+async function runKnb(userId, playerChoice) {
+  const result = await pool.query(`SELECT balance, last_knb_at FROM users WHERE user_id = $1`, [userId]);
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastAt = row.last_knb_at ? new Date(row.last_knb_at) : null;
+
+  if (lastAt) {
+    const nextTime = new Date(lastAt.getTime() + KNB_COOLDOWN_MS);
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const botChoice = getKnbBotChoiceRareWin(playerChoice);
+  const game = resolveKnb(playerChoice, botChoice);
+
+  let newBalance = Number(row.balance || 0) + Number(game.coins || 0);
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_knb_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return {
+    ok: true,
+    game,
+    botChoice,
+    balance: Number(updateResult.rows[0].balance || 0)
+  };
 }
 
 async function processStarPurchase(buyerUserId, successfulPayment) {
