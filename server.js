@@ -350,6 +350,7 @@ function getRandomGift() {
     "сок 🧃",
     "бургер 🍔",
     "печенье 🍪"
+    "собака 🐶"
   ];
   return gifts[Math.floor(Math.random() * gifts.length)];
 }
