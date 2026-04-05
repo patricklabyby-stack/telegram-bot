@@ -1,3 +1,7 @@
+function getRandomCoins() {
+  return Math.floor(Math.random() * 101);
+}
+
 function getRandomHuntCoins() {
   return Math.floor(Math.random() * 11);
 }
@@ -26,6 +30,7 @@ function getHuntResult() {
 }
 
 module.exports = {
+  getRandomCoins,
   getRandomHuntCoins,
   getHuntResult
 };
