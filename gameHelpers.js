@@ -38,3 +38,9 @@ function getRandomPrediction() {
   ];
   return predictions[Math.floor(Math.random() * predictions.length)];
 }
+
+module.exports = {
+  getRandomGift,
+  getRandomRating,
+  getRandomPrediction
+};
