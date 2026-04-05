@@ -4396,7 +4396,8 @@ async function runHunt(userId) {
 
   if (lastHuntAt) {
     const realCooldownMs = isOwner(userId) ? 1000 : HUNT_COOLDOWN_MS;
-const nextTime = new Date(lastHuntAt.getTime() + realCooldownMs);
+    const nextTime = new Date(lastHuntAt.getTime() + realCooldownMs);
+
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4420,6 +4421,44 @@ const nextTime = new Date(lastHuntAt.getTime() + realCooldownMs);
   return { ok: true, hunt, balance: Number(updateResult.rows[0].balance || 0) };
 }
 
+async function runTreasure(userId) {
+  const result = await pool.query(
+    `SELECT balance, last_treasure_at FROM users WHERE user_id = $1`,
+    [userId]
+  );
+  if (!result.rows[0]) return { ok: false, reason: "not_found" };
+
+  const row = result.rows[0];
+  const now = new Date();
+  const lastTreasureAt = row.last_treasure_at ? new Date(row.last_treasure_at) : null;
+
+  if (lastTreasureAt) {
+    const realCooldownMs = isOwner(userId) ? 1000 : TREASURE_COOLDOWN_MS;
+    const nextTime = new Date(lastTreasureAt.getTime() + realCooldownMs);
+
+    if (now < nextTime) {
+      return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
+    }
+  }
+
+  const treasure = getTreasureResult();
+  let newBalance = Number(row.balance || 0) + treasure.coins;
+  if (newBalance < 0) newBalance = 0;
+
+  const updateResult = await pool.query(
+    `
+    UPDATE users
+    SET balance = $2,
+        last_treasure_at = NOW()
+    WHERE user_id = $1
+    RETURNING balance
+    `,
+    [userId, newBalance]
+  );
+
+  return { ok: true, treasure, balance: Number(updateResult.rows[0].balance || 0) };
+}
+
 async function runSniper(userId) {
   const result = await pool.query(`SELECT balance, last_sniper_at FROM users WHERE user_id = $1`, [userId]);
   if (!result.rows[0]) return { ok: false, reason: "not_found" };
@@ -4429,14 +4468,17 @@ async function runSniper(userId) {
   const lastSniperAt = row.last_sniper_at ? new Date(row.last_sniper_at) : null;
 
   if (lastSniperAt) {
-    const nextTime = new Date(lastSniperAt.getTime() + SNIPER_COOLDOWN_MS);
+    const realCooldownMs = isOwner(userId) ? 1000 : SNIPER_COOLDOWN_MS;
+    const nextTime = new Date(lastSniperAt.getTime() + realCooldownMs);
+
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
   }
 
   const sniper = getSniperResult();
-  const newBalance = Number(row.balance || 0) + sniper.coins;
+  let newBalance = Number(row.balance || 0) + sniper.coins;
+  if (newBalance < 0) newBalance = 0;
 
   const updateResult = await pool.query(
     `
@@ -4461,7 +4503,9 @@ async function runBasketball(userId) {
   const lastAt = row.last_basketball_at ? new Date(row.last_basketball_at) : null;
 
   if (lastAt) {
-    const nextTime = new Date(lastAt.getTime() + BASKETBALL_COOLDOWN_MS);
+    const realCooldownMs = isOwner(userId) ? 1000 : BASKETBALL_COOLDOWN_MS;
+    const nextTime = new Date(lastAt.getTime() + realCooldownMs);
+
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4502,7 +4546,9 @@ async function runBowling(userId) {
   const lastAt = row.last_bowling_at ? new Date(row.last_bowling_at) : null;
 
   if (lastAt) {
-    const nextTime = new Date(lastAt.getTime() + BOWLING_COOLDOWN_MS);
+    const realCooldownMs = isOwner(userId) ? 1000 : BOWLING_COOLDOWN_MS;
+    const nextTime = new Date(lastAt.getTime() + realCooldownMs);
+
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4520,7 +4566,9 @@ async function runKnb(userId, playerChoice) {
   const lastAt = row.last_knb_at ? new Date(row.last_knb_at) : null;
 
   if (lastAt) {
-    const nextTime = new Date(lastAt.getTime() + KNB_COOLDOWN_MS);
+    const realCooldownMs = isOwner(userId) ? 1000 : KNB_COOLDOWN_MS;
+    const nextTime = new Date(lastAt.getTime() + realCooldownMs);
+
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
