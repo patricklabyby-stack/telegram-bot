@@ -4311,7 +4311,8 @@ async function claimDailyCoins(userId) {
   const lastDailyAt = row.last_daily_at ? new Date(row.last_daily_at) : null;
 
   if (lastDailyAt) {
-    const nextTime = new Date(lastDailyAt.getTime() + MONEY_COOLDOWN_MS);
+    const realCooldownMs = isOwner(userId) ? 1000 : MONEY_COOLDOWN_MS;
+const nextTime = new Date(lastDailyAt.getTime() + realCooldownMs);
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
