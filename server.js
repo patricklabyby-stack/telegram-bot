@@ -7671,6 +7671,52 @@ ${coinsLine}
       return;
     }
 
+    if (isExactCommand(lowerText, "клад")) {
+      const jailText = await getJailBlockText(msg.from.id);
+      if (jailText) {
+        await safeSendMessage(msg.chat.id, jailText);
+        return;
+      }
+
+      const result = await runTreasure(msg.from.id);
+
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          await safeSendMessage(msg.chat.id, "Ошибка профиля. Попробуй ещё раз.");
+          return;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `⏳ ${getUserLink(msg.from)}, клад снова будет доступен через ${escapeHtml(formatRemainingTime(result.remainingMs))}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+        return;
+      }
+
+      let coinsLine = "😐 0 монет";
+      if (result.treasure.coins > 0) coinsLine = `💰 +${result.treasure.coins} монет`;
+      else if (result.treasure.coins < 0) coinsLine = `💀 ${result.treasure.coins} монет`;
+
+      let out = `🗺️ ${getUserLink(msg.from)} отправился искать клад...
+
+${escapeHtml(result.treasure.text)}
+${coinsLine}
+
+Баланс: ${result.balance} монет`;
+
+      out = await appendLevelUpIfNeeded(out, msg.from.id, 7);
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
     if (isExactCommand(lowerText, "снайпер")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
