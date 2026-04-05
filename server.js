@@ -408,7 +408,7 @@ function getHuntResult() {
     }
 
     return {
-      text: "🌰 Белка кинула в тебя шишку!",
+      text: "🌰 Белка кинула в тебя шишку и убежала!",
       coins: -(Math.floor(Math.random() * 10) + 1)
     };
   }
