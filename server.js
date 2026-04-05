@@ -910,6 +910,7 @@ async function initDb() {
       last_basketball_at TIMESTAMPTZ,
       last_bowling_at TIMESTAMPTZ,
       last_knb_at TIMESTAMPTZ,
+      last_treasure_at TIMESTAMPTZ,
       total INTEGER DEFAULT 0
     )
   `);
@@ -1142,7 +1143,8 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bowling_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS last_pray_at TIMESTAMPTZ`);
-
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_treasure_at TIMESTAMPTZ`);
+  
   console.log("✅ Database ready");
 }
 
