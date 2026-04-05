@@ -4397,7 +4397,6 @@ async function runHunt(userId) {
   if (lastHuntAt) {
     const realCooldownMs = isOwner(userId) ? 1000 : HUNT_COOLDOWN_MS;
     const nextTime = new Date(lastHuntAt.getTime() + realCooldownMs);
-
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4435,7 +4434,6 @@ async function runTreasure(userId) {
   if (lastTreasureAt) {
     const realCooldownMs = isOwner(userId) ? 1000 : TREASURE_COOLDOWN_MS;
     const nextTime = new Date(lastTreasureAt.getTime() + realCooldownMs);
-
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4470,7 +4468,6 @@ async function runSniper(userId) {
   if (lastSniperAt) {
     const realCooldownMs = isOwner(userId) ? 1000 : SNIPER_COOLDOWN_MS;
     const nextTime = new Date(lastSniperAt.getTime() + realCooldownMs);
-
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4505,7 +4502,6 @@ async function runBasketball(userId) {
   if (lastAt) {
     const realCooldownMs = isOwner(userId) ? 1000 : BASKETBALL_COOLDOWN_MS;
     const nextTime = new Date(lastAt.getTime() + realCooldownMs);
-
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4548,7 +4544,6 @@ async function runBowling(userId) {
   if (lastAt) {
     const realCooldownMs = isOwner(userId) ? 1000 : BOWLING_COOLDOWN_MS;
     const nextTime = new Date(lastAt.getTime() + realCooldownMs);
-
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
@@ -4568,7 +4563,6 @@ async function runKnb(userId, playerChoice) {
   if (lastAt) {
     const realCooldownMs = isOwner(userId) ? 1000 : KNB_COOLDOWN_MS;
     const nextTime = new Date(lastAt.getTime() + realCooldownMs);
-
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
