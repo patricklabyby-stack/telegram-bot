@@ -3424,6 +3424,10 @@ async function getJewelryCooldown(userId) {
   return getGenericCooldown(userId, "last_jewelry_at", JEWELRY_HEIST_COOLDOWN_MS);
 }
 
+async function getTreasureCooldown(userId) {
+  return getGenericCooldown(userId, "last_treasure_at", TREASURE_COOLDOWN_MS);
+}
+
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
   const info = getCooldownColumnAndMsByName(cooldownName, userId);
   if (!info) throw new Error("UNKNOWN_COOLDOWN_TYPE");
@@ -3489,7 +3493,8 @@ async function getCooldownText(userId) {
 💎 Ювелирка: ${getRemaining(stats.last_jewelry_at, JEWELRY_HEIST_COOLDOWN_MS)}
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
 🎳 Боулинг: ${getRemaining(stats.last_bowling_at, BOWLING_COOLDOWN_MS)}
-✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}`;
+✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}
+🗺️ Клад: ${getRemaining(stats.last_treasure_at, TREASURE_COOLDOWN_MS)}`;
 }
 
 // =========================
