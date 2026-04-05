@@ -374,20 +374,13 @@ function getRandomPrediction() {
   return predictions[Math.floor(Math.random() * predictions.length)];
 }
 
-function getRandomCoins() {
-  return Math.floor(Math.random() * 101);
-}
-
-function getRandomHuntCoins() {
-  return Math.floor(Math.random() * 11);
-}
-
 function getHuntResult() {
   const normalAnimals = [
     { animal: "🐰 Поймал зайца!" },
     { animal: "🦊 Поймал лису!" },
     { animal: "🐗 Поймал кабана!" },
-    { animal: "🦌 Поймал оленя!" }
+    { animal: "🦌 Поймал оленя!" },
+    { animal: "🐿️ Поймал белку!" }
   ];
 
   if (Math.random() < 0.25) {
@@ -398,6 +391,15 @@ function getHuntResult() {
   }
 
   const chosen = normalAnimals[Math.floor(Math.random() * normalAnimals.length)];
+
+  // 🐿️ Прикол с белкой
+  if (chosen.animal.includes("белку") && Math.random() < 0.4) {
+    return {
+      text: "🐿️ Белка кинула в тебя шишку! 😡",
+      coins: -getRandomHuntCoins()
+    };
+  }
+
   return {
     text: chosen.animal,
     coins: getRandomHuntCoins()
