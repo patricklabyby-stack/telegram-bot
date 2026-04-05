@@ -2,6 +2,7 @@ const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
 const { Pool } = require("pg");
 const crypto = require("crypto");
+const { getRandomCoins, getRandomHuntCoins, getHuntResult } = require("./gameHelpers");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -372,36 +373,6 @@ function getRandomPrediction() {
     "Не рискуй сегодня ⚠️"
   ];
   return predictions[Math.floor(Math.random() * predictions.length)];
-}
-
-function getRandomCoins() {
-  return Math.floor(Math.random() * 101);
-}
-
-function getRandomHuntCoins() {
-  return Math.floor(Math.random() * 11);
-}
-
-function getHuntResult() {
-  const normalAnimals = [
-    { animal: "🐰 Поймал зайца!" },
-    { animal: "🦊 Поймал лису!" },
-    { animal: "🐗 Поймал кабана!" },
-    { animal: "🦌 Поймал оленя!" }
-  ];
-
-  if (Math.random() < 0.25) {
-    return {
-      text: "🐻 Ты нашёл медведя... Он тебя прогнал!",
-      coins: -getRandomHuntCoins()
-    };
-  }
-
-  const chosen = normalAnimals[Math.floor(Math.random() * normalAnimals.length)];
-  return {
-    text: chosen.animal,
-    coins: getRandomHuntCoins()
-  };
 }
 
 function getSniperResult() {
