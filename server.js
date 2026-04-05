@@ -4343,7 +4343,8 @@ async function runHunt(userId) {
   const lastHuntAt = row.last_hunt_at ? new Date(row.last_hunt_at) : null;
 
   if (lastHuntAt) {
-    const nextTime = new Date(lastHuntAt.getTime() + HUNT_COOLDOWN_MS);
+    const realCooldownMs = isOwner(userId) ? 1000 : HUNT_COOLDOWN_MS;
+const nextTime = new Date(lastHuntAt.getTime() + realCooldownMs);
     if (now < nextTime) {
       return { ok: false, remainingMs: nextTime.getTime() - now.getTime() };
     }
