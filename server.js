@@ -518,64 +518,96 @@ function resolveKnb(playerChoice, botChoice) {
   };
 }
 
-function parseTimeEditAmount(rawValue, rawUnit = "") {
-  const value = Number(rawValue);
-  if (!Number.isInteger(value) || value === 0) return null;
-
-  const unit = normalizeText(rawUnit || "");
-
-  if (!unit || ["ч", "час", "часа", "часов", "h"].includes(unit)) {
-    return value * 60 * 60 * 1000;
-  }
-
-  if (["м", "мин", "минута", "минуты", "минут", "m"].includes(unit)) {
-    return value * 60 * 1000;
-  }
-
-  return null;
-}
-
-// Добавляем проверку на владельца прямо здесь
 function getCooldownColumnAndMsByName(rawName, userId = null) {
-  // Если это владелец — кулдаун не нужен
-  if (Number(userId) === OWNER_ID) {
-    return { column: null, cooldownMs: 0, title: "для владельца нет кулдауна" };
-  }
-
+  const isOwner = Number(userId) === OWNER_ID;
   const name = normalizeText(rawName);
 
   if (["деньги", "монеты", "money", "daily"].includes(name)) {
-    return { column: "last_daily_at", cooldownMs: MONEY_COOLDOWN_MS, title: "деньги" };
+    return {
+      column: "last_daily_at",
+      cooldownMs: isOwner ? 0 : MONEY_COOLDOWN_MS,
+      title: "деньги"
+    };
   }
+
   if (["охота", "hunt"].includes(name)) {
-    return { column: "last_hunt_at", cooldownMs: HUNT_COOLDOWN_MS, title: "охота" };
+    return {
+      column: "last_hunt_at",
+      cooldownMs: isOwner ? 0 : HUNT_COOLDOWN_MS,
+      title: "охота"
+    };
   }
+
   if (["снайпер", "sniper"].includes(name)) {
-    return { column: "last_sniper_at", cooldownMs: SNIPER_COOLDOWN_MS, title: "снайпер" };
+    return {
+      column: "last_sniper_at",
+      cooldownMs: isOwner ? 0 : SNIPER_COOLDOWN_MS,
+      title: "снайпер"
+    };
   }
+
   if (["ограбление", "ограбить", "robbery"].includes(name)) {
-    return { column: "last_robbery_at", cooldownMs: ROBBERY_COOLDOWN_MS, title: "ограбление" };
+    return {
+      column: "last_robbery_at",
+      cooldownMs: isOwner ? 0 : ROBBERY_COOLDOWN_MS,
+      title: "ограбление"
+    };
   }
+
   if (["ограбление банка", "банк", "bank", "heist"].includes(name)) {
-    return { column: "last_bank_at", cooldownMs: BANK_HEIST_COOLDOWN_MS, title: "ограбление банка" };
+    return {
+      column: "last_bank_at",
+      cooldownMs: isOwner ? 0 : BANK_HEIST_COOLDOWN_MS,
+      title: "ограбление банка"
+    };
   }
+
   if (["банкомат", "взлом банкомата", "atm"].includes(name)) {
-    return { column: "last_atm_hack_at", cooldownMs: ATM_HACK_COOLDOWN_MS, title: "взлом банкомата" };
+    return {
+      column: "last_atm_hack_at",
+      cooldownMs: isOwner ? 0 : ATM_HACK_COOLDOWN_MS,
+      title: "взлом банкомата"
+    };
   }
+
   if (["инкассация", "нападение на инкассацию", "van"].includes(name)) {
-    return { column: "last_van_heist_at", cooldownMs: VAN_HEIST_COOLDOWN_MS, title: "нападение на инкассацию" };
+    return {
+      column: "last_van_heist_at",
+      cooldownMs: isOwner ? 0 : VAN_HEIST_COOLDOWN_MS,
+      title: "нападение на инкассацию"
+    };
   }
+
   if (["ювелирка", "ограбление ювелирки", "ювелирный", "jewelry"].includes(name)) {
-    return { column: "last_jewelry_at", cooldownMs: JEWELRY_HEIST_COOLDOWN_MS, title: "ограбление ювелирки" };
+    return {
+      column: "last_jewelry_at",
+      cooldownMs: isOwner ? 0 : JEWELRY_HEIST_COOLDOWN_MS,
+      title: "ограбление ювелирки"
+    };
   }
+
   if (["баскетбол", "basketball"].includes(name)) {
-    return { column: "last_basketball_at", cooldownMs: BASKETBALL_COOLDOWN_MS, title: "баскетбол" };
+    return {
+      column: "last_basketball_at",
+      cooldownMs: isOwner ? 0 : BASKETBALL_COOLDOWN_MS,
+      title: "баскетбол"
+    };
   }
+
   if (["боулинг", "bowling"].includes(name)) {
-    return { column: "last_bowling_at", cooldownMs: BOWLING_COOLDOWN_MS, title: "боулинг" };
+    return {
+      column: "last_bowling_at",
+      cooldownMs: isOwner ? 0 : BOWLING_COOLDOWN_MS,
+      title: "боулинг"
+    };
   }
+
   if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
-    return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
+    return {
+      column: "last_knb_at",
+      cooldownMs: isOwner ? 0 : KNB_COOLDOWN_MS,
+      title: "кнб"
+    };
   }
 
   return null;
