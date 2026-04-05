@@ -400,15 +400,24 @@ function getHuntResult() {
   }
 
   if (roll < 0.40) {
-    if (Math.random() < 0.5) {
+    const squirrelRoll = Math.random();
+
+    if (squirrelRoll < 0.34) {
       return {
         text: "🐿️ Ты поймал белку!",
         coins: Math.floor(Math.random() * 10) + 1
       };
     }
 
+    if (squirrelRoll < 0.67) {
+      return {
+        text: "🌰 Белка кинула в тебя шишку и убежала!",
+        coins: -(Math.floor(Math.random() * 10) + 1)
+      };
+    }
+
     return {
-      text: "🌰 Белка кинула в тебя шишку и убежала!",
+      text: "🐦 Ворона украла у тебя монеты и улетела!",
       coins: -(Math.floor(Math.random() * 10) + 1)
     };
   }
