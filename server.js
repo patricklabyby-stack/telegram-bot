@@ -3360,8 +3360,16 @@ function getRandomBribeOutcome(wantedLevel = 0, hasPassport = false) {
 // GAME COOLDOWNS
 // =========================
 async function updateCooldownColumnNow(userId, column) {
-  // Если владелец, не обновляем кулдаун
-  if (isOwner(userId)) return;
+  // Для владельца записываем кулдаун как 1 сек назад,
+  // чтобы оставалось ждать только 1 секунду
+  if (isOwner(userId)) {
+    await pool.query(
+      `UPDATE users SET ${column} = NOW() WHERE user_id = $1`,
+      [userId]
+    );
+    return;
+  }
+
   await pool.query(`UPDATE users SET ${column} = NOW() WHERE user_id = $1`, [userId]);
 }
 
@@ -3370,8 +3378,6 @@ function isOwner(userId) {
 }
 
 async function getGenericCooldown(userId, column, cooldownMs) {
-  if (isOwner(userId)) return 0; // владелец всегда может играть
-
   const result = await pool.query(
     `SELECT ${column} AS value FROM users WHERE user_id = $1`,
     [userId]
@@ -3380,7 +3386,10 @@ async function getGenericCooldown(userId, column, cooldownMs) {
   const row = result.rows[0];
   if (!row || !row.value) return 0;
 
-  const nextTime = new Date(new Date(row.value).getTime() + cooldownMs);
+  // У владельца всегда кулдаун только 1 секунда
+  const realCooldownMs = isOwner(userId) ? 1000 : cooldownMs;
+
+  const nextTime = new Date(new Date(row.value).getTime() + realCooldownMs);
   const diff = nextTime.getTime() - Date.now();
 
   return diff > 0 ? diff : 0;
@@ -3407,9 +3416,7 @@ async function getJewelryCooldown(userId) {
 }
 
 async function adjustUserCooldown(userId, cooldownName, deltaMs) {
-  if (isOwner(userId)) return { title: cooldownName, newDate: new Date(), remainingMs: 0 };
-
-  const info = getCooldownColumnAndMsByName(cooldownName);
+  const info = getCooldownColumnAndMsByName(cooldownName, userId);
   if (!info) throw new Error("UNKNOWN_COOLDOWN_TYPE");
 
   const result = await pool.query(
@@ -3430,9 +3437,11 @@ async function adjustUserCooldown(userId, cooldownName, deltaMs) {
     [userId, newDate.toISOString()]
   );
 
+  const realCooldownMs = isOwner(userId) ? 1000 : info.cooldownMs;
+
   const remainingMs = Math.max(
     0,
-    new Date(newDate.getTime() + info.cooldownMs).getTime() - Date.now()
+    new Date(newDate.getTime() + realCooldownMs).getTime() - Date.now()
   );
 
   return {
@@ -3451,7 +3460,9 @@ async function getCooldownText(userId) {
   function getRemaining(lastAt, cooldownMs) {
     if (!lastAt) return "✅ Уже доступно";
 
-    const nextTime = new Date(new Date(lastAt).getTime() + cooldownMs);
+    const realCooldownMs = isOwner(userId) ? 1000 : cooldownMs;
+
+    const nextTime = new Date(new Date(lastAt).getTime() + realCooldownMs);
     const diff = nextTime.getTime() - now.getTime();
 
     return diff <= 0 ? "✅ Уже доступно" : `⏳ ${formatRemainingTime(diff)}`;
