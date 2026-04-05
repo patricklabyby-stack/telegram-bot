@@ -430,6 +430,43 @@ function getHuntResult() {
   };
 }
 
+function getTreasureResult() {
+  const roll = Math.random();
+
+  if (roll < 0.30) {
+    return {
+      text: "🪙 Ты нашёл немного монет!",
+      coins: Math.floor(Math.random() * 10) + 1
+    };
+  }
+
+  if (roll < 0.55) {
+    return {
+      text: "📦 Ты откопал старый сундук!",
+      coins: Math.floor(Math.random() * 16) + 10
+    };
+  }
+
+  if (roll < 0.70) {
+    return {
+      text: "💎 Тебе повезло! Ты нашёл редкий клад!",
+      coins: Math.floor(Math.random() * 21) + 20
+    };
+  }
+
+  if (roll < 0.85) {
+    return {
+      text: "🕳️ Ты копал-копал, но ничего не нашёл.",
+      coins: 0
+    };
+  }
+
+  return {
+    text: "💀 Ты попал в ловушку и потерял монеты!",
+    coins: -(Math.floor(Math.random() * 10) + 1)
+  };
+}
+
 function getSniperResult() {
   if (Math.random() < 0.45) {
     return {
