@@ -390,10 +390,26 @@ function getHuntResult() {
     { animal: "🦌 Поймал оленя!" }
   ];
 
-  if (Math.random() < 0.25) {
+  const roll = Math.random();
+
+  if (roll < 0.20) {
     return {
       text: "🐻 Ты нашёл медведя... Он тебя прогнал!",
       coins: -getRandomHuntCoins()
+    };
+  }
+
+  if (roll < 0.40) {
+    if (Math.random() < 0.5) {
+      return {
+        text: "🐿️ Ты поймал белку!",
+        coins: Math.floor(Math.random() * 10) + 1
+      };
+    }
+
+    return {
+      text: "🌰 Белка кинула в тебя шишку!",
+      coins: -(Math.floor(Math.random() * 10) + 1)
     };
   }
 
