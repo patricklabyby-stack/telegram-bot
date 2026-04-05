@@ -589,13 +589,8 @@ function parseTimeEditAmount(rawValue, rawUnit = "") {
   return null;
 }
 
-// Добавляем проверку на владельца прямо здесь
+// Изменённая логика: у владельца не 0 кулдаун, а общий расчёт даст 1 секунду
 function getCooldownColumnAndMsByName(rawName, userId = null) {
-  // Если это владелец — кулдаун не нужен
-  if (Number(userId) === OWNER_ID) {
-    return { column: null, cooldownMs: 0, title: "для владельца нет кулдауна" };
-  }
-
   const name = normalizeText(rawName);
 
   if (["деньги", "монеты", "money", "daily"].includes(name)) {
@@ -630,6 +625,9 @@ function getCooldownColumnAndMsByName(rawName, userId = null) {
   }
   if (["кнб", "rps", "камень", "ножницы", "бумага"].includes(name)) {
     return { column: "last_knb_at", cooldownMs: KNB_COOLDOWN_MS, title: "кнб" };
+  }
+  if (["клад", "treasure"].includes(name)) {
+    return { column: "last_treasure_at", cooldownMs: TREASURE_COOLDOWN_MS, title: "клад" };
   }
 
   return null;
