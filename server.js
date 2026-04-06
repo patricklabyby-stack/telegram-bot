@@ -3565,6 +3565,7 @@ ID: ${user.id}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
+⚰️ Похоронили: ${stats.kills}
 ❤️ Обняли: ${stats.hugs}
 💋 Поцеловали: ${stats.kisses}
 👊 Ударили: ${stats.hits}
@@ -4738,7 +4739,8 @@ const rpCommands = {
   "разбудить": { text: "разбудил", stat: "wakes", emoji: "⏰", xp: 2 },
   "заморозить": { text: "заморозил", stat: "freezes", emoji: "🧊", xp: 2 },
   "спасти": { text: "спас", stat: "saves", emoji: "🛡️", xp: 2 },
-  "кинуть снежок": { text: "кинул снежок в", stat: "snowballs", emoji: "❄️", xp: 2 }
+  "кинуть снежок": { text: "кинул снежок в", stat: "snowballs", emoji: "❄️", xp: 2 },
+  "похоронить": { text: "похоронил", stat: "kills", emoji: "⚰️", xp: 2 }
 };
 
 // =========================
