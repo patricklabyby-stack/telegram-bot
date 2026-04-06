@@ -4739,7 +4739,6 @@ const rpCommands = {
   "заморозить": { text: "заморозил", stat: "freezes", emoji: "🧊", xp: 2 },
   "спасти": { text: "спас", stat: "saves", emoji: "🛡️", xp: 2 },
   "кинуть снежок": { text: "кинул снежок в", stat: "snowballs", emoji: "❄️", xp: 2 }
-  "похоронить": { text: "похоронил", stat: "kills", emoji: "⚰️", xp: 2 },
 };
 
 // =========================
