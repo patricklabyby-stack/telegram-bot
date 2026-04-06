@@ -481,21 +481,6 @@ function getSniperResult() {
   };
 }
 
-function getBuryText(fromUser, targetUser) {
-  const from = getUserLink(fromUser);
-  const target = getUserLink(targetUser);
-
-  const texts = [
-    `⚰️ ${from} торжественно похоронил(а) ${target}.`,
-    `🪦 ${from} закопал(а) ${target} с почестями.`,
-    `🕯️ ${from} провёл(а) мрачную церемонию для ${target}.`,
-    `⚰️ После встречи с ${from} ${target} был(а) похоронен(а).`,
-    `💀 ${from} отправил(а) ${target} на тот свет... и сразу похоронил(а).`
-  ];
-
-  return texts[Math.floor(Math.random() * texts.length)];
-}
-
 function getLieResult() {
   const percent = Math.floor(Math.random() * 101);
 
