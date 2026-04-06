@@ -4795,6 +4795,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 <b>💰 Деньги</b>
 • деньги
 • охота
+• клад
 • снайпер
 • баскетбол
 • боулинг
@@ -4868,6 +4869,7 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
 • спасти @username
 • подарок @username
 • кинуть снежок @username
+• похоронить @username
 
 <b>🛠 Свои команды</b>
 • /createcommand
