@@ -4761,6 +4761,18 @@ bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
   );
 });
 
+bot.onText(/^\/help(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  await safeSendMessage(
+    msg.chat.id,
+    `⚙️ Полный список команд в нашей статье:
+
+https://teletype.in/@mini_moderator/mini_moderator`,
+    {
+      disable_web_page_preview: false
+    }
+  );
+});
+
 bot.onText(/^\/profile(@[A-Za-z0-9_]+)?$/, async (msg) => {
   try {
     let targetUser = null;
