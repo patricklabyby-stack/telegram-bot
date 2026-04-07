@@ -9709,39 +9709,48 @@ ${escapeHtml(prediction)}`,
     }
 
     // CUSTOM COMMANDS
-    const customCommand = await getCustomCommandByTrigger(lowerText);
-    if (customCommand) {
-      const sender = msg.from;
-      const target = await resolveTargetUserUniversal(msg);
+const customCommand = await getCustomCommandByTrigger(lowerText);
+if (customCommand) {
+  const sender = msg.from;
 
-      if (!target) {
-        await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
-        return;
-      }
+  if (Number(customCommand.user_id) !== Number(sender.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Эту личную команду может использовать только тот, кто её создал."
+    );
+    return;
+  }
 
-      await initUser(target);
+  const target = await resolveTargetUserUniversal(msg);
 
-      if (sender.id === target.id) {
-        await safeSendMessage(
-          msg.chat.id,
-          `😅 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} самого себя`,
-          {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }
-        );
-        return;
-      }
+  if (!target) {
+    await safeSendMessage(msg.chat.id, "Ответь на сообщение человека или используй @username.");
+    return;
+  }
 
-      let out = `💬 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} ${getUserLink(target)}`;
-      out = await appendLevelUpIfNeeded(out, sender.id, 2);
+  await initUser(target);
 
-      await safeSendMessage(msg.chat.id, out, {
+  if (sender.id === target.id) {
+    await safeSendMessage(
+      msg.chat.id,
+      `😅 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} самого себя`,
+      {
         parse_mode: "HTML",
         disable_web_page_preview: true
-      });
-      return;
-    }
+      }
+    );
+    return;
+  }
+
+  let out = `💬 ${getUserLink(sender)} ${escapeHtml(customCommand.action_text)} ${getUserLink(target)}`;
+  out = await appendLevelUpIfNeeded(out, sender.id, 2);
+
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
     // RP COMMANDS + @username SUPPORT
     let matchedRpKey = null;
