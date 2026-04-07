@@ -5275,76 +5275,78 @@ bot.on("message", async (msg) => {
 
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
 
-    // CUSTOM COMMAND CREATION
-    if (pendingCommandCreation[pendingKey]) {
-      delete pendingCommandCreation[pendingKey];
+   // CUSTOM COMMAND CREATION
+if (pendingCommandCreation[pendingKey]) {
+  delete pendingCommandCreation[pendingKey];
 
-      const parsed = parseCreateCommandInput(originalText);
-      if (!parsed) {
-        await safeSendMessage(msg.chat.id, `❌ Напиши в формате:
+  const parsed = parseCreateCommandInput(originalText);
+  if (!parsed) {
+    await safeSendMessage(msg.chat.id, `❌ Напиши в формате:
 команда действие
 
 Пример:
 облил облил водой`);
-        return;
-      }
+    return;
+  }
 
-      if (!isValidTrigger(parsed.trigger)) {
-        await safeSendMessage(
-          msg.chat.id,
-          "❌ Команда должна быть одним словом от 2 до 20 символов.\nМожно буквы, цифры, _ и -"
-        );
-        return;
-      }
+  if (!isValidTrigger(parsed.trigger)) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Команда должна быть одним словом от 2 до 20 символов.\nМожно буквы, цифры, _ и -"
+    );
+    return;
+  }
 
-      if (parsed.actionText.length < 2 || parsed.actionText.length > 60) {
-        await safeSendMessage(msg.chat.id, "❌ Текст действия должен быть от 2 до 60 символов.");
-        return;
-      }
+  if (parsed.actionText.length < 2 || parsed.actionText.length > 60) {
+    await safeSendMessage(msg.chat.id, "❌ Текст действия должен быть от 2 до 60 символов.");
+    return;
+  }
 
-      if (rpCommands[parsed.trigger]) {
-        await safeSendMessage(msg.chat.id, "❌ Такая команда уже занята стандартной командой.");
-        return;
-      }
+  if (rpCommands[parsed.trigger]) {
+    await safeSendMessage(msg.chat.id, "❌ Такая команда уже занята стандартной командой.");
+    return;
+  }
 
-      const existing = await getCustomCommandByTrigger(parsed.trigger);
-      if (existing) {
-        await safeSendMessage(msg.chat.id, "❌ Такая команда уже существует. Напиши другую.");
-        return;
-      }
+  const existing = await getCustomCommandByTrigger(parsed.trigger);
+  if (existing) {
+    await safeSendMessage(msg.chat.id, "❌ Такая команда уже существует. Напиши другую.");
+    return;
+  }
 
-      const count = await getUserCustomCommandCount(msg.from.id);
-      if (count >= MAX_CUSTOM_COMMANDS) {
-        await safeSendMessage(msg.chat.id, `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}`);
-        return;
-      }
+  const count = await getUserCustomCommandCount(msg.from.id);
+  if (count >= MAX_CUSTOM_COMMANDS) {
+    await safeSendMessage(msg.chat.id, `❌ У тебя уже максимум команд: ${MAX_CUSTOM_COMMANDS}`);
+    return;
+  }
 
-      const stats = await getUserStats(msg.from.id);
-      if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
-        await safeSendMessage(msg.chat.id, `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`);
-        return;
-      }
+  const stats = await getUserStats(msg.from.id);
+  if ((stats.balance || 0) < CUSTOM_COMMAND_COST) {
+    await safeSendMessage(msg.chat.id, `❌ Чтобы создать команду, нужно ${CUSTOM_COMMAND_COST} монет.`);
+    return;
+  }
 
-      await pool.query(`UPDATE users SET balance = balance - $2 WHERE user_id = $1`, [
-        msg.from.id,
-        CUSTOM_COMMAND_COST
-      ]);
+  await pool.query(
+    `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+    [msg.from.id, CUSTOM_COMMAND_COST]
+  );
 
-      await createCustomCommand(msg.from.id, parsed.trigger, parsed.actionText);
+  await createCustomCommand(msg.from.id, parsed.trigger, parsed.actionText);
 
-      let resultText = `✅ Команда "${escapeHtml(parsed.trigger)}" создана!
+  let resultText = `✅ Команда "${escapeHtml(parsed.trigger)}" создана!
 
 Теперь:
 ${escapeHtml(parsed.trigger)} — команда
 ${escapeHtml(parsed.actionText)} — текст бота
 
+Использовать её может только тот, кто её создал.
+
 Списано: ${CUSTOM_COMMAND_COST} монет`;
 
-      resultText = await appendLevelUpIfNeeded(resultText, msg.from.id, 4);
+  resultText = await appendLevelUpIfNeeded(resultText, msg.from.id, 4);
 
-      await safeSendMessage(msg.chat.id, resultText, { parse_mode: "HTML" });
-      return;
-    }
+  await safeSendMessage(msg.chat.id, resultText, { parse_mode: "HTML" });
+  return;
+}
 
     // PENDING YES / NO
     const pendingMarriage = findMarriageRequestByUser(msg.chat.id, msg.from.id);
