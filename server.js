@@ -7808,10 +7808,101 @@ ${coinsLine}
 
       out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
 
-      await safeSendMessage(msg.chat.id, out, {
+            await safeSendMessage(msg.chat.id, out, {
         parse_mode: "HTML",
         disable_web_page_preview: true
       });
+      return;
+    }
+
+    if (lowerText.startsWith("голосование")) {
+      const parts = originalText
+        .split("\n")
+        .map(x => x.trim())
+        .filter(Boolean);
+
+      let question = "";
+      let options = [];
+
+      if (parts.length >= 3) {
+        question = parts[1];
+        options = parts[2]
+          .split(",")
+          .map(x => x.trim())
+          .filter(Boolean);
+      }
+
+      if (!question && !options.length) {
+        const randomPolls = [
+          {
+            question: "Кто сегодня пойдёт кушать?",
+            options: ["Маша", "Саша", "Авокадо", "Никто"]
+          },
+          {
+            question: "Кто сегодня самый сонный?",
+            options: ["Маша", "Саша", "Кот", "Все"]
+          },
+          {
+            question: "Что сегодня кушаем?",
+            options: ["Пицца", "Суши", "Шаурма", "Пельмени"]
+          },
+          {
+            question: "Кто сегодня виноват?",
+            options: ["Я", "Он", "Она", "Авокадо"]
+          },
+          {
+            question: "Кто сегодня самый смешной?",
+            options: ["Маша", "Саша", "Дима", "Хомяк"]
+          }
+        ];
+
+        const randomPoll = randomPolls[Math.floor(Math.random() * randomPolls.length)];
+        question = randomPoll.question;
+        options = randomPoll.options;
+      }
+
+      if (!question) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Напиши так:
+
+голосование
+Я полезный?
+Да, нет, почему`
+        );
+        return;
+      }
+
+      if (options.length < 2) {
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Нужно минимум 2 варианта ответа.
+
+Пример:
+голосование
+Я полезный?
+Да, нет, почему`
+        );
+        return;
+      }
+
+      if (options.length > 10) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ В голосовании можно указать максимум 10 вариантов."
+        );
+        return;
+      }
+
+      await bot.sendPoll(
+        msg.chat.id,
+        question,
+        options,
+        {
+          is_anonymous: false,
+          reply_to_message_id: msg.message_id
+        }
+      );
       return;
     }
 
