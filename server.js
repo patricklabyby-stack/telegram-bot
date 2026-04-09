@@ -5246,23 +5246,22 @@ async function isChatAdminOrOwner(chatId, userId) {
 
 function parseVerdictDuration(rawText) {
   const text = String(rawText || "").trim();
+  if (!text) return null;
 
-  const match = text.match(
-    /^(\d+)\s*(сек|секунд|секунда|секунды|мин|минута|минуты|минут|ч|час|часа|часов|д|день|дня|дней)\b/i
-  );
+  const parts = text.split(/\s+/).filter(Boolean);
+  if (parts.length < 3) return null;
 
-  if (!match) return null;
+  const value = Number(parts[0]);
+  if (!Number.isInteger(value) || value <= 0) return null;
 
-  const value = Number(match[1]);
-  const unitRaw = match[2].toLowerCase();
-
+  const unitRaw = parts[1].toLowerCase();
   let durationMs = 0;
   let unitShort = "";
 
-  if (["сек", "секунд", "секунда", "секунды"].includes(unitRaw)) {
+  if (["сек", "секунда", "секунды", "секунд", "с"].includes(unitRaw)) {
     durationMs = value * 1000;
     unitShort = "сек";
-  } else if (["мин", "минута", "минуты", "минут"].includes(unitRaw)) {
+  } else if (["мин", "минута", "минуты", "минут", "м"].includes(unitRaw)) {
     durationMs = value * 60 * 1000;
     unitShort = "мин";
   } else if (["ч", "час", "часа", "часов"].includes(unitRaw)) {
@@ -5275,14 +5274,12 @@ function parseVerdictDuration(rawText) {
     return null;
   }
 
-  const durationText = `${value} ${unitShort}`;
-  const verdictText = text.slice(match[0].length).trim();
-
+  const verdictText = parts.slice(2).join(" ").trim();
   if (!verdictText) return null;
 
   return {
     durationMs,
-    durationText,
+    durationText: `${value} ${unitShort}`,
     verdictText
   };
 }
