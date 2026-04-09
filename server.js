@@ -1140,6 +1140,19 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS verdicts (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    issued_by BIGINT NOT NULL,
+    duration_text TEXT NOT NULL,
+    verdict_text TEXT NOT NULL,
+    expires_at TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )
+`); 
+
   // =========================
   // REPUTATION
   // =========================
