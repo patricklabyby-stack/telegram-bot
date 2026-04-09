@@ -8375,6 +8375,140 @@ if (isExactCommand(lowerText, "удалить кличку")) {
   return;
 }
 
+if (lowerText.startsWith("питомец ")) {
+  const petRaw = originalText.slice("питомец".length).trim();
+  const pet = normalizePetName(petRaw);
+
+  if (!pet) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Напиши так:\n\nпитомец собака"
+    );
+    return;
+  }
+
+  if (!allowedPets.includes(pet)) {
+    await safeSendMessage(
+      msg.chat.id,
+      `❌ Такого питомца выбрать нельзя.\n\nДоступно:\n${allowedPets.join(", ")}`
+    );
+    return;
+  }
+
+  await setPet(msg.from.id, pet);
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🐾 ${getUserLink(msg.from)}, твой питомец теперь: ${escapeHtml(pet)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "мой питомец")) {
+  const petRow = await getPet(msg.from.id);
+
+  if (!petRow) {
+    await safeSendMessage(msg.chat.id, "🐾 У тебя пока нет питомца.");
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🐾 ${getUserLink(msg.from)}, твой питомец: ${escapeHtml(petRow.pet_type)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "удалить питомца")) {
+  const deleted = await deletePet(msg.from.id);
+
+  if (!deleted) {
+    await safeSendMessage(msg.chat.id, "🐾 У тебя и так нет питомца.");
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🗑️ ${getUserLink(msg.from)}, твой питомец удалён.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (lowerText.startsWith("др ")) {
+  const rawDate = originalText.slice("др".length).trim();
+  const parsedDate = parseBirthday(rawDate);
+
+  if (!parsedDate) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Неверная дата рождения.\n\nНапиши так:\nдр 12.05.2008"
+    );
+    return;
+  }
+
+  await setBirthday(msg.from.id, parsedDate);
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🎂 ${getUserLink(msg.from)}, твоя дата рождения сохранена: ${escapeHtml(parsedDate)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "моя дата рождения")) {
+  const birthdayRow = await getBirthday(msg.from.id);
+
+  if (!birthdayRow) {
+    await safeSendMessage(msg.chat.id, "🎂 У тебя пока не указана дата рождения.");
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🎂 ${getUserLink(msg.from)}, твоя дата рождения: ${escapeHtml(birthdayRow.birth_date)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "удалить др")) {
+  const deleted = await deleteBirthday(msg.from.id);
+
+  if (!deleted) {
+    await safeSendMessage(msg.chat.id, "🎂 У тебя и так нет сохранённой даты рождения.");
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🗑️ ${getUserLink(msg.from)}, дата рождения удалена.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+    
 // ROBBERY
 if (lowerText.startsWith("ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
