@@ -8201,6 +8201,209 @@ if (isExactCommand(lowerText, "могилка")) {
   );
   return;
 }
+
+if (lowerText.startsWith("приговор ")) {
+  const canUse = await isChatAdminOrOwner(msg.chat.id, msg.from.id);
+
+  if (!canUse) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Выдавать приговоры могут только админы группы или владелец бота."
+    );
+    return;
+  }
+
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Ответь на сообщение игрока или укажи @username."
+    );
+    return;
+  }
+
+  if (Number(target.id) === Number(msg.from.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Нельзя выдать приговор самому себе."
+    );
+    return;
+  }
+
+  const raw = originalText.slice("приговор".length).trim();
+  const parsed = parseVerdictDuration(raw);
+
+  if (!parsed) {
+    await safeSendMessage(
+      msg.chat.id,
+      `❌ Напиши так:
+
+приговор 30 мин Не заглядывать в холодильник
+
+Примеры:
+• приговор 30 мин Не заглядывать в холодильник
+• приговор 2 часа Не есть шаурму
+• приговор 1 день Молчать`
+    );
+    return;
+  }
+
+  await addVerdict(
+    target.id,
+    msg.from.id,
+    parsed.durationText,
+    parsed.verdictText,
+    parsed.durationMs
+  );
+
+  try {
+    await bot.deleteMessage(msg.chat.id, String(msg.message_id));
+  } catch (error) {
+    console.error("Не удалось удалить сообщение с приговором:", error?.message || error);
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `⚖️ Приговор для ${getUserLink(target)}: ${escapeHtml(parsed.durationText)} — ${escapeHtml(parsed.verdictText)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "приговоры")) {
+  const target = await resolveTargetUserUniversal(msg);
+  const targetUser = target || msg.from;
+
+  const verdicts = await getActiveVerdicts(targetUser.id);
+
+  if (!verdicts.length) {
+    await safeSendMessage(
+      msg.chat.id,
+      `⚖️ У ${getUserLink(targetUser)} нет активных приговоров.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return;
+  }
+
+  const lines = verdicts.map((item, index) => {
+    const remainingMs = item.expires_at
+      ? new Date(item.expires_at).getTime() - Date.now()
+      : 0;
+
+    const remainingText =
+      remainingMs > 0 ? formatRemainingTime(remainingMs) : item.duration_text;
+
+    return `${index + 1}: ${escapeHtml(item.verdict_text)} — ${escapeHtml(remainingText)}`;
+  });
+
+  await safeSendMessage(
+    msg.chat.id,
+    `⚖️ Приговоры ${getUserLink(targetUser)}:\n\n${lines.join("\n")}`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (lowerText.startsWith("-приговор")) {
+  const canUse = await isChatAdminOrOwner(msg.chat.id, msg.from.id);
+
+  if (!canUse) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Снимать приговоры могут только админы группы или владелец бота."
+    );
+    return;
+  }
+
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Ответь на сообщение игрока или укажи @username."
+    );
+    return;
+  }
+
+  if (Number(target.id) === Number(msg.from.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Нельзя снимать приговор самому себе."
+    );
+    return;
+  }
+
+  const raw = originalText.slice("-приговор".length).trim();
+  const index = Number(raw);
+
+  if (!Number.isInteger(index) || index <= 0) {
+    await safeSendMessage(
+      msg.chat.id,
+      `❌ Напиши так:
+
+-приговор 1
+-приговор 2`
+    );
+    return;
+  }
+
+  const removed = await removeVerdictByIndex(target.id, index);
+
+  if (!removed.ok) {
+    if (removed.reason === "no_verdicts") {
+      await safeSendMessage(
+        msg.chat.id,
+        `⚖️ У ${getUserLink(target)} нет активных приговоров.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (removed.reason === "bad_index") {
+      await safeSendMessage(
+        msg.chat.id,
+        `❌ У ${getUserLink(target)} нет приговора с номером ${escapeHtml(String(index))}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    await safeSendMessage(msg.chat.id, "❌ Не удалось снять приговор.");
+    return;
+  }
+
+  try {
+    await bot.deleteMessage(msg.chat.id, String(msg.message_id));
+  } catch (error) {
+    console.error("Не удалось удалить сообщение со снятием приговора:", error?.message || error);
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `✅ Снят приговор ${escapeHtml(String(index))} у ${getUserLink(target)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
     
 // ROBBERY
 if (lowerText.startsWith("ограбить")) {
