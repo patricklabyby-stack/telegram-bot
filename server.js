@@ -5229,6 +5229,66 @@ const graveTexts = [
   "🪦 {target}, финальный рестарт выполнен."
 ];
 
+async function setNickname(userId, nickname, setBy) {
+  const oldRow = await pool.query(
+    `
+    SELECT nickname
+    FROM nicknames
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  const oldNickname = oldRow.rows[0]?.nickname || null;
+
+  const result = await pool.query(
+    `
+    INSERT INTO nicknames (user_id, nickname, set_by, updated_at)
+    VALUES ($1, $2, $3, NOW())
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      nickname = EXCLUDED.nickname,
+      set_by = EXCLUDED.set_by,
+      updated_at = NOW()
+    RETURNING nickname
+    `,
+    [userId, nickname, setBy]
+  );
+
+  return {
+    nickname: result.rows[0]?.nickname || nickname,
+    oldNickname
+  };
+}
+
+async function getNickname(userId) {
+  const result = await pool.query(
+    `
+    SELECT nickname
+    FROM nicknames
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deleteNickname(userId) {
+  const result = await pool.query(
+    `
+    DELETE FROM nicknames
+    WHERE user_id = $1
+    RETURNING nickname
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
 // =========================
 // MAIN HANDLER
 // =========================
