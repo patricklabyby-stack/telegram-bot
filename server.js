@@ -5307,6 +5307,139 @@ async function deleteNickname(userId) {
   return result.rows[0] || null;
 }
 
+const allowedPets = [
+  "собака",
+  "кошка",
+  "хомяк",
+  "попугай",
+  "крыса",
+  "кролик",
+  "черепаха",
+  "рыбка",
+  "шиншилла",
+  "морская свинка",
+  "кот",
+  "пес"
+];
+
+async function setPet(userId, petType) {
+  const result = await pool.query(
+    `
+    INSERT INTO pets (user_id, pet_type, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      pet_type = EXCLUDED.pet_type,
+      updated_at = NOW()
+    RETURNING pet_type
+    `,
+    [userId, petType]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getPet(userId) {
+  const result = await pool.query(
+    `
+    SELECT pet_type
+    FROM pets
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deletePet(userId) {
+  const result = await pool.query(
+    `
+    DELETE FROM pets
+    WHERE user_id = $1
+    RETURNING pet_type
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+function normalizePetName(text) {
+  return String(text || "").trim().toLowerCase();
+}
+
+function parseBirthday(text) {
+  const value = String(text || "").trim();
+
+  const match = value.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+
+  if (year < 1900 || year > new Date().getFullYear()) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return `${String(day).padStart(2, "0")}.${String(month).padStart(2, "0")}.${year}`;
+}
+
+async function setBirthday(userId, birthDate) {
+  const result = await pool.query(
+    `
+    INSERT INTO birthdays (user_id, birth_date, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      birth_date = EXCLUDED.birth_date,
+      updated_at = NOW()
+    RETURNING birth_date
+    `,
+    [userId, birthDate]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getBirthday(userId) {
+  const result = await pool.query(
+    `
+    SELECT birth_date
+    FROM birthdays
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deleteBirthday(userId) {
+  const result = await pool.query(
+    `
+    DELETE FROM birthdays
+    WHERE user_id = $1
+    RETURNING birth_date
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
 // =========================
 // MAIN HANDLER
 // =========================
