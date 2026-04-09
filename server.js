@@ -5232,6 +5232,142 @@ const graveTexts = [
   "🪦 {target}, финальный рестарт выполнен."
 ];
 
+async function isChatAdminOrOwner(chatId, userId) {
+  if (Number(userId) === Number(OWNER_ID)) return true;
+
+  try {
+    const member = await bot.getChatMember(chatId, userId);
+    return ["creator", "administrator"].includes(member?.status);
+  } catch (error) {
+    console.error("Ошибка проверки админа:", error?.message || error);
+    return false;
+  }
+}
+
+function parseVerdictDuration(rawText) {
+  const text = String(rawText || "").trim();
+
+  const match = text.match(
+    /^(\d+)\s*(сек|секунд|секунда|секунды|мин|минута|минуты|минут|ч|час|часа|часов|д|день|дня|дней)\b/i
+  );
+
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  const unitRaw = match[2].toLowerCase();
+
+  let durationMs = 0;
+  let unitShort = "";
+
+  if (["сек", "секунд", "секунда", "секунды"].includes(unitRaw)) {
+    durationMs = value * 1000;
+    unitShort = "сек";
+  } else if (["мин", "минута", "минуты", "минут"].includes(unitRaw)) {
+    durationMs = value * 60 * 1000;
+    unitShort = "мин";
+  } else if (["ч", "час", "часа", "часов"].includes(unitRaw)) {
+    durationMs = value * 60 * 60 * 1000;
+    unitShort = "ч";
+  } else if (["д", "день", "дня", "дней"].includes(unitRaw)) {
+    durationMs = value * 24 * 60 * 60 * 1000;
+    unitShort = "д";
+  } else {
+    return null;
+  }
+
+  const durationText = `${value} ${unitShort}`;
+  const verdictText = text.slice(match[0].length).trim();
+
+  if (!verdictText) return null;
+
+  return {
+    durationMs,
+    durationText,
+    verdictText
+  };
+}
+
+async function deactivateExpiredVerdicts() {
+  await pool.query(
+    `
+    UPDATE verdicts
+    SET is_active = FALSE
+    WHERE is_active = TRUE
+      AND expires_at IS NOT NULL
+      AND expires_at <= NOW()
+    `
+  );
+}
+
+async function addVerdict(userId, issuedBy, durationText, verdictText, durationMs) {
+  const expiresAt = new Date(Date.now() + durationMs);
+
+  const result = await pool.query(
+    `
+    INSERT INTO verdicts (user_id, issued_by, duration_text, verdict_text, expires_at, is_active)
+    VALUES ($1, $2, $3, $4, $5, TRUE)
+    RETURNING id, duration_text, verdict_text, expires_at, created_at
+    `,
+    [userId, issuedBy, durationText, verdictText, expiresAt.toISOString()]
+  );
+
+  return result.rows[0];
+}
+
+async function getActiveVerdicts(userId) {
+  await deactivateExpiredVerdicts();
+
+  const result = await pool.query(
+    `
+    SELECT id, duration_text, verdict_text, expires_at, created_at
+    FROM verdicts
+    WHERE user_id = $1
+      AND is_active = TRUE
+    ORDER BY created_at ASC
+    `,
+    [userId]
+  );
+
+  return result.rows;
+}
+
+async function removeVerdictByIndex(userId, index) {
+  await deactivateExpiredVerdicts();
+
+  const result = await pool.query(
+    `
+    SELECT id
+    FROM verdicts
+    WHERE user_id = $1
+      AND is_active = TRUE
+    ORDER BY created_at ASC
+    `,
+    [userId]
+  );
+
+  const rows = result.rows;
+  if (!rows.length) return { ok: false, reason: "no_verdicts" };
+
+  const idx = Number(index) - 1;
+  if (idx < 0 || idx >= rows.length) return { ok: false, reason: "bad_index" };
+
+  const verdictId = rows[idx].id;
+
+  const removed = await pool.query(
+    `
+    UPDATE verdicts
+    SET is_active = FALSE
+    WHERE id = $1
+    RETURNING id
+    `,
+    [verdictId]
+  );
+
+  if (!removed.rows[0]) return { ok: false, reason: "not_found" };
+
+  return { ok: true };
+}
+
 // =========================
 // MAIN HANDLER
 // =========================
