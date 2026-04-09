@@ -2,7 +2,6 @@ const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
 const { Pool } = require("pg");
 const crypto = require("crypto");
-const { registerHelpCommands } = require("./commands/help");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
