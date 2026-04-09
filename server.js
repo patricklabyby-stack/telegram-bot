@@ -5248,18 +5248,6 @@ const graveTexts = [
 ];
 
 async function setNickname(userId, nickname, setBy) {
-  const oldRow = await pool.query(
-    `
-    SELECT nickname
-    FROM nicknames
-    WHERE user_id = $1
-    LIMIT 1
-    `,
-    [userId]
-  );
-
-  const oldNickname = oldRow.rows[0]?.nickname || null;
-
   const result = await pool.query(
     `
     INSERT INTO nicknames (user_id, nickname, set_by, updated_at)
@@ -5274,10 +5262,7 @@ async function setNickname(userId, nickname, setBy) {
     [userId, nickname, setBy]
   );
 
-  return {
-    nickname: result.rows[0]?.nickname || nickname,
-    oldNickname
-  };
+  return result.rows[0] || { nickname };
 }
 
 async function getNickname(userId) {
@@ -5317,9 +5302,7 @@ const allowedPets = [
   "черепаха",
   "рыбка",
   "шиншилла",
-  "морская свинка",
-  "кот",
-  "пес"
+  "морская свинка"
 ];
 
 async function setPet(userId, petType) {
@@ -5367,7 +5350,10 @@ async function deletePet(userId) {
 }
 
 function normalizePetName(text) {
-  return String(text || "").trim().toLowerCase();
+  const normalized = String(text || "").trim().toLowerCase();
+  if (normalized === "кот") return "кошка";
+  if (normalized === "пес" || normalized === "пёс") return "собака";
+  return normalized;
 }
 
 function parseBirthday(text) {
@@ -8399,7 +8385,7 @@ if (lowerText.startsWith("питомец ")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🐾 ${getUserLink(msg.from)}, твой питомец теперь: ${escapeHtml(pet)}.`,
+    `🐾 Твой питомец: ${escapeHtml(pet)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8408,7 +8394,7 @@ if (lowerText.startsWith("питомец ")) {
   return;
 }
 
-if (isExactCommand(lowerText, "мой питомец")) {
+if (isExactCommand(lowerText, "питомец") || isExactCommand(lowerText, "мой питомец")) {
   const petRow = await getPet(msg.from.id);
 
   if (!petRow) {
@@ -8418,7 +8404,7 @@ if (isExactCommand(lowerText, "мой питомец")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🐾 ${getUserLink(msg.from)}, твой питомец: ${escapeHtml(petRow.pet_type)}.`,
+    `🐾 Твой питомец: ${escapeHtml(petRow.pet_type)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8437,7 +8423,7 @@ if (isExactCommand(lowerText, "удалить питомца")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🗑️ ${getUserLink(msg.from)}, твой питомец удалён.`,
+    `🗑️ Твой питомец удалён.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8462,7 +8448,7 @@ if (lowerText.startsWith("др ")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🎂 ${getUserLink(msg.from)}, твоя дата рождения сохранена: ${escapeHtml(parsedDate)}.`,
+    `🎂 Твоя дата рождения сохранена: ${escapeHtml(parsedDate)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8471,7 +8457,7 @@ if (lowerText.startsWith("др ")) {
   return;
 }
 
-if (isExactCommand(lowerText, "моя дата рождения")) {
+if (isExactCommand(lowerText, "моя дата рождения") || isExactCommand(lowerText, "мой др") || isExactCommand(lowerText, "мое др") || isExactCommand(lowerText, "моя др")) {
   const birthdayRow = await getBirthday(msg.from.id);
 
   if (!birthdayRow) {
@@ -8481,7 +8467,7 @@ if (isExactCommand(lowerText, "моя дата рождения")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🎂 ${getUserLink(msg.from)}, твоя дата рождения: ${escapeHtml(birthdayRow.birth_date)}.`,
+    `🎂 Твоя дата рождения: ${escapeHtml(birthdayRow.birth_date)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8490,7 +8476,7 @@ if (isExactCommand(lowerText, "моя дата рождения")) {
   return;
 }
 
-if (isExactCommand(lowerText, "удалить др")) {
+if (isExactCommand(lowerText, "удалить др") || isExactCommand(lowerText, "удалить дату рождения")) {
   const deleted = await deleteBirthday(msg.from.id);
 
   if (!deleted) {
@@ -8500,7 +8486,7 @@ if (isExactCommand(lowerText, "удалить др")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🗑️ ${getUserLink(msg.from)}, дата рождения удалена.`,
+    `🗑️ Дата рождения удалена.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
