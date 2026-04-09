@@ -8122,7 +8122,152 @@ if (isExactCommand(lowerText, "могилка")) {
   );
   return;
 }
-    
+
+if (lowerText.startsWith("кличка ")) {
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Ответь на сообщение игрока или укажи @username."
+    );
+    return;
+  }
+
+  const nickname = originalText.slice("кличка".length).trim();
+
+  if (!nickname) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Напиши так:\n\nкличка Августин"
+    );
+    return;
+  }
+
+  if (nickname.length < 2 || nickname.length > 32) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Кличка должна быть от 2 до 32 символов."
+    );
+    return;
+  }
+
+  const saved = await setNickname(target.id, nickname, msg.from.id);
+
+  if (saved.oldNickname) {
+    await safeSendMessage(
+      msg.chat.id,
+      `🔁 Кличка ${getUserLink(target)} изменена: ${escapeHtml(saved.oldNickname)} → ${escapeHtml(saved.nickname)}.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🏷️ Для ${getUserLink(target)} установлена кличка: ${escapeHtml(saved.nickname)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "кличка")) {
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Ответь на сообщение игрока или укажи @username."
+    );
+    return;
+  }
+
+  const nicknameRow = await getNickname(target.id);
+
+  if (!nicknameRow) {
+    await safeSendMessage(
+      msg.chat.id,
+      `🏷️ У ${getUserLink(target)} пока нет клички.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🏷️ ${getUserLink(target)} — ${escapeHtml(nicknameRow.nickname)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "моя кличка")) {
+  const nicknameRow = await getNickname(msg.from.id);
+
+  if (!nicknameRow) {
+    await safeSendMessage(msg.chat.id, "🏷️ У тебя пока нет клички.");
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🏷️ ${getUserLink(msg.from)} — ${escapeHtml(nicknameRow.nickname)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "удалить кличку")) {
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Ответь на сообщение игрока или укажи @username."
+    );
+    return;
+  }
+
+  const deleted = await deleteNickname(target.id);
+
+  if (!deleted) {
+    await safeSendMessage(
+      msg.chat.id,
+      `🏷️ У ${getUserLink(target)} и так нет клички.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return;
+  }
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🗑️ Кличка для ${getUserLink(target)} удалена.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
 // ROBBERY
 if (lowerText.startsWith("ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
