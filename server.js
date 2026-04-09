@@ -8020,9 +8020,43 @@ ${coinsLine}
   );
   return;
 }
-    
-  // ROBBERY
-    if (lowerText.startsWith("ограбить")) {
+
+if (isExactCommand(lowerText, "могилка")) {
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Ответь на сообщение игрока или укажи @username."
+    );
+    return;
+  }
+
+  if (Number(target.id) === Number(msg.from.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Нельзя ставить могилку самому себе."
+    );
+    return;
+  }
+
+  const targetText = getUserLink(target);
+  const textTemplate = graveTexts[Math.floor(Math.random() * graveTexts.length)];
+  const out = textTemplate.replace("{target}", targetText);
+
+  await safeSendMessage(
+    msg.chat.id,
+    out,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+// ROBBERY
+if (lowerText.startsWith("ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
         await safeSendMessage(msg.chat.id, jailText);
