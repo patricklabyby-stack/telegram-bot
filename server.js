@@ -8199,7 +8199,7 @@ if (isExactCommand(lowerText, "могилка")) {
   return;
 }
 
-if (lowerText.startsWith("приговор ")) {
+if (lowerText.startsWith("приговор")) {
   const canUse = await isChatAdminOrOwner(msg.chat.id, msg.from.id);
 
   if (!canUse) {
