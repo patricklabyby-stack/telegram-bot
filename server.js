@@ -8124,7 +8124,6 @@ if (isExactCommand(lowerText, "могилка")) {
 }
 
 if (lowerText.startsWith("кличка ")) {
-  const target = await resolveTargetUserUniversal(msg) || msg.from;
   const nickname = originalText.slice("кличка".length).trim();
 
   if (!nickname) {
@@ -8143,12 +8142,12 @@ if (lowerText.startsWith("кличка ")) {
     return;
   }
 
-  const saved = await setNickname(target.id, nickname, msg.from.id);
+  const saved = await setNickname(msg.from.id, nickname, msg.from.id);
 
   if (saved.oldNickname) {
     await safeSendMessage(
       msg.chat.id,
-      `🔁 Кличка ${getUserLink(target)} изменена: ${escapeHtml(saved.oldNickname)} → ${escapeHtml(saved.nickname)}.`,
+      `🔁 Кличка ${getUserLink(msg.from)} изменена: ${escapeHtml(saved.oldNickname)} → ${escapeHtml(saved.nickname)}.`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
@@ -8159,7 +8158,7 @@ if (lowerText.startsWith("кличка ")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🏷️ Для ${getUserLink(target)} установлена кличка: ${escapeHtml(saved.nickname)}.`,
+    `🏷️ Для ${getUserLink(msg.from)} установлена кличка: ${escapeHtml(saved.nickname)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8169,33 +8168,16 @@ if (lowerText.startsWith("кличка ")) {
 }
 
 if (isExactCommand(lowerText, "кличка")) {
-  const target = await resolveTargetUserUniversal(msg);
-
-  if (!target) {
-    await safeSendMessage(
-      msg.chat.id,
-      "❌ Ответь на сообщение игрока или напиши 'моя кличка'."
-    );
-    return;
-  }
-
-  const nicknameRow = await getNickname(target.id);
+  const nicknameRow = await getNickname(msg.from.id);
 
   if (!nicknameRow) {
-    await safeSendMessage(
-      msg.chat.id,
-      `🏷️ У ${getUserLink(target)} пока нет клички.`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
+    await safeSendMessage(msg.chat.id, "🏷️ У тебя пока нет клички.");
     return;
   }
 
   await safeSendMessage(
     msg.chat.id,
-    `🏷️ ${getUserLink(target)} — ${escapeHtml(nicknameRow.nickname)}.`,
+    `🏷️ ${getUserLink(msg.from)} — ${escapeHtml(nicknameRow.nickname)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
