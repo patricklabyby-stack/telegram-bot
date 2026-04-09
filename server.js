@@ -217,6 +217,8 @@ async function safeSendMessage(chatId, text, options = {}) {
   }
 }
 
+registerHelpCommands(bot, safeSendMessage);
+
 async function safeAnswerCallback(query, text = "", showAlert = false) {
   try {
     await bot.answerCallbackQuery(query.id, { text, show_alert: showAlert });
