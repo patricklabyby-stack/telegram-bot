@@ -8124,16 +8124,7 @@ if (isExactCommand(lowerText, "могилка")) {
 }
 
 if (lowerText.startsWith("кличка ")) {
-  const target = await resolveTargetUserUniversal(msg);
-
-  if (!target) {
-    await safeSendMessage(
-      msg.chat.id,
-      "❌ Ответь на сообщение игрока или укажи @username."
-    );
-    return;
-  }
-
+  const target = await resolveTargetUserUniversal(msg) || msg.from;
   const nickname = originalText.slice("кличка".length).trim();
 
   if (!nickname) {
@@ -8183,7 +8174,7 @@ if (isExactCommand(lowerText, "кличка")) {
   if (!target) {
     await safeSendMessage(
       msg.chat.id,
-      "❌ Ответь на сообщение игрока или укажи @username."
+      "❌ Ответь на сообщение игрока или напиши 'моя кличка'."
     );
     return;
   }
@@ -8233,33 +8224,16 @@ if (isExactCommand(lowerText, "моя кличка")) {
 }
 
 if (isExactCommand(lowerText, "удалить кличку")) {
-  const target = await resolveTargetUserUniversal(msg);
-
-  if (!target) {
-    await safeSendMessage(
-      msg.chat.id,
-      "❌ Ответь на сообщение игрока или укажи @username."
-    );
-    return;
-  }
-
-  const deleted = await deleteNickname(target.id);
+  const deleted = await deleteNickname(msg.from.id);
 
   if (!deleted) {
-    await safeSendMessage(
-      msg.chat.id,
-      `🏷️ У ${getUserLink(target)} и так нет клички.`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
+    await safeSendMessage(msg.chat.id, "🏷️ У тебя и так нет клички.");
     return;
   }
 
   await safeSendMessage(
     msg.chat.id,
-    `🗑️ Кличка для ${getUserLink(target)} удалена.`,
+    `🗑️ Кличка ${getUserLink(msg.from)} удалена.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
