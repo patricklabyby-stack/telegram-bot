@@ -5191,8 +5191,6 @@ const insults = [
   "дурачина"
 ];
 
-const insults = [ ... ];
-
 const graveTexts = [
   "🪦 {target}, царство небесное.",
   "🪦 {target}, хмарных тебе облачков.",
