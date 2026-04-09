@@ -7959,7 +7959,39 @@ ${coinsLine}
       return;
     }
 
-    // ROBBERY
+    if (isExactCommand(lowerText, "обзывалка")) {
+  const target = await resolveTargetUserUniversal(msg);
+
+  if (!target) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Ответь на сообщение игрока или укажи @username."
+    );
+    return;
+  }
+
+  if (Number(target.id) === Number(msg.from.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Нельзя обзывать самого себя."
+    );
+    return;
+  }
+
+  const insult = insults[Math.floor(Math.random() * insults.length)];
+
+  await safeSendMessage(
+    msg.chat.id,
+    `🤬 ${getUserLink(target)} — ${escapeHtml(insult)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+    
+  // ROBBERY
     if (lowerText.startsWith("ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
       if (jailText) {
