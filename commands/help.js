@@ -2,11 +2,13 @@ function registerHelpCommands(bot, safeSendMessage) {
   bot.onText(/^\/start(@[A-Za-z0-9_]+)?$/, async (msg) => {
     await safeSendMessage(
       msg.chat.id,
-      `Привет, ${msg.from.first_name || "друг"}! 👋
+      `🔥 <b>Мини Модератор</b> — бот для Telegram-групп
 
-Добро пожаловать в Мини Модератор.
+Привет, ${msg.from.first_name || "друг"}! 👋
 
-Напиши /help чтобы посмотреть команды.`,
+Здесь ты можешь использовать команды для профиля, фана, RP и других возможностей бота.
+
+Нажми /help чтобы открыть список команд.`,
       {
         parse_mode: "HTML",
         disable_web_page_preview: true
@@ -17,10 +19,12 @@ function registerHelpCommands(bot, safeSendMessage) {
   bot.onText(/^\/help(@[A-Za-z0-9_]+)?$/, async (msg) => {
     await safeSendMessage(
       msg.chat.id,
-      `⚙️ Полный список команд в нашей статье:
+      `⚙️ <b>Полный список команд</b>
 
+Открыть статью с командами:
 https://teletype.in/@mini_moderator/mini_moderator`,
       {
+        parse_mode: "HTML",
         disable_web_page_preview: false
       }
     );
