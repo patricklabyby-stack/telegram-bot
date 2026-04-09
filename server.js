@@ -1149,6 +1149,24 @@ async function initDb() {
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )
 `);
+
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS pets (
+    user_id BIGINT PRIMARY KEY,
+    pet_type TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )
+`);
+
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS birthdays (
+    user_id BIGINT PRIMARY KEY,
+    birth_date TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )
+`);
   
   // =========================
   // REPUTATION
