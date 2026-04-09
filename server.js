@@ -7117,7 +7117,7 @@ ${getUserLink(target)}, выбери ниже:
       const child = await resolveTargetUserUniversal(msg);
 
       if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или напиши: усыновить @username");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока в чате или напиши так: усыновить @username");
         return;
       }
 
@@ -8200,7 +8200,7 @@ if (isExactCommand(lowerText, "обзывалка")) {
   if (!target) {
     await safeSendMessage(
       msg.chat.id,
-      "❌ Ответь на сообщение игрока или укажи @username."
+      "❌ Ответь на сообщение игрока в чате или укажи @username."
     );
     return;
   }
@@ -8232,7 +8232,7 @@ if (isExactCommand(lowerText, "могилка")) {
   if (!target) {
     await safeSendMessage(
       msg.chat.id,
-      "❌ Ответь на сообщение игрока или укажи @username."
+      "❌ Ответь на сообщение игрока в чате или укажи @username."
     );
     return;
   }
@@ -8279,23 +8279,11 @@ if (lowerText.startsWith("кличка ")) {
     return;
   }
 
-  const saved = await setNickname(msg.from.id, nickname, msg.from.id);
-
-  if (saved.oldNickname) {
-    await safeSendMessage(
-      msg.chat.id,
-      `🔁 Кличка ${getUserLink(msg.from)} изменена: ${escapeHtml(saved.oldNickname)} → ${escapeHtml(saved.nickname)}.`,
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      }
-    );
-    return;
-  }
+  await setNickname(msg.from.id, nickname, msg.from.id);
 
   await safeSendMessage(
     msg.chat.id,
-    `🏷️ Для ${getUserLink(msg.from)} установлена кличка: ${escapeHtml(saved.nickname)}.`,
+    `🏷️ Твоя кличка: ${escapeHtml(nickname)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8304,7 +8292,7 @@ if (lowerText.startsWith("кличка ")) {
   return;
 }
 
-if (isExactCommand(lowerText, "кличка")) {
+if (isExactCommand(lowerText, "кличка") || isExactCommand(lowerText, "моя кличка")) {
   const nicknameRow = await getNickname(msg.from.id);
 
   if (!nicknameRow) {
@@ -8314,26 +8302,7 @@ if (isExactCommand(lowerText, "кличка")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🏷️ ${getUserLink(msg.from)} — ${escapeHtml(nicknameRow.nickname)}.`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    }
-  );
-  return;
-}
-
-if (isExactCommand(lowerText, "моя кличка")) {
-  const nicknameRow = await getNickname(msg.from.id);
-
-  if (!nicknameRow) {
-    await safeSendMessage(msg.chat.id, "🏷️ У тебя пока нет клички.");
-    return;
-  }
-
-  await safeSendMessage(
-    msg.chat.id,
-    `🏷️ ${getUserLink(msg.from)} — ${escapeHtml(nicknameRow.nickname)}.`,
+    `🏷️ Твоя кличка: ${escapeHtml(nicknameRow.nickname)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8352,7 +8321,7 @@ if (isExactCommand(lowerText, "удалить кличку")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🗑️ Кличка ${getUserLink(msg.from)} удалена.`,
+    "🗑️ Твоя кличка удалена.",
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8376,7 +8345,7 @@ if (lowerText.startsWith("питомец ")) {
   if (!allowedPets.includes(pet)) {
     await safeSendMessage(
       msg.chat.id,
-      `❌ Такого питомца выбрать нельзя.\n\nДоступно:\n${allowedPets.join(", ")}`
+      `❌ Такого питомца выбрать нельзя.\n\nВыбери одного из списка:\n${allowedPets.join(", ")}`
     );
     return;
   }
@@ -8385,7 +8354,7 @@ if (lowerText.startsWith("питомец ")) {
 
   await safeSendMessage(
     msg.chat.id,
-    `🐾 Твой питомец: ${escapeHtml(pet)}.`,
+    `🐾 Теперь твой питомец: ${escapeHtml(pet)}.`,
     {
       parse_mode: "HTML",
       disable_web_page_preview: true
@@ -8517,7 +8486,7 @@ if (lowerText.startsWith("ограбить")) {
 
       const target = await resolveTargetUserUniversal(msg);
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или напиши: ограбить @username");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока в чате или напиши так: ограбить @username");
         return;
       }
 
@@ -9982,7 +9951,7 @@ ${members.map((u) => `• ${getUserLink(u)}`).join("\n")}
       const target = await resolveTargetUserUniversal(msg);
 
       if (!target) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или напиши: купить монеты другу @username");
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока в чате или напиши так: купить монеты другу @username");
         return;
       }
 
@@ -10530,7 +10499,7 @@ bot.onText(/^\/givemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
     const amount = Number(match?.[2] || 0);
 
     if (!target) {
-      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /givemoney 1000");
+      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока в чате или укажи @username и напиши так: /givemoney 1000");
       return;
     }
 
@@ -10566,7 +10535,7 @@ bot.onText(/^\/takemoney(@[A-Za-z0-9_]+)?(?:\s+(\d+))?$/, async (msg, match) => 
     const amount = Number(match?.[2] || 0);
 
     if (!target) {
-      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока или укажи @username и напиши: /takemoney 100");
+      await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока в чате или укажи @username и напиши так: /takemoney 100");
       return;
     }
 
@@ -10661,7 +10630,14 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
 });
 
 bot.on("polling_error", (error) => {
-  console.error("Polling error:", error?.message || error);
+  const message = String(error?.message || error || "");
+
+  if (message.includes("409 Conflict")) {
+    console.warn("⚠️ Polling conflict: бот уже запущен в другом месте.");
+    return;
+  }
+
+  console.error("Polling error:", message);
 });
 
 // =========================
