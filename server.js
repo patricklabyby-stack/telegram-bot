@@ -1140,6 +1140,16 @@ async function initDb() {
     )
   `);
 
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS nicknames (
+    user_id BIGINT PRIMARY KEY,
+    nickname TEXT NOT NULL,
+    set_by BIGINT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )
+`);
+  
   // =========================
   // REPUTATION
   // =========================
