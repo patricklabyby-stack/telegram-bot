@@ -48,6 +48,16 @@ const BOWLING_COOLDOWN_MS = 60 * 60 * 1000;
 const KNB_COOLDOWN_MS = 30 * 60 * 1000;
 const TREASURE_COOLDOWN_MS = 60 * 60 * 1000;
 
+const DARK_WORK_REWARD_MIN = 500;
+const DARK_WORK_REWARD_MAX = 800;
+const DARK_WORK_FINE_MIN = 300;
+const DARK_WORK_FINE_MAX = 500;
+const DARK_WORK_JAIL_MS = 4 * 60 * 60 * 1000;
+const DARK_WORK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+const DARK_WORK_CANCEL_COOLDOWN_MS = 60 * 60 * 1000;
+const DARK_WORK_EXPIRE_MS = 20 * 60 * 1000;
+const DARK_WORK_FIND_CHANCE = 0.45;
+
 const BOMB_TIMER_MS = 5000;
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
 const MARRIAGE_REQUEST_MS = 10 * 60 * 60 * 1000;
@@ -667,6 +677,9 @@ function getCooldownColumnAndMsByName(rawName, userId = null) {
   if (["клад", "treasure"].includes(name)) {
     return { column: "last_treasure_at", cooldownMs: TREASURE_COOLDOWN_MS, title: "клад" };
   }
+  if (["тёмная работа", "темная работа", "тёмнаяработа", "темнаяработа"].includes(name)) {
+    return { column: "dark_work_special", cooldownMs: DARK_WORK_COOLDOWN_MS, title: "тёмная работа" };
+  }
 
   return null;
 }
@@ -1167,6 +1180,24 @@ await pool.query(`
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )
 `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dark_work_sessions (
+      chat_id BIGINT PRIMARY KEY,
+      worker_user_id BIGINT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dark_work_cooldowns (
+      user_id BIGINT PRIMARY KEY,
+      available_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
   
   // =========================
   // REPUTATION
@@ -3560,7 +3591,7 @@ async function getCooldownText(userId) {
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
 🎳 Боулинг: ${getRemaining(stats.last_bowling_at, BOWLING_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}
-🗺️ Клад: ${getRemaining(stats.last_treasure_at, TREASURE_COOLDOWN_MS)}`;
+🗺️ Клад: ${getRemaining(stats.last_treasure_at, TREASURE_COOLDOWN_MS)}\n🌑 Тёмная работа: ${await (async () => { const ms = await getDarkWorkCooldown(userId); return ms <= 0 ? "✅ Уже доступно" : `⏳ ${formatRemainingTime(ms)}`; })()}`;
 }
 
 // =========================
@@ -5247,73 +5278,6 @@ const graveTexts = [
   "🪦 {target}, финальный рестарт выполнен."
 ];
 
-const diagnosisTexts = [
-  "острый мемоз головного мозга",
-  "хроническая нехватка шаурмы",
-  "тяжёлая форма лени с приступами гениальности",
-  "зависимость от сообщений в 3 ночи",
-  "синдром великого пельменя",
-  "повышенная токсичность без осложнений",
-  "острая нехватка отпуска",
-  "хронический недосып второй степени",
-  "аллергия на понедельники",
-  "приступы смешнявости",
-  "синдром загадочного молчуна",
-  "перегрев от собственного величия",
-  "дефицит котиков в организме",
-  "избыток драматичности",
-  "острый кринжовый спазм",
-  "тяжёлый случай странности",
-  "зависимость от внимания чата",
-  "воспаление чувства юмора",
-  "хроническая любовь к халяве",
-  "синдром потерянного носка",
-  "раздвоение личности между работой и диваном",
-  "острый дефицит выходных",
-  "приступы внезапной гениальности",
-  "аллергия на скучные разговоры",
-  "синдром кухонного философа",
-  "тремор после вида домашки",
-  "хроническое желание ничего не делать",
-  "дефицит обнимашек",
-  "избыток важности",
-  "синдром ночного пельменя",
-  "острая зависимость от уведомлений",
-  "вирус хихиканья",
-  "хроническая тяга к приключениям",
-  "моральная усталость от людей",
-  "синдром потерянной мотивации",
-  "аллергия на будильники",
-  "резкое обострение сарказма",
-  "острый приступ жадности до монет",
-  "синдром непобедимого спорщика",
-  "дефицит шашлыка в крови",
-  "синдром диванного эксперта",
-  "хроническая тяга к кнопке отмены",
-  "избыток харизмы без справки",
-  "синдром слишком смешного человека",
-  "острый приступ желания всем командовать",
-  "повышенная мемная активность",
-  "синдром невыспавшегося короля",
-  "острый дефицит шашлычно-мангальной терапии",
-  "аллергия на здравый смысл по выходным",
-  "хроническая тяга к странным идеям",
-  "синдром потерянной зарядки",
-  "тяжёлая форма прокрастинации",
-  "острый недостаток каникул",
-  "маниакальная любовь к чату",
-  "синдром внезапного исчезновения на важных темах",
-  "пельменная интоксикация",
-  "острый приступ величия",
-  "синдром любителя писать и удалять",
-  "хроническая зависимость от мемов",
-  "тяжёлый случай сонной ауры"
-];
-
-function getRandomDiagnosis() {
-  return getRandomFromArray(diagnosisTexts) || "хроническая нехватка диагноза";
-}
-
 async function setNickname(userId, nickname, setBy) {
   const result = await pool.query(
     `
@@ -5493,6 +5457,185 @@ async function deleteBirthday(userId) {
   return result.rows[0] || null;
 }
 
+
+function getRandomDarkWorkIntro() {
+  return getRandomFromArray([
+    "📦 Тебе выдали подозрительный пакет. Теперь нужно его отвезти.",
+    "🕶️ Для тебя нашлась тёмная работа. Ты забрал закрытый пакет без лишних вопросов.",
+    "💼 У тебя в руках тёмный пакет. Долго держать его при себе опасно.",
+    "🌑 Ты получил пакет для тёмной работы. Теперь надо быстро довести дело до конца."
+  ]);
+}
+
+function getRandomDarkWorkUnavailableText() {
+  return getRandomFromArray([
+    "🌑 Сейчас тёмной работы нет. Попробуй позже.",
+    "📭 Пока что нет доступной тёмной работы.",
+    "😐 Сегодня для тебя ничего не нашлось.",
+    "🌘 Сейчас свободных тёмных работ нет."
+  ]);
+}
+
+function getRandomDarkWorkSuccessText(coins) {
+  return getRandomFromArray([
+    `✅ Ты успешно отвёз пакет и получил ${coins} монет.`,
+    `💸 Всё прошло тихо. Награда: ${coins} монет.`,
+    `🕶️ Ты не привлёк внимания. Получено: ${coins} монет.`,
+    `📦 Доставка прошла успешно. +${coins} монет.`
+  ]);
+}
+
+function getRandomDarkWorkFineText(fine) {
+  return getRandomFromArray([
+    `🚨 Тебя заметили по пути. Штраф: -${fine} монет.`,
+    `👮 Всё пошло не по плану. С тебя взыскали ${fine} монет.`,
+    `❌ Тёмная работа сорвалась. Потеряно ${fine} монет.`
+  ]);
+}
+
+function getRandomDarkWorkJailText() {
+  return getRandomFromArray([
+    "⛓️ У тебя не хватило денег на штраф. Ты отправлен в тюрьму на 4 часа.",
+    "🚔 Штраф оплатить не удалось. Наказание: тюрьма на 4 часа.",
+    "👮 Денег оказалось недостаточно. Ты отправлен в тюрьму на 4 часа."
+  ]);
+}
+
+async function cleanupExpiredDarkWork() {
+  await pool.query(
+    `
+    DELETE FROM dark_work_sessions
+    WHERE expires_at <= NOW()
+    `
+  );
+}
+
+async function getActiveDarkWorkByChat(chatId) {
+  await cleanupExpiredDarkWork();
+
+  const result = await pool.query(
+    `
+    SELECT chat_id, worker_user_id, expires_at, created_at, updated_at
+    FROM dark_work_sessions
+    WHERE chat_id = $1
+    LIMIT 1
+    `,
+    [chatId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getMyActiveDarkWork(chatId, userId) {
+  const row = await getActiveDarkWorkByChat(chatId);
+  if (!row) return null;
+  if (Number(row.worker_user_id) !== Number(userId)) return null;
+  return row;
+}
+
+async function createDarkWorkSession(chatId, userId) {
+  const expiresAt = new Date(Date.now() + DARK_WORK_EXPIRE_MS);
+
+  const result = await pool.query(
+    `
+    INSERT INTO dark_work_sessions (chat_id, worker_user_id, expires_at, created_at, updated_at)
+    VALUES ($1, $2, $3, NOW(), NOW())
+    ON CONFLICT (chat_id)
+    DO UPDATE SET
+      worker_user_id = EXCLUDED.worker_user_id,
+      expires_at = EXCLUDED.expires_at,
+      updated_at = NOW()
+    RETURNING chat_id, worker_user_id, expires_at, created_at, updated_at
+    `,
+    [chatId, userId, expiresAt.toISOString()]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function clearDarkWorkSession(chatId) {
+  const result = await pool.query(
+    `
+    DELETE FROM dark_work_sessions
+    WHERE chat_id = $1
+    RETURNING chat_id
+    `,
+    [chatId]
+  );
+
+  return !!result.rows[0];
+}
+
+async function setDarkWorkCooldown(userId, ms = DARK_WORK_COOLDOWN_MS) {
+  const realMs = isOwner(userId) ? 1000 : Math.max(1000, Number(ms) || 0);
+  const availableAt = new Date(Date.now() + realMs);
+
+  await pool.query(
+    `
+    INSERT INTO dark_work_cooldowns (user_id, available_at, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      available_at = EXCLUDED.available_at,
+      updated_at = NOW()
+    `,
+    [userId, availableAt.toISOString()]
+  );
+}
+
+async function getDarkWorkCooldown(userId) {
+  const result = await pool.query(
+    `
+    SELECT available_at
+    FROM dark_work_cooldowns
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  const row = result.rows[0];
+  if (!row?.available_at) return 0;
+
+  return Math.max(0, new Date(row.available_at).getTime() - Date.now());
+}
+
+async function adjustDarkWorkCooldown(userId, deltaMs) {
+  const result = await pool.query(
+    `
+    SELECT available_at
+    FROM dark_work_cooldowns
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  if (!result.rows[0]) throw new Error("USER_NOT_FOUND");
+
+  const currentValue = result.rows[0].available_at;
+  if (!currentValue) throw new Error("COOLDOWN_NOT_USED_YET");
+
+  const currentDate = new Date(currentValue);
+  const newDate = new Date(currentDate.getTime() + deltaMs);
+
+  await pool.query(
+    `
+    UPDATE dark_work_cooldowns
+    SET available_at = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, newDate.toISOString()]
+  );
+
+  return {
+    title: "тёмная работа",
+    newDate,
+    remainingMs: Math.max(0, newDate.getTime() - Date.now())
+  };
+}
+
 // =========================
 // MAIN HANDLER
 // =========================
@@ -5605,21 +5748,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
-      return;
-    }
-
-    if (lowerText === "диагноз" || lowerText.startsWith("диагноз ")) {
-      const targetUser = (await resolveTargetUserUniversal(msg)) || msg.from;
-      const diagnosis = getRandomDiagnosis();
-
-      await safeSendMessage(
-        msg.chat.id,
-        `🩺 Диагноз для ${getUserLink(targetUser)}: ${escapeHtml(diagnosis)}.`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
       return;
     }
 
@@ -8577,6 +8705,170 @@ if (isExactCommand(lowerText, "удалить др") || isExactCommand(lowerText
   return;
 }
     
+
+if (isExactCommand(lowerText, "темная работа")) {
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return;
+  }
+
+  const layLowBlock = await getLayLowBlockText(msg.from.id);
+  if (layLowBlock) {
+    await safeSendMessage(msg.chat.id, layLowBlock);
+    return;
+  }
+
+  const childPunishment = await getPunishedBlockText(msg.from.id);
+  if (childPunishment) {
+    await safeSendMessage(msg.chat.id, `${childPunishment}\nВо время наказания нельзя брать тёмную работу.`);
+    return;
+  }
+
+  const mySession = await getMyActiveDarkWork(msg.chat.id, msg.from.id);
+  if (mySession) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ У тебя уже есть активная тёмная работа.\nИспользуй: мой пакет, отвезти пакет, выбросить пакет или отказаться от работы."
+    );
+    return;
+  }
+
+  const activeSession = await getActiveDarkWorkByChat(msg.chat.id);
+  if (activeSession && Number(activeSession.worker_user_id) !== Number(msg.from.id)) {
+    await safeSendMessage(
+      msg.chat.id,
+      "❌ Сейчас тёмная работа уже занята другим игроком. Подожди, пока заказ освободится."
+    );
+    return;
+  }
+
+  const cooldownMs = await getDarkWorkCooldown(msg.from.id);
+  if (cooldownMs > 0) {
+    await safeSendMessage(
+      msg.chat.id,
+      `⏳ Тёмная работа снова будет доступна через ${formatRemainingTime(cooldownMs)}.`
+    );
+    return;
+  }
+
+  if (Math.random() > DARK_WORK_FIND_CHANCE) {
+    await safeSendMessage(msg.chat.id, getRandomDarkWorkUnavailableText());
+    return;
+  }
+
+  const session = await createDarkWorkSession(msg.chat.id, msg.from.id);
+  const remain = Math.max(0, new Date(session.expires_at).getTime() - Date.now());
+
+  await safeSendMessage(
+    msg.chat.id,
+    `${getRandomDarkWorkIntro()}\n\nКоманды:\n• мой пакет\n• отвезти пакет\n• выбросить пакет\n• отказаться от работы\n\n⏳ Пакет действует: ${formatRemainingTime(remain)}.`,
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    }
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "мой пакет")) {
+  const mySession = await getMyActiveDarkWork(msg.chat.id, msg.from.id);
+  if (!mySession) {
+    const activeSession = await getActiveDarkWorkByChat(msg.chat.id);
+    if (activeSession) {
+      await safeSendMessage(msg.chat.id, "❌ Этот пакет не твой. У тебя сейчас нет активной тёмной работы.");
+      return;
+    }
+
+    await safeSendMessage(msg.chat.id, "❌ У тебя сейчас нет пакета. Сначала напиши: тёмная работа");
+    return;
+  }
+
+  const remain = Math.max(0, new Date(mySession.expires_at).getTime() - Date.now());
+  await safeSendMessage(
+    msg.chat.id,
+    `📦 У тебя на руках тёмный пакет.\n\nДоступно:\n• отвезти пакет\n• выбросить пакет\n• отказаться от работы\n\n⏳ Осталось времени: ${formatRemainingTime(remain)}.`
+  );
+  return;
+}
+
+if (isExactCommand(lowerText, "выбросить пакет") || isExactCommand(lowerText, "отказаться от работы")) {
+  const mySession = await getMyActiveDarkWork(msg.chat.id, msg.from.id);
+  if (!mySession) {
+    await safeSendMessage(msg.chat.id, "❌ У тебя сейчас нет активной тёмной работы.");
+    return;
+  }
+
+  await clearDarkWorkSession(msg.chat.id);
+  await setDarkWorkCooldown(msg.from.id, DARK_WORK_CANCEL_COOLDOWN_MS);
+
+  if (isExactCommand(lowerText, "выбросить пакет")) {
+    await safeSendMessage(msg.chat.id, "🗑️ Ты избавился от пакета. Награды не будет.");
+  } else {
+    await safeSendMessage(msg.chat.id, "❌ Ты отказался от тёмной работы.");
+  }
+  return;
+}
+
+if (isExactCommand(lowerText, "отвезти пакет")) {
+  const jailText = await getJailBlockText(msg.from.id);
+  if (jailText) {
+    await safeSendMessage(msg.chat.id, jailText);
+    return;
+  }
+
+  const mySession = await getMyActiveDarkWork(msg.chat.id, msg.from.id);
+  if (!mySession) {
+    const activeSession = await getActiveDarkWorkByChat(msg.chat.id);
+    if (activeSession) {
+      await safeSendMessage(msg.chat.id, "❌ Этот пакет не твой. У тебя сейчас нет активной тёмной работы.");
+      return;
+    }
+
+    await safeSendMessage(msg.chat.id, "❌ У тебя нет пакета. Сначала напиши: тёмная работа");
+    return;
+  }
+
+  const success = Math.random() < 0.55;
+  await clearDarkWorkSession(msg.chat.id);
+  await setDarkWorkCooldown(msg.from.id, DARK_WORK_COOLDOWN_MS);
+
+  if (success) {
+    const reward = Math.floor(Math.random() * (DARK_WORK_REWARD_MAX - DARK_WORK_REWARD_MIN + 1)) + DARK_WORK_REWARD_MIN;
+    const newBalance = await addCoinsToUser(msg.from.id, reward);
+    const text = await appendLevelUpIfNeeded(getRandomDarkWorkSuccessText(reward), msg.from.id, 12);
+
+    await safeSendMessage(
+      msg.chat.id,
+      `${text}\n💰 Твой баланс: ${newBalance} монет.`,
+      {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }
+    );
+    return;
+  }
+
+  const fine = Math.floor(Math.random() * (DARK_WORK_FINE_MAX - DARK_WORK_FINE_MIN + 1)) + DARK_WORK_FINE_MIN;
+  await changeWantedLevel(msg.from.id, 1);
+  const fineResult = await deductCoinsExact(msg.from.id, fine);
+
+  if (fineResult.ok) {
+    await safeSendMessage(
+      msg.chat.id,
+      `${getRandomDarkWorkFineText(fine)}\n🚨 Уровень розыска повышен.\n💰 Твой баланс: ${fineResult.balance} монет.`
+    );
+    return;
+  }
+
+  await sendUserToJail(msg.from.id, DARK_WORK_JAIL_MS);
+  await safeSendMessage(
+    msg.chat.id,
+    `${getRandomDarkWorkJailText()}\n🚨 Уровень розыска повышен.`
+  );
+  return;
+}
+
 // ROBBERY
 if (lowerText.startsWith("ограбить")) {
       const jailText = await getJailBlockText(msg.from.id);
@@ -10689,7 +10981,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     if (deltaMs === null) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа\n/timeedit тёмная работа -24 ч"
       );
       return;
     }
@@ -10706,7 +10998,11 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
 
     await initUser(targetUser);
 
-    const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
+    const normalizedCooldownName = normalizeText(cooldownName);
+    const result =
+      ["тёмная работа", "темная работа", "тёмнаяработа", "темнаяработа"].includes(normalizedCooldownName)
+        ? await adjustDarkWorkCooldown(targetUser.id, deltaMs)
+        : await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
     const signText =
       Math.abs(deltaMs) % (60 * 60 * 1000) === 0
         ? `${Number(rawValue)} ч`
@@ -10728,7 +11024,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб");
+      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб, тёмная работа");
       return;
     }
 
@@ -10743,7 +11039,14 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
 });
 
 bot.on("polling_error", (error) => {
-  console.error("Polling error:", error?.message || error);
+  const message = String(error?.message || error || "");
+
+  if (message.includes("409 Conflict")) {
+    console.error("⚠️ Бот уже запущен где-то ещё. Оставь только один активный polling-процесс.");
+    return;
+  }
+
+  console.error("Polling error:", message);
 });
 
 // =========================
