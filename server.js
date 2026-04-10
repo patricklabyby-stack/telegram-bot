@@ -677,6 +677,9 @@ function getCooldownColumnAndMsByName(rawName, userId = null) {
   if (["клад", "treasure"].includes(name)) {
     return { column: "last_treasure_at", cooldownMs: TREASURE_COOLDOWN_MS, title: "клад" };
   }
+  if (["тёмная работа", "темная работа", "тёмнаяработа", "темнаяработа"].includes(name)) {
+    return { column: "dark_work_special", cooldownMs: DARK_WORK_COOLDOWN_MS, title: "тёмная работа" };
+  }
 
   return null;
 }
@@ -3588,7 +3591,7 @@ async function getCooldownText(userId) {
 🏀 Баскетбол: ${getRemaining(stats.last_basketball_at, BASKETBALL_COOLDOWN_MS)}
 🎳 Боулинг: ${getRemaining(stats.last_bowling_at, BOWLING_COOLDOWN_MS)}
 ✂️ КНБ: ${getRemaining(stats.last_knb_at, KNB_COOLDOWN_MS)}
-🗺️ Клад: ${getRemaining(stats.last_treasure_at, TREASURE_COOLDOWN_MS)}`;
+🗺️ Клад: ${getRemaining(stats.last_treasure_at, TREASURE_COOLDOWN_MS)}\n🌑 Тёмная работа: ${await (async () => { const ms = await getDarkWorkCooldown(userId); return ms <= 0 ? "✅ Уже доступно" : `⏳ ${formatRemainingTime(ms)}`; })()}`;
 }
 
 // =========================
@@ -5564,7 +5567,8 @@ async function clearDarkWorkSession(chatId) {
 }
 
 async function setDarkWorkCooldown(userId, ms = DARK_WORK_COOLDOWN_MS) {
-  const availableAt = new Date(Date.now() + Math.max(1000, Number(ms) || 0));
+  const realMs = isOwner(userId) ? 1000 : Math.max(1000, Number(ms) || 0);
+  const availableAt = new Date(Date.now() + realMs);
 
   await pool.query(
     `
@@ -5594,6 +5598,42 @@ async function getDarkWorkCooldown(userId) {
   if (!row?.available_at) return 0;
 
   return Math.max(0, new Date(row.available_at).getTime() - Date.now());
+}
+
+async function adjustDarkWorkCooldown(userId, deltaMs) {
+  const result = await pool.query(
+    `
+    SELECT available_at
+    FROM dark_work_cooldowns
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  if (!result.rows[0]) throw new Error("USER_NOT_FOUND");
+
+  const currentValue = result.rows[0].available_at;
+  if (!currentValue) throw new Error("COOLDOWN_NOT_USED_YET");
+
+  const currentDate = new Date(currentValue);
+  const newDate = new Date(currentDate.getTime() + deltaMs);
+
+  await pool.query(
+    `
+    UPDATE dark_work_cooldowns
+    SET available_at = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, newDate.toISOString()]
+  );
+
+  return {
+    title: "тёмная работа",
+    newDate,
+    remainingMs: Math.max(0, newDate.getTime() - Date.now())
+  };
 }
 
 // =========================
@@ -10941,7 +10981,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     if (deltaMs === null) {
       await safeSendMessage(
         msg.chat.id,
-        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа"
+        "❌ Примеры:\n/timeedit деньги -4\n/timeedit охота -2 часа\n/timeedit снайпер -30 минут\n/timeedit ограбление -15 мин\n/timeedit ограбление банка -2 часа\n/timeedit банкомат -1 час\n/timeedit инкассация -2 часа\n/timeedit ювелирка -2 часа\n/timeedit тёмная работа -24 ч"
       );
       return;
     }
@@ -10958,7 +10998,11 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
 
     await initUser(targetUser);
 
-    const result = await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
+    const normalizedCooldownName = normalizeText(cooldownName);
+    const result =
+      ["тёмная работа", "темная работа", "тёмнаяработа", "темнаяработа"].includes(normalizedCooldownName)
+        ? await adjustDarkWorkCooldown(targetUser.id, deltaMs)
+        : await adjustUserCooldown(targetUser.id, cooldownName, deltaMs);
     const signText =
       Math.abs(deltaMs) % (60 * 60 * 1000) === 0
         ? `${Number(rawValue)} ч`
@@ -10980,7 +11024,7 @@ bot.onText(/^\/timeedit(@[A-Za-z0-9_]+)?\s+(.+?)\s+([+-]?\d+)(?:\s+([^\s]+))?$/,
     );
   } catch (error) {
     if (error.message === "UNKNOWN_COOLDOWN_TYPE") {
-      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб");
+      await safeSendMessage(msg.chat.id, "❌ Доступно: деньги, охота, снайпер, ограбление, ограбление банка, банкомат, инкассация, ювелирка, баскетбол, боулинг, кнб, тёмная работа");
       return;
     }
 
