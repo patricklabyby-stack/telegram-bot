@@ -1182,6 +1182,19 @@ await pool.query(`
 `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS verdicts (
+      id SERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      issued_by BIGINT NOT NULL,
+      duration_text TEXT NOT NULL,
+      verdict_text TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      is_active BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS dark_work_sessions (
       chat_id BIGINT PRIMARY KEY,
       worker_user_id BIGINT NOT NULL,
@@ -5457,6 +5470,216 @@ async function deleteBirthday(userId) {
   return result.rows[0] || null;
 }
 
+async function isChatAdminOrOwner(chatId, userId) {
+  if (Number(userId) === Number(OWNER_ID)) return true;
+
+  try {
+    const member = await bot.getChatMember(chatId, userId);
+    return ["creator", "administrator"].includes(member?.status);
+  } catch (error) {
+    console.error("Ошибка проверки админа:", error?.message || error);
+    return false;
+  }
+}
+
+const diagnosisTexts = [
+  "острый мемоз головного мозга",
+  "хроническая нехватка шаурмы",
+  "тяжёлая форма лени с редкими приступами гениальности",
+  "синдром великого пельменя",
+  "дефицит сна и избыток фантазии",
+  "хроническая зависимость от чата",
+  "аллергия на работу",
+  "острая нехватка внимания",
+  "вирус хихиканья",
+  "синдром загадочного молчуна",
+  "приступы смешнявости",
+  "повышенная токсичность первой степени",
+  "дефицит адекватности по утрам",
+  "хронический кринж в лёгкой форме",
+  "ломка по выходным",
+  "острый приступ голода",
+  "повышенная странность без осложнений",
+  "зависимость от ночных сообщений",
+  "синдром холодильного набега",
+  "навязчивая тяга к спору",
+  "дефицит тормозов в интернете",
+  "острый недосып с эффектом философа",
+  "тяжёлый случай " + '"сейчас ещё пять минут"',
+  "воспаление чувства юмора",
+  "синдром главного героя чата",
+  "хроническая тяга к приключениям",
+  "дефицит шаурмы в организме",
+  "резкая нехватка отпускных дней",
+  "синдром коварного смайлика",
+  "внутренний конфликт с будильником",
+  "хронический бардак в мыслях",
+  "приступ диванной активности",
+  "зависимость от кнопки отправить",
+  "повышенный уровень подозрительности",
+  "синдром внезапной важности",
+  "острая нехватка каникул",
+  "сильная форма мемной интоксикации",
+  "дефицит терпения второй степени",
+  "необъяснимая тяга к ерунде",
+  "синдром потерянного носка",
+  "запущенная стадия прокрастинации",
+  "чрезмерная уверенность при полном отсутствии плана",
+  "приступы геройства на ровном месте",
+  "хроническая любовь к хаосу",
+  "редкая форма офисного выживания",
+  "острый дефицит печенек",
+  "синдром вечного " + '"ща приду"',
+  "высокая концентрация шуток в крови",
+  "тяжёлая форма разговорчивости",
+  "хронический недобор серотонина и шаурмы"
+];
+
+function getRandomDiagnosisText() {
+  return getRandomFromArray(diagnosisTexts);
+}
+
+function parseVerdictDuration(rawText) {
+  const text = String(rawText || "").trim();
+
+  const match = text.match(
+    /^(\d+)\s*(сек|секунд|секунда|секунды|мин|минута|минуты|минут|ч|час|часа|часов|д|день|дня|дней)\b/i
+  );
+
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  const unitRaw = match[2].toLowerCase();
+
+  let durationMs = 0;
+  let unitShort = "";
+
+  if (["сек", "секунд", "секунда", "секунды"].includes(unitRaw)) {
+    durationMs = value * 1000;
+    unitShort = "сек";
+  } else if (["мин", "минута", "минуты", "минут"].includes(unitRaw)) {
+    durationMs = value * 60 * 1000;
+    unitShort = "мин";
+  } else if (["ч", "час", "часа", "часов"].includes(unitRaw)) {
+    durationMs = value * 60 * 60 * 1000;
+    unitShort = "ч";
+  } else if (["д", "день", "дня", "дней"].includes(unitRaw)) {
+    durationMs = value * 24 * 60 * 60 * 1000;
+    unitShort = "д";
+  } else {
+    return null;
+  }
+
+  const durationText = `${value} ${unitShort}`;
+  const verdictText = text.slice(match[0].length).trim();
+
+  if (!verdictText) return null;
+
+  return {
+    durationMs,
+    durationText,
+    verdictText
+  };
+}
+
+async function deactivateExpiredVerdicts() {
+  await pool.query(
+    `
+    UPDATE verdicts
+    SET is_active = FALSE
+    WHERE is_active = TRUE
+      AND expires_at IS NOT NULL
+      AND expires_at <= NOW()
+    `
+  );
+}
+
+async function addVerdict(userId, issuedBy, durationText, verdictText, durationMs) {
+  const expiresAt = new Date(Date.now() + durationMs);
+
+  const result = await pool.query(
+    `
+    INSERT INTO verdicts (user_id, issued_by, duration_text, verdict_text, expires_at, is_active)
+    VALUES ($1, $2, $3, $4, $5, TRUE)
+    RETURNING id, duration_text, verdict_text, expires_at, created_at
+    `,
+    [userId, issuedBy, durationText, verdictText, expiresAt.toISOString()]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getActiveVerdicts(userId) {
+  await deactivateExpiredVerdicts();
+
+  const result = await pool.query(
+    `
+    SELECT id, duration_text, verdict_text, expires_at, created_at
+    FROM verdicts
+    WHERE user_id = $1
+      AND is_active = TRUE
+    ORDER BY created_at ASC
+    `,
+    [userId]
+  );
+
+  return result.rows;
+}
+
+async function removeVerdictByIndex(userId, index) {
+  await deactivateExpiredVerdicts();
+
+  const result = await pool.query(
+    `
+    SELECT id
+    FROM verdicts
+    WHERE user_id = $1
+      AND is_active = TRUE
+    ORDER BY created_at ASC
+    `,
+    [userId]
+  );
+
+  const rows = result.rows;
+  if (!rows.length) return { ok: false, reason: "no_verdicts" };
+
+  const idx = Number(index) - 1;
+  if (idx < 0 || idx >= rows.length) return { ok: false, reason: "bad_index" };
+
+  const verdictId = rows[idx].id;
+
+  const removed = await pool.query(
+    `
+    UPDATE verdicts
+    SET is_active = FALSE
+    WHERE id = $1
+    RETURNING id
+    `,
+    [verdictId]
+  );
+
+  if (!removed.rows[0]) return { ok: false, reason: "not_found" };
+
+  return { ok: true };
+}
+
+function formatVerdictsList(user, verdicts) {
+  if (!verdicts.length) {
+    return `📜 Приговоры ${getUserLink(user)}\n\n❌ Активных приговоров нет.`;
+  }
+
+  const lines = verdicts.map((row, index) => {
+    const remain = Math.max(0, new Date(row.expires_at).getTime() - Date.now());
+    return `${index + 1}. ${escapeHtml(row.duration_text)} — ${escapeHtml(row.verdict_text)}\n⏳ Осталось: ${escapeHtml(formatRemainingTime(remain))}`;
+  });
+
+  return `📜 Приговоры ${getUserLink(user)}\n\n${lines.join("\n\n")}`;
+}
+
+function getVerdictTargetHintText() {
+  return "❌ Ответь на сообщение игрока в чате или укажи @username.";
+}
+
 
 function getRandomDarkWorkIntro() {
   return getRandomFromArray([
@@ -5748,6 +5971,158 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       await finalizeAdoptionAccept(pendingAdoption, msg.chat.id);
+      return;
+    }
+
+    // =========================
+    // DIAGNOSIS / VERDICTS
+    // =========================
+    if (lowerText === "диагноз" || lowerText.startsWith("диагноз @")) {
+      let targetUser = msg.from;
+
+      if (msg.reply_to_message) {
+        const resolved = await resolveTargetUserFromReply(msg);
+        if (resolved) targetUser = resolved;
+      } else {
+        const resolved = await resolveTargetUserUniversal(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const diagnosis = getRandomDiagnosisText();
+      const intro = Number(targetUser.id) === Number(msg.from.id) ? "🩺 Твой диагноз" : `🩺 Диагноз для ${getUserLink(targetUser)}`;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `${intro}: ${escapeHtml(diagnosis)}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "мои приговоры") || isExactCommand(lowerText, "приговоры") || lowerText.startsWith("приговоры @")) {
+      let targetUser = msg.from;
+
+      if (!isExactCommand(lowerText, "мои приговоры")) {
+        const resolved = await resolveTargetUserUniversal(msg);
+        if (resolved) targetUser = resolved;
+      }
+
+      const verdicts = await getActiveVerdicts(targetUser.id);
+      await safeSendMessage(
+        msg.chat.id,
+        formatVerdictsList(targetUser, verdicts),
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("приговор ")) {
+      const canManageVerdicts = await isChatAdminOrOwner(msg.chat.id, msg.from.id);
+      if (!canManageVerdicts) {
+        await safeSendMessage(msg.chat.id, "❌ Выдавать приговоры может только админ группы или владелец бота.");
+        return;
+      }
+
+      const targetUser = await resolveTargetUserUniversal(msg);
+      if (!targetUser) {
+        await safeSendMessage(msg.chat.id, getVerdictTargetHintText());
+        return;
+      }
+
+      if (Number(targetUser.id) === Number(msg.from.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя выдать приговор самому себе.");
+        return;
+      }
+
+      let payload = originalText.slice("приговор".length).trim();
+      const mentionUsername = extractMentionUsername(payload);
+      if (mentionUsername) payload = cleanupTextWithoutMention(payload);
+
+      const parsed = parseVerdictDuration(payload);
+      if (!parsed) {
+        await safeSendMessage(
+          msg.chat.id,
+          "❌ Пример: ответь на сообщение игрока и напиши\nприговор 30 мин не флудить"
+        );
+        return;
+      }
+
+      const saved = await addVerdict(
+        targetUser.id,
+        msg.from.id,
+        parsed.durationText,
+        parsed.verdictText,
+        parsed.durationMs
+      );
+
+      await safeSendMessage(
+        msg.chat.id,
+        `⚖️ ${getUserLink(targetUser)} выдан приговор на ${escapeHtml(saved.duration_text)}.\nПричина: ${escapeHtml(saved.verdict_text)}.\n⏳ До: ${escapeHtml(formatDateTime(saved.expires_at))}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("-приговор ") || lowerText.startsWith("снять приговор ")) {
+      const canManageVerdicts = await isChatAdminOrOwner(msg.chat.id, msg.from.id);
+      if (!canManageVerdicts) {
+        await safeSendMessage(msg.chat.id, "❌ Снимать приговоры может только админ группы или владелец бота.");
+        return;
+      }
+
+      const targetUser = await resolveTargetUserUniversal(msg);
+      if (!targetUser) {
+        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение игрока в чате или укажи @username, чтобы снять приговор.");
+        return;
+      }
+
+      if (Number(targetUser.id) === Number(msg.from.id)) {
+        await safeSendMessage(msg.chat.id, "❌ Нельзя снимать приговоры с самого себя.");
+        return;
+      }
+
+      const indexRaw = lowerText.startsWith("-приговор ")
+        ? originalText.slice("-приговор".length).trim()
+        : originalText.slice("снять приговор".length).trim();
+
+      const index = Number(indexRaw);
+      if (!Number.isInteger(index) || index <= 0) {
+        await safeSendMessage(msg.chat.id, "❌ Укажи номер приговора. Пример: -приговор 1");
+        return;
+      }
+
+      const removed = await removeVerdictByIndex(targetUser.id, index);
+      if (!removed.ok) {
+        if (removed.reason === "no_verdicts") {
+          await safeSendMessage(msg.chat.id, "❌ У этого игрока нет активных приговоров.");
+          return;
+        }
+        if (removed.reason === "bad_index") {
+          await safeSendMessage(msg.chat.id, "❌ Приговора с таким номером нет.");
+          return;
+        }
+
+        await safeSendMessage(msg.chat.id, "❌ Не удалось снять приговор.");
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ С ${getUserLink(targetUser)} снят приговор №${index}.`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
       return;
     }
 
