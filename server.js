@@ -57,6 +57,8 @@ const DARK_WORK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 const DARK_WORK_CANCEL_COOLDOWN_MS = 60 * 60 * 1000;
 const DARK_WORK_EXPIRE_MS = 20 * 60 * 1000;
 const DARK_WORK_FIND_CHANCE = 0.45;
+const DARK_WORK_IDEAL_SUCCESS_CHANCE = 0.18;
+const DARK_WORK_POLICE_SWEEP_CHANCE = 0.30;
 
 const BOMB_TIMER_MS = 5000;
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
@@ -5530,44 +5532,53 @@ async function deleteBirthday(userId) {
 
 function getRandomDarkWorkIntro() {
   return getRandomFromArray([
-    "📦 Тебе выдали подозрительный пакет. Теперь нужно его отвезти.",
-    "🕶️ Для тебя нашлась тёмная работа. Ты забрал закрытый пакет без лишних вопросов.",
-    "💼 У тебя в руках тёмный пакет. Долго держать его при себе опасно.",
-    "🌑 Ты получил пакет для тёмной работы. Теперь надо быстро довести дело до конца."
+    "📦 Тебе выдали подозрительный пакет. Точка уже под наблюдением, поэтому любая ошибка будет стоить дорого.",
+    "🕶️ Для тебя нашлась тёмная работа. Пакет нужно везти туда, где часто крутится полиция.",
+    "💼 У тебя в руках тёмный пакет. Место передачи грязное: камеры, патрули и лишние глаза повсюду.",
+    "🌑 Ты получил пакет для тёмной работы. На точке почти всегда дежурят полицейские, так что дело очень рискованное."
   ]);
 }
 
 function getRandomDarkWorkUnavailableText() {
   return getRandomFromArray([
-    "🌑 Сейчас тёмной работы нет. Попробуй позже.",
-    "📭 Пока что нет доступной тёмной работы.",
-    "😐 Сегодня для тебя ничего не нашлось.",
-    "🌘 Сейчас свободных тёмных работ нет."
+    "🌑 Сейчас тёмной работы нет. Все точки слишком горячие, попробуй позже.",
+    "📭 Пока что нет доступной тёмной работы. Сегодня на местах слишком много полиции.",
+    "😐 Сегодня для тебя ничего не нашлось. Сейчас слишком опасно даже для тёмной работы.",
+    "🌘 Сейчас свободных тёмных работ нет. Все закладки под подозрением."
   ]);
 }
 
 function getRandomDarkWorkSuccessText(coins) {
   return getRandomFromArray([
-    `✅ Ты успешно отвёз пакет и получил ${coins} монет.`,
-    `💸 Всё прошло тихо. Награда: ${coins} монет.`,
-    `🕶️ Ты не привлёк внимания. Получено: ${coins} монет.`,
-    `📦 Доставка прошла успешно. +${coins} монет.`
+    `✅ Редкая удача: всё прошло идеально. Ты довёз пакет и получил ${coins} монет.`,
+    `💸 Невероятно, но сегодня обошлось без патруля. Награда: ${coins} монет.`,
+    `🕶️ Ты чудом не попал на камеры и получил ${coins} монет.`,
+    `📦 Полиция не успела среагировать. Доставка завершена. +${coins} монет.`
   ]);
 }
 
 function getRandomDarkWorkFineText(fine) {
   return getRandomFromArray([
-    `🚨 Тебя заметили по пути. Штраф: -${fine} монет.`,
-    `👮 Всё пошло не по плану. С тебя взыскали ${fine} монет.`,
-    `❌ Тёмная работа сорвалась. Потеряно ${fine} монет.`
+    `🚨 На точке уже дежурила полиция. Штраф: -${fine} монет.`,
+    `👮 Тебя повели на досмотр прямо у места передачи. С тебя взыскали ${fine} монет.`,
+    `❌ Закладка оказалась под наблюдением. Потеряно ${fine} монет.`,
+    `🚓 Камеры и патруль сделали своё дело. Штраф: -${fine} монет.`
+  ]);
+}
+
+function getRandomDarkWorkSweepText(fine) {
+  return getRandomFromArray([
+    `🚔 На месте была полноценная облава. Ты едва ушёл, но потерял ${fine} монет.`,
+    `👮‍♂️ Полиция уже караулила точку. Тебя жёстко прижали. Потеряно ${fine} монет.`,
+    `🚨 Передача была под контролем. Ты сорвал дело и лишился ${fine} монет.`
   ]);
 }
 
 function getRandomDarkWorkJailText() {
   return getRandomFromArray([
-    "⛓️ У тебя не хватило денег на штраф. Ты отправлен в тюрьму на 4 часа.",
-    "🚔 Штраф оплатить не удалось. Наказание: тюрьма на 4 часа.",
-    "👮 Денег оказалось недостаточно. Ты отправлен в тюрьму на 4 часа."
+    "⛓️ Денег на штраф не хватило. После провала на точке тебя отправили в тюрьму на 4 часа.",
+    "🚔 Полиция накрыла место передачи. Штраф оплатить не удалось — тюрьма на 4 часа.",
+    "👮 Ты попался на горячем, а денег оказалось недостаточно. Наказание: тюрьма на 4 часа."
   ]);
 }
 
@@ -8927,11 +8938,11 @@ if (isExactCommand(lowerText, "отвезти пакет")) {
     return;
   }
 
-  const success = Math.random() < 0.55;
+  const roll = Math.random();
   await clearDarkWorkSession(msg.chat.id);
   await setDarkWorkCooldown(msg.from.id, DARK_WORK_COOLDOWN_MS);
 
-  if (success) {
+  if (roll < DARK_WORK_IDEAL_SUCCESS_CHANCE) {
     const reward = Math.floor(Math.random() * (DARK_WORK_REWARD_MAX - DARK_WORK_REWARD_MIN + 1)) + DARK_WORK_REWARD_MIN;
     const newBalance = await addCoinsToUser(msg.from.id, reward);
     const text = await appendLevelUpIfNeeded(getRandomDarkWorkSuccessText(reward), msg.from.id, 12);
@@ -8948,6 +8959,27 @@ if (isExactCommand(lowerText, "отвезти пакет")) {
   }
 
   const fine = Math.floor(Math.random() * (DARK_WORK_FINE_MAX - DARK_WORK_FINE_MIN + 1)) + DARK_WORK_FINE_MIN;
+
+  if (roll < DARK_WORK_IDEAL_SUCCESS_CHANCE + DARK_WORK_POLICE_SWEEP_CHANCE) {
+    await changeWantedLevel(msg.from.id, 2);
+    const fineResult = await deductCoinsExact(msg.from.id, fine);
+
+    if (fineResult.ok) {
+      await safeSendMessage(
+        msg.chat.id,
+        `${getRandomDarkWorkSweepText(fine)}\n🚨 Уровень розыска повышен на 2.\n💰 Твой баланс: ${fineResult.balance} монет.`
+      );
+      return;
+    }
+
+    await sendUserToJail(msg.from.id, DARK_WORK_JAIL_MS);
+    await safeSendMessage(
+      msg.chat.id,
+      `${getRandomDarkWorkJailText()}\n🚨 Уровень розыска повышен на 2.`
+    );
+    return;
+  }
+
   await changeWantedLevel(msg.from.id, 1);
   const fineResult = await deductCoinsExact(msg.from.id, fine);
 
