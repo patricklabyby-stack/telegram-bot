@@ -42,6 +42,8 @@ const PRISON_FIGHT_COOLDOWN_MS = 20 * 60 * 1000;
 const ELITE_LAWYER_COST = 650;
 const CUSTOM_BRIBE_MIN = 150;
 const CUSTOM_BRIBE_MAX = 1000;
+const ELITE_LAWYER_MIN_COOLDOWN_MS = 60 * 60 * 1000;
+const ELITE_LAWYER_MAX_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 
 const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -259,6 +261,22 @@ const JAIL_STORE_ALIASES = {
   "пропуск": "pass",
   "фальшивый пропуск": "pass"
 };
+
+
+function getAllInventoryItems() {
+  return [
+    ...Object.values(ITEMS),
+    ...Object.values(JAIL_STORE_ITEMS)
+  ];
+}
+
+function getInventoryDisplayTitle(item) {
+  return `${item.emoji} ${item.title}`;
+}
+
+function getRandomEliteLawyerCooldownMs() {
+  return ELITE_LAWYER_MIN_COOLDOWN_MS + Math.floor(Math.random() * (ELITE_LAWYER_MAX_COOLDOWN_MS - ELITE_LAWYER_MIN_COOLDOWN_MS + 1));
+}
 
 // =========================
 // SERVER
@@ -1338,6 +1356,7 @@ await pool.query(`
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bowling_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS last_pray_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS elite_lawyer_available_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_treasure_at TIMESTAMPTZ`);
   
   console.log("✅ Database ready");
@@ -3487,7 +3506,7 @@ async function getJailActionRow(userId) {
   await ensureJailActionRow(userId);
   const result = await pool.query(
     `
-    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, last_pray_at, updated_at
+    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, last_pray_at, elite_lawyer_available_at, updated_at
     FROM jail_actions
     WHERE user_id = $1
     LIMIT 1
@@ -3511,6 +3530,25 @@ async function setJailActionUsed(userId, actionField) {
     `,
     [userId]
   );
+}
+
+async function setEliteLawyerCooldown(userId, cooldownMs) {
+  await ensureJailActionRow(userId);
+  await pool.query(
+    `
+    UPDATE jail_actions
+    SET elite_lawyer_available_at = NOW() + ($2 || ' milliseconds')::interval,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, String(cooldownMs)]
+  );
+}
+
+function getEliteLawyerRemaining(nextAt) {
+  if (!nextAt) return 0;
+  const diff = new Date(nextAt).getTime() - Date.now();
+  return diff > 0 ? diff : 0;
 }
 
 function getActionRemaining(lastAt, cooldownMs) {
@@ -6292,10 +6330,9 @@ ${lines.join("\n")}`,
     if (isExactCommand(lowerText, "инвентарь")) {
       const inventory = await getFullInventory(msg.from.id);
 
-      const lines = Object.keys(ITEMS).map((key) => {
-        const item = ITEMS[key];
-        const count = Number(inventory[key] || 0);
-        return `${item.emoji} ${escapeHtml(item.title)} — ${count}`;
+      const lines = getAllInventoryItems().map((item) => {
+        const count = Math.max(0, Number(inventory[item.key] || 0));
+        return `${escapeHtml(getInventoryDisplayTitle(item))} — ${count}`;
       });
 
       await safeSendMessage(
@@ -8432,9 +8469,9 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
       }
 
       const row = await getJailActionRow(msg.from.id);
-      const remainingCd = getActionRemaining(row?.last_lawyer_at, JAIL_LAWYER_COOLDOWN_MS);
+      const remainingCd = getEliteLawyerRemaining(row?.elite_lawyer_available_at);
       if (remainingCd > 0) {
-        await safeSendMessage(msg.chat.id, `⏳ Снова вызвать адвоката можно через ${formatRemainingTime(remainingCd)}`);
+        await safeSendMessage(msg.chat.id, `⏳ Снова вызвать элитного адвоката можно через ${formatRemainingTime(remainingCd)}`);
         return;
       }
 
@@ -8445,7 +8482,8 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
       }
 
       await deductCoinsSafe(msg.from.id, ELITE_LAWYER_COST);
-      await setJailActionUsed(msg.from.id, "last_lawyer_at");
+      const eliteCooldownMs = getRandomEliteLawyerCooldownMs();
+      await setEliteLawyerCooldown(msg.from.id, eliteCooldownMs);
       await incrementReputationField(msg.from.id, "lawyer_uses", 1);
       const outcome = getRandomEliteLawyerOutcome();
 
@@ -8454,7 +8492,8 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
         await changeWantedLevel(msg.from.id, -2);
         let out = `👔 ${getUserLink(msg.from)} нанял(а) элитного адвоката за ${ELITE_LAWYER_COST} монет.
 
-✅ Игрок освобождён.`;
+✅ Игрок освобождён.
+⏳ Новый кулдаун адвоката: ${formatRemainingTime(eliteCooldownMs)}`;
         out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
         await safeSendMessage(msg.chat.id, out, { parse_mode: "HTML", disable_web_page_preview: true });
         return;
@@ -8470,7 +8509,8 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
 
 ⏳ Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
 ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted}
-` : ''}🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+` : ''}🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун адвоката: ${formatRemainingTime(eliteCooldownMs)}`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -8480,7 +8520,8 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
         msg.chat.id,
         `👔 ${getUserLink(msg.from)} нанял(а) элитного адвоката за ${ELITE_LAWYER_COST} монет.
 
-❌ Даже он ничего не смог сделать.`,
+❌ Даже он ничего не смог сделать.
+⏳ Новый кулдаун адвоката: ${formatRemainingTime(eliteCooldownMs)}`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -9755,6 +9796,12 @@ if (lowerText.startsWith("ограбить")) {
         return;
       }
 
+      const lockpickUse = await removeItemFromInventory(msg.from.id, "lockpick", 1);
+      if (!lockpickUse.ok) {
+        await safeSendMessage(msg.chat.id, "❌ Отмычка не найдена в инвентаре.");
+        return;
+      }
+
       const wanted = await getWantedRow(msg.from.id);
       await updateCooldownColumnNow(msg.from.id, "last_atm_hack_at");
 
@@ -9767,7 +9814,8 @@ if (lowerText.startsWith("ограбить")) {
         let out = `🏧 Попытка взлома банкомата провалилась.
 
 🚨 Банкомат заблокировался
-📹 Камера записала лицо`;
+📹 Камера записала лицо
+🗝️ Отмычка сломалась. Осталось: ${lockpickUse.count}`;
 
         if (Math.random() < 0.55) {
           const fine = await deductCoinsSafe(msg.from.id, Math.floor(Math.random() * 10) + 8);
@@ -9796,6 +9844,7 @@ if (lowerText.startsWith("ограбить")) {
       let out = `🏧 ${getUserLink(msg.from)} взломал(а) банкомат.
 
 💰 Получено: ${outcome.coins} монет
+🗝️ Отмычка использована. Осталось: ${lockpickUse.count}
 🚨 Розыск +1
 👛 Баланс: ${newBalance}`;
 
