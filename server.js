@@ -52,7 +52,7 @@ const DARK_WORK_REWARD_MIN = 500;
 const DARK_WORK_REWARD_MAX = 800;
 const DARK_WORK_FINE_MIN = 300;
 const DARK_WORK_FINE_MAX = 500;
-const DARK_WORK_JAIL_MS = 4 * 60 * 60 * 1000;
+const DARK_WORK_JAIL_MS = 3 * 60 * 60 * 1000;
 const DARK_WORK_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 const DARK_WORK_CANCEL_COOLDOWN_MS = 60 * 60 * 1000;
 const DARK_WORK_EXPIRE_MS = 20 * 60 * 1000;
@@ -5596,9 +5596,9 @@ function getRandomDarkWorkSweepText(fine) {
 
 function getRandomDarkWorkJailText() {
   return getRandomFromArray([
-    "⛓️ Денег на штраф не хватило. После провала на точке тебя отправили в тюрьму на 4 часа.",
-    "🚔 Полиция накрыла место передачи. Штраф оплатить не удалось — тюрьма на 4 часа.",
-    "👮 Ты попался на горячем, а денег оказалось недостаточно. Наказание: тюрьма на 4 часа."
+    "⛓️ Денег на штраф не хватило. После провала на точке тебя отправили в тюрьму на 3 часа.",
+    "🚔 Полиция накрыла место передачи. Штраф оплатить не удалось — тюрьма на 3 часа.",
+    "👮 Ты попался на горячем, а денег оказалось недостаточно. Наказание: тюрьма на 3 часа."
   ]);
 }
 
@@ -5974,21 +5974,21 @@ ${lines.join("\n")}`,
 
     if (isExactCommand(lowerText, "сдаться")) {
       const currentJail = await getJailStatus(msg.from.id);
-      if (currentJail) {
-        const remainingMs = new Date(currentJail.until_at).getTime() - Date.now();
-        await safeSendMessage(
-          msg.chat.id,
-          `🚔 Ты уже в тюрьме.
-⏳ До освобождения: ${formatRemainingTime(remainingMs)}
-❌ Снова сдаться сейчас нельзя.`
-        );
-        return;
-      }
-
       const wanted = await getWantedRow(msg.from.id);
       const level = Number(wanted?.level || 0);
 
       if (level <= 0) {
+        if (currentJail) {
+          const remainingMs = Math.max(0, new Date(currentJail.until_at).getTime() - Date.now());
+          await safeSendMessage(
+            msg.chat.id,
+            `🚔 Ты уже в тюрьме.
+⏳ До освобождения: ${formatRemainingTime(remainingMs)}
+✅ Дополнительного срока нет, потому что розыска сейчас нет.`
+          );
+          return;
+        }
+
         await safeSendMessage(msg.chat.id, "✅ Ты и так не в розыске.");
         return;
       }
@@ -5998,11 +5998,22 @@ ${lines.join("\n")}`,
       await setWantedLevel(msg.from.id, Math.max(0, level - 2));
       await deactivateLayLow(msg.from.id);
 
+      const totalRemainingMs = Math.max(0, new Date(jail.until_at).getTime() - Date.now());
+
       await safeSendMessage(
         msg.chat.id,
-        `🚔 ${getUserLink(msg.from)} сдался полиции.
+        currentJail
+          ? `🚔 ${getUserLink(msg.from)} сдался полиции прямо из тюрьмы.
+
+➕ Добавлено срока: ${formatRemainingTime(jailTime)}
+⛓ Общий срок теперь: ${formatRemainingTime(totalRemainingMs)}
+🕒 До: ${formatDateTime(jail.until_at)}
+📉 Розыск немного снижен`
+          : `🚔 ${getUserLink(msg.from)} сдался полиции.
 
 ⛓ Ты отправлен в тюрьму
+➕ Добавлено срока: ${formatRemainingTime(jailTime)}
+⏳ Общий срок: ${formatRemainingTime(totalRemainingMs)}
 🕒 До: ${formatDateTime(jail.until_at)}
 📉 Розыск немного снижен`,
         {
