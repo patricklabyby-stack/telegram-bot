@@ -3347,8 +3347,28 @@ async function getJailStatus(userId) {
 }
 
 async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
+  const safeMs = Math.max(1000, Number(ms) || POLICE_JAIL_MS);
+  const existing = await getJailStatus(userId);
+
+  if (existing) {
+    await addJailTimeToReputation(userId, safeMs);
+
+    const result = await pool.query(
+      `
+      UPDATE police_jail
+      SET until_at = GREATEST(until_at, NOW()) + ($2 || ' milliseconds')::interval,
+          updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING *
+      `,
+      [userId, String(safeMs)]
+    );
+
+    return result.rows[0] || null;
+  }
+
   await incrementReputationField(userId, "jail_entries", 1);
-  await addJailTimeToReputation(userId, ms);
+  await addJailTimeToReputation(userId, safeMs);
 
   const result = await pool.query(
     `
@@ -3356,11 +3376,11 @@ async function sendUserToJail(userId, ms = POLICE_JAIL_MS) {
     VALUES ($1, NOW() + ($2 || ' milliseconds')::interval, NOW(), NOW())
     ON CONFLICT (user_id)
     DO UPDATE SET
-      until_at = EXCLUDED.until_at,
+      until_at = GREATEST(police_jail.until_at, NOW()) + ($2 || ' milliseconds')::interval,
       updated_at = NOW()
     RETURNING *
     `,
-    [userId, String(ms)]
+    [userId, String(safeMs)]
   );
 
   return result.rows[0] || null;
@@ -5953,6 +5973,18 @@ ${lines.join("\n")}`,
     }
 
     if (isExactCommand(lowerText, "сдаться")) {
+      const currentJail = await getJailStatus(msg.from.id);
+      if (currentJail) {
+        const remainingMs = new Date(currentJail.until_at).getTime() - Date.now();
+        await safeSendMessage(
+          msg.chat.id,
+          `🚔 Ты уже в тюрьме.
+⏳ До освобождения: ${formatRemainingTime(remainingMs)}
+❌ Снова сдаться сейчас нельзя.`
+        );
+        return;
+      }
+
       const wanted = await getWantedRow(msg.from.id);
       const level = Number(wanted?.level || 0);
 
