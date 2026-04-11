@@ -45,6 +45,13 @@ const CUSTOM_BRIBE_MAX = 1000;
 const ELITE_LAWYER_MIN_COOLDOWN_MS = 60 * 60 * 1000;
 const ELITE_LAWYER_MAX_COOLDOWN_MS = 3 * 60 * 60 * 1000;
 
+const WOODEN_CASE_PRICE = 67;
+const GOLD_CASE_PRICE = 670;
+const WOODEN_CASE_COIN_MIN = 10;
+const WOODEN_CASE_COIN_MAX = 25;
+const GOLD_CASE_COIN_MIN = 50;
+const GOLD_CASE_COIN_MAX = 100;
+
 const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const SNIPER_COOLDOWN_MS = 12 * 60 * 60 * 1000;
@@ -261,6 +268,35 @@ const JAIL_STORE_ALIASES = {
   "пропуск": "pass",
   "фальшивый пропуск": "pass"
 };
+
+
+const CASE_TYPES = {
+  wooden: {
+    key: "wooden",
+    title: "Деревянный кейс",
+    emoji: "📦",
+    price: WOODEN_CASE_PRICE
+  },
+  gold: {
+    key: "gold",
+    title: "Золотой кейс",
+    emoji: "👑",
+    price: GOLD_CASE_PRICE
+  }
+};
+
+function getRandomIntInclusive(min, max) {
+  const safeMin = Math.ceil(Number(min || 0));
+  const safeMax = Math.floor(Number(max || 0));
+  return Math.floor(Math.random() * (safeMax - safeMin + 1)) + safeMin;
+}
+
+function getCaseTypeByText(rawText) {
+  const t = normalizeText(rawText);
+  if (["деревянный кейс", "деревянный ящик", "деревянный"].includes(t)) return "wooden";
+  if (["золотой кейс", "золотой ящик", "золотой"].includes(t)) return "gold";
+  return null;
+}
 
 
 function getAllInventoryItems() {
@@ -1308,6 +1344,16 @@ await pool.query(`
     )
   `);
 
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_cases (
+      user_id BIGINT PRIMARY KEY,
+      wooden_count INTEGER DEFAULT 0,
+      gold_count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dark_work_cooldowns (
       user_id BIGINT PRIMARY KEY,
@@ -1931,6 +1977,242 @@ function resolveItemKey(raw) {
   if (ITEM_ALIASES[compact]) return ITEM_ALIASES[compact];
 
   return null;
+}
+
+
+async function ensureUserCasesRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO user_cases (user_id, wooden_count, gold_count, updated_at)
+    VALUES ($1, 0, 0, NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getUserCases(userId) {
+  await ensureUserCasesRow(userId);
+  const result = await pool.query(
+    `SELECT user_id, wooden_count, gold_count, updated_at FROM user_cases WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function addCaseToUser(userId, caseType, amount = 1) {
+  await ensureUserCasesRow(userId);
+  const column = caseType === "gold" ? "gold_count" : "wooden_count";
+  const result = await pool.query(
+    `
+    UPDATE user_cases
+    SET ${column} = ${column} + $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING wooden_count, gold_count
+    `,
+    [userId, Math.max(1, Number(amount || 1))]
+  );
+  return result.rows[0] || null;
+}
+
+async function removeCaseFromUser(userId, caseType, amount = 1) {
+  await ensureUserCasesRow(userId);
+  const column = caseType === "gold" ? "gold_count" : "wooden_count";
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const row = await client.query(
+      `SELECT wooden_count, gold_count FROM user_cases WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    const current = Number(row.rows[0]?.[column] || 0);
+    const safeAmount = Math.max(1, Number(amount || 1));
+
+    if (current < safeAmount) {
+      await client.query("ROLLBACK");
+      return { ok: false, wooden_count: Number(row.rows[0]?.wooden_count || 0), gold_count: Number(row.rows[0]?.gold_count || 0) };
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE user_cases
+      SET ${column} = ${column} - $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING wooden_count, gold_count
+      `,
+      [userId, safeAmount]
+    );
+
+    await client.query("COMMIT");
+    return { ok: true, ...updated.rows[0] };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function buyUserCase(userId, caseType) {
+  const config = CASE_TYPES[caseType];
+  if (!config) throw new Error("BAD_CASE_TYPE");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      INSERT INTO user_cases (user_id, wooden_count, gold_count, updated_at)
+      VALUES ($1, 0, 0, NOW())
+      ON CONFLICT (user_id) DO NOTHING
+      `,
+      [userId]
+    );
+
+    const userRow = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRow.rows[0]) throw new Error("USER_NOT_FOUND");
+
+    const balance = Number(userRow.rows[0].balance || 0);
+    if (balance < config.price) throw new Error("NOT_ENOUGH_MONEY");
+
+    await client.query(
+      `UPDATE users SET balance = balance - $2 WHERE user_id = $1`,
+      [userId, config.price]
+    );
+
+    const caseColumn = caseType === "gold" ? "gold_count" : "wooden_count";
+    const caseRow = await client.query(
+      `
+      UPDATE user_cases
+      SET ${caseColumn} = ${caseColumn} + 1,
+          updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING wooden_count, gold_count
+      `,
+      [userId]
+    );
+
+    const updatedUser = await client.query(
+      `SELECT balance FROM users WHERE user_id = $1`,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      balance: Number(updatedUser.rows[0]?.balance || 0),
+      wooden_count: Number(caseRow.rows[0]?.wooden_count || 0),
+      gold_count: Number(caseRow.rows[0]?.gold_count || 0)
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function openWoodenCase(userId) {
+  const removed = await removeCaseFromUser(userId, "wooden", 1);
+  if (!removed.ok) return { ok: false };
+
+  if (Math.random() < 0.65) {
+    const coins = getRandomIntInclusive(WOODEN_CASE_COIN_MIN, WOODEN_CASE_COIN_MAX);
+    const balance = await addCoinsToUser(userId, coins);
+    return {
+      ok: true,
+      kind: "coins",
+      caseType: "wooden",
+      coins,
+      balance,
+      wooden_count: Number(removed.wooden_count || 0),
+      gold_count: Number(removed.gold_count || 0)
+    };
+  }
+
+  const shieldAmount = getRandomIntInclusive(1, 2);
+  let shield = await getShieldRow(userId);
+  let current = Number(shield?.count || 0);
+  const toAdd = Math.max(0, Math.min(shieldAmount, MAX_SHIELDS - current));
+
+  if (toAdd > 0) {
+    for (let i = 0; i < toAdd; i++) {
+      await buyShieldFree(userId);
+    }
+  }
+
+  shield = await getShieldRow(userId);
+
+  return {
+    ok: true,
+    kind: "shield",
+    caseType: "wooden",
+    shields: toAdd,
+    rolledShields: shieldAmount,
+    shieldCount: Number(shield?.count || 0),
+    wooden_count: Number(removed.wooden_count || 0),
+    gold_count: Number(removed.gold_count || 0)
+  };
+}
+
+async function buyShieldFree(userId) {
+  await ensureShieldRow(userId);
+  const result = await pool.query(
+    `
+    UPDATE user_shields
+    SET count = LEAST(count + 1, $2),
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING count
+    `,
+    [userId, MAX_SHIELDS]
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+async function openGoldCase(userId) {
+  const removed = await removeCaseFromUser(userId, "gold", 1);
+  if (!removed.ok) return { ok: false };
+
+  if (Math.random() < 0.35) {
+    const coins = getRandomIntInclusive(GOLD_CASE_COIN_MIN, GOLD_CASE_COIN_MAX);
+    const balance = await addCoinsToUser(userId, coins);
+    return {
+      ok: true,
+      kind: "coins",
+      caseType: "gold",
+      coins,
+      balance,
+      wooden_count: Number(removed.wooden_count || 0),
+      gold_count: Number(removed.gold_count || 0)
+    };
+  }
+
+  const items = Object.values(ITEMS);
+  const item = getRandomFromArray(items);
+  const amount = getRandomIntInclusive(1, 10);
+  const newCount = await addItemToInventory(userId, item.key, amount);
+
+  return {
+    ok: true,
+    kind: "item",
+    caseType: "gold",
+    item,
+    amount,
+    newCount,
+    wooden_count: Number(removed.wooden_count || 0),
+    gold_count: Number(removed.gold_count || 0)
+  };
 }
 
 // =========================
@@ -6347,6 +6629,127 @@ ${lines.join("\n")}`,
       );
       return;
     }
+
+
+    if (isExactCommand(lowerText, "мои кейсы") || isExactCommand(lowerText, "кейсы")) {
+      const cases = await getUserCases(msg.from.id);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎁 Кейсы игрока ${getUserLink(msg.from)}
+
+📦 Деревянный кейс: ${Number(cases?.wooden_count || 0)}
+👑 Золотой кейс: ${Number(cases?.gold_count || 0)}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "купить деревянный кейс") || isExactCommand(lowerText, "купить деревянный ящик")) {
+      try {
+        const result = await buyUserCase(msg.from.id, "wooden");
+        await safeSendMessage(
+          msg.chat.id,
+          `📦 ${getUserLink(msg.from)} купил(а) деревянный кейс за ${WOODEN_CASE_PRICE} монет.
+
+🎁 Теперь у тебя: ${Number(result.wooden_count || 0)}
+👛 Баланс: ${result.balance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (String(error?.message) === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, `❌ Для покупки нужен ${WOODEN_CASE_PRICE} монет.`);
+          return;
+        }
+        console.error("Ошибка покупки деревянного кейса:", error);
+        await safeSendMessage(msg.chat.id, "❌ Не удалось купить кейс.");
+      }
+      return;
+    }
+
+    if (isExactCommand(lowerText, "купить золотой кейс") || isExactCommand(lowerText, "купить золотой ящик")) {
+      try {
+        const result = await buyUserCase(msg.from.id, "gold");
+        await safeSendMessage(
+          msg.chat.id,
+          `👑 ${getUserLink(msg.from)} купил(а) золотой кейс за ${GOLD_CASE_PRICE} монет.
+
+🎁 Теперь у тебя: ${Number(result.gold_count || 0)}
+👛 Баланс: ${result.balance}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        if (String(error?.message) === "NOT_ENOUGH_MONEY") {
+          await safeSendMessage(msg.chat.id, `❌ Для покупки нужен ${GOLD_CASE_PRICE} монет.`);
+          return;
+        }
+        console.error("Ошибка покупки золотого кейса:", error);
+        await safeSendMessage(msg.chat.id, "❌ Не удалось купить кейс.");
+      }
+      return;
+    }
+
+    if (isExactCommand(lowerText, "открыть деревянный кейс") || isExactCommand(lowerText, "открыть деревянный ящик")) {
+      const result = await openWoodenCase(msg.from.id);
+      if (!result.ok) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет деревянных кейсов.");
+        return;
+      }
+
+      let out = `📦 ${getUserLink(msg.from)} открыл(а) деревянный кейс!\n\n`;
+
+      if (result.kind === "coins") {
+        out += `💰 Внутри: ${result.coins} монет\n👛 Баланс: ${result.balance}`;
+      } else {
+        if (result.shields > 0) {
+          out += `🛡️ Внутри: ${result.shields} щит(а)\n🛡️ Щитов теперь: ${result.shieldCount}/${MAX_SHIELDS}`;
+        } else {
+          out += `🛡️ Тебе могло выпасть ${result.rolledShields} щит(а), но лимит уже ${MAX_SHIELDS}/${MAX_SHIELDS}.`;
+        }
+      }
+
+      out += `\n\n🎁 Деревянных кейсов осталось: ${result.wooden_count}`;
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "открыть золотой кейс") || isExactCommand(lowerText, "открыть золотой ящик")) {
+      const result = await openGoldCase(msg.from.id);
+      if (!result.ok) {
+        await safeSendMessage(msg.chat.id, "❌ У тебя нет золотых кейсов.");
+        return;
+      }
+
+      let out = `👑 ${getUserLink(msg.from)} открыл(а) золотой кейс!\n\n`;
+
+      if (result.kind === "coins") {
+        out += `💰 Внутри: ${result.coins} монет\n👛 Баланс: ${result.balance}`;
+      } else {
+        out += `${result.item.emoji} Внутри: ${escapeHtml(result.item.title)} ×${result.amount}\n🎒 Теперь у тебя: ${result.newCount}`;
+      }
+
+      out += `\n\n🎁 Золотых кейсов осталось: ${result.gold_count}`;
+
+      await safeSendMessage(msg.chat.id, out, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      return;
+    }
+
 
     if (isExactCommand(lowerText, "черный рынок") || isExactCommand(lowerText, "чёрный рынок")) {
       const lines = Object.values(ITEMS).map((item) =>
