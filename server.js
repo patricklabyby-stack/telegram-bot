@@ -1628,7 +1628,7 @@ async function cleanupExpiredFunGames(chatId) {
   if (gwGame && gwGame.expiresAt <= now) {
     const answer = gwGame.word;
     delete activeGuessWordGames[key];
-    await safeSendMessage(chatId, `⌛ Игра «Угадай слово» отменена.\nСлово было: ${escapeHtml(answer)}`, {
+    await safeSendMessage(chatId, `⌛ Время вышло.\n\nСлово было: ${escapeHtml(answer)}`, {
       parse_mode: "HTML"
     });
   }
@@ -6809,7 +6809,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
       await safeSendMessage(
         msg.chat.id,
-        `🧠 ${getUserLink(msg.from)} играет в «Угадай слово»\n\nПодсказка:\n${escapeHtml(game.hint)}\nСлово из ${String(game.word).length} букв\n\nОтвечать должен только ${escapeHtml(getUserName(msg.from))}.\nЕсли сдаёшься — напиши: Я сдаюсь`,
+        `${getUserLink(msg.from)}, угадай слово.\n\nПодсказка:\n${escapeHtml(game.hint)}\nСлово из ${String(game.word).length} букв\n\nЕсли сдаёшься — напиши: Я сдаюсь`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
