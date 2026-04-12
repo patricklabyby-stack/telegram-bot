@@ -38,7 +38,10 @@ const pendingJailPartnerEscapes = {};
 const prisonFightCooldowns = {};
 
 const JAIL_PARTNER_ESCAPE_REQUEST_MS = 5 * 60 * 1000;
+const PARTNER_ESCAPE_COOLDOWN_MS = 30 * 60 * 1000;
 const PRISON_FIGHT_COOLDOWN_MS = 20 * 60 * 1000;
+const JAIL_TOOL_COOLDOWN_MIN_MS = 10 * 60 * 1000;
+const JAIL_TOOL_COOLDOWN_MAX_MS = 20 * 60 * 1000;
 const ELITE_LAWYER_COST = 650;
 const CUSTOM_BRIBE_MIN = 150;
 const CUSTOM_BRIBE_MAX = 1000;
@@ -1403,6 +1406,12 @@ await pool.query(`
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_knb_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS last_pray_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS elite_lawyer_available_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS partner_escape_available_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS jail_spoon_available_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS jail_file_available_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS jail_map_available_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS jail_note_available_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE jail_actions ADD COLUMN IF NOT EXISTS jail_pass_available_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_treasure_at TIMESTAMPTZ`);
   
   console.log("✅ Database ready");
@@ -3788,7 +3797,10 @@ async function getJailActionRow(userId) {
   await ensureJailActionRow(userId);
   const result = await pool.query(
     `
-    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, last_pray_at, elite_lawyer_available_at, updated_at
+    SELECT user_id, last_escape_at, last_lawyer_at, last_bribe_at, last_pray_at,
+           elite_lawyer_available_at, partner_escape_available_at,
+           jail_spoon_available_at, jail_file_available_at, jail_map_available_at,
+           jail_note_available_at, jail_pass_available_at, updated_at
     FROM jail_actions
     WHERE user_id = $1
     LIMIT 1
@@ -3831,6 +3843,117 @@ function getEliteLawyerRemaining(nextAt) {
   if (!nextAt) return 0;
   const diff = new Date(nextAt).getTime() - Date.now();
   return diff > 0 ? diff : 0;
+}
+
+function getTimestampRemaining(nextAt) {
+  if (!nextAt) return 0;
+  const diff = new Date(nextAt).getTime() - Date.now();
+  return diff > 0 ? diff : 0;
+}
+
+function getRandomJailToolCooldownMs() {
+  return getRandomIntInclusive(JAIL_TOOL_COOLDOWN_MIN_MS, JAIL_TOOL_COOLDOWN_MAX_MS);
+}
+
+async function setJailActionAvailableAt(userId, field, cooldownMs) {
+  const allowed = [
+    "partner_escape_available_at",
+    "jail_spoon_available_at",
+    "jail_file_available_at",
+    "jail_map_available_at",
+    "jail_note_available_at",
+    "jail_pass_available_at"
+  ];
+  if (!allowed.includes(field)) return;
+
+  await ensureJailActionRow(userId);
+  await pool.query(
+    `
+    UPDATE jail_actions
+    SET ${field} = NOW() + ($2 || ' milliseconds')::interval,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [userId, String(Math.max(1000, Number(cooldownMs || 0)))]
+  );
+}
+
+async function setPartnerEscapeCooldown(userId, cooldownMs = PARTNER_ESCAPE_COOLDOWN_MS) {
+  await setJailActionAvailableAt(userId, "partner_escape_available_at", cooldownMs);
+}
+
+async function setJailToolCooldown(userId, itemKey, cooldownMs) {
+  const fieldByKey = {
+    jail_spoon: "jail_spoon_available_at",
+    jail_file: "jail_file_available_at",
+    jail_map: "jail_map_available_at",
+    jail_note: "jail_note_available_at",
+    jail_pass: "jail_pass_available_at"
+  };
+  const field = fieldByKey[itemKey];
+  if (!field) return;
+  await setJailActionAvailableAt(userId, field, cooldownMs);
+}
+
+function getJailToolCooldownField(itemKey) {
+  const fieldByKey = {
+    jail_spoon: "jail_spoon_available_at",
+    jail_file: "jail_file_available_at",
+    jail_map: "jail_map_available_at",
+    jail_note: "jail_note_available_at",
+    jail_pass: "jail_pass_available_at"
+  };
+  return fieldByKey[itemKey] || null;
+}
+
+function getRandomJailItemUseOutcome(itemKey) {
+  if (itemKey === "jail_spoon") {
+    const roll = Math.random();
+    if (roll < 0.24) return { type: "reduce", reduceMs: getRandomIntInclusive(5, 14) * 60 * 1000 };
+    if (roll < 0.82) return { type: "nothing" };
+    return { type: "fail", extraMs: getRandomIntInclusive(4, 10) * 60 * 1000 };
+  }
+
+  if (itemKey === "jail_file") {
+    const roll = Math.random();
+    if (roll < 0.18) return { type: "escape" };
+    if (roll < 0.63) return { type: "reduce", reduceMs: getRandomIntInclusive(18, 40) * 60 * 1000 };
+    return { type: "fail", extraMs: getRandomIntInclusive(10, 24) * 60 * 1000 };
+  }
+
+  if (itemKey === "jail_map") {
+    const roll = Math.random();
+    if (roll < 0.22) return { type: "reduce", reduceMs: getRandomIntInclusive(10, 25) * 60 * 1000, dropWanted: 1 };
+    if (roll < 0.78) return { type: "reduce", reduceMs: getRandomIntInclusive(6, 16) * 60 * 1000 };
+    return { type: "fail", extraMs: getRandomIntInclusive(5, 12) * 60 * 1000 };
+  }
+
+  if (itemKey === "jail_note") {
+    const roll = Math.random();
+    if (roll < 0.25) return { type: "reduce", reduceMs: getRandomIntInclusive(10, 22) * 60 * 1000 };
+    if (roll < 0.68) return { type: "reduce", reduceMs: getRandomIntInclusive(5, 12) * 60 * 1000, dropWanted: 1 };
+    return { type: "fail", extraMs: getRandomIntInclusive(6, 14) * 60 * 1000 };
+  }
+
+  if (itemKey === "jail_pass") {
+    const roll = Math.random();
+    if (roll < 0.28) return { type: "escape", dropWanted: 1 };
+    if (roll < 0.72) return { type: "reduce", reduceMs: getRandomIntInclusive(22, 50) * 60 * 1000 };
+    return { type: "fail", extraMs: getRandomIntInclusive(12, 26) * 60 * 1000 };
+  }
+
+  return { type: "nothing" };
+}
+
+function getJailItemCommandInfo(itemKey) {
+  const map = {
+    jail_spoon: { commands: ["ложка"], title: "Ложка" },
+    jail_file: { commands: ["напильник"], title: "Напильник" },
+    jail_map: { commands: ["карта", "карта тюрьмы"], title: "Карта тюрьмы" },
+    jail_note: { commands: ["записка", "записка охраннику"], title: "Записка охраннику" },
+    jail_pass: { commands: ["пропуск", "фальшивый пропуск"], title: "Фальшивый пропуск" }
+  };
+  return map[itemKey] || null;
 }
 
 function getActionRemaining(lastAt, cooldownMs) {
@@ -8469,7 +8592,14 @@ ${getUserLink(child)}, выбери ниже:
 • фальшивый пропуск — 300
 
 Напиши:
-купить ложка`,
+купить ложка
+
+Использование:
+• ложка
+• напильник
+• карта тюрьмы
+• записка охраннику
+• фальшивый пропуск`,
         { disable_web_page_preview: true }
       );
       return;
@@ -8503,6 +8633,120 @@ ${getUserLink(child)}, выбери ниже:
           return;
         }
       }
+    }
+
+    const jailItemCommandMap = {
+      "ложка": "jail_spoon",
+      "напильник": "jail_file",
+      "карта": "jail_map",
+      "карта тюрьмы": "jail_map",
+      "записка": "jail_note",
+      "записка охраннику": "jail_note",
+      "пропуск": "jail_pass",
+      "фальшивый пропуск": "jail_pass"
+    };
+
+    if (jailItemCommandMap[lowerText]) {
+      const jail = await getJailStatus(msg.from.id);
+      if (!jail) {
+        await safeSendMessage(msg.chat.id, "⛓ Использовать тюремные предметы можно только в тюрьме.");
+        return;
+      }
+
+      const itemKey = jailItemCommandMap[lowerText];
+      const itemInfo = getJailItemCommandInfo(itemKey);
+      const itemRow = await getInventoryItem(msg.from.id, itemKey);
+      const itemCount = Number(itemRow?.count || 0);
+
+      if (itemCount <= 0) {
+        await safeSendMessage(msg.chat.id, `❌ У тебя нет предмета: ${itemInfo?.title || lowerText}.`);
+        return;
+      }
+
+      const actionRow = await getJailActionRow(msg.from.id);
+      const cooldownField = getJailToolCooldownField(itemKey);
+      const remainingToolCd = getTimestampRemaining(actionRow?.[cooldownField]);
+      if (remainingToolCd > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Снова использовать предмет ${itemInfo?.title || lowerText} можно через ${formatRemainingTime(remainingToolCd)}`);
+        return;
+      }
+
+      const removedItem = await removeItemFromInventory(msg.from.id, itemKey, 1);
+      if (!removedItem.ok) {
+        await safeSendMessage(msg.chat.id, `❌ У тебя не получилось использовать ${itemInfo?.title || lowerText}. Попробуй ещё раз.`);
+        return;
+      }
+
+      const toolCooldownMs = getRandomJailToolCooldownMs();
+      await setJailToolCooldown(msg.from.id, itemKey, toolCooldownMs);
+
+      const outcome = getRandomJailItemUseOutcome(itemKey);
+
+      if (outcome.type === "escape") {
+        await removeUserFromJail(msg.from.id);
+        if (outcome.dropWanted) {
+          await changeWantedLevel(msg.from.id, -outcome.dropWanted);
+        } else {
+          await changeWantedLevel(msg.from.id, 1);
+        }
+        await incrementReputationField(msg.from.id, "successful_escapes", 1);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🛠 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}.
+
+✅ Предмет сработал идеально — побег удался.
+🧩 Предмет сломался после использования.
+⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+          { parse_mode: "HTML", disable_web_page_preview: true }
+        );
+        return;
+      }
+
+      if (outcome.type === "reduce") {
+        const updatedJail = await reduceJailTime(msg.from.id, outcome.reduceMs);
+        if (outcome.dropWanted) await changeWantedLevel(msg.from.id, -outcome.dropWanted);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🛠 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}.
+
+✅ Предмет помог.
+⏳ Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+🧩 Предмет сломался после использования.
+⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+          { parse_mode: "HTML", disable_web_page_preview: true }
+        );
+        return;
+      }
+
+      if (outcome.type === "fail") {
+        const updatedJail = await extendJailTime(msg.from.id, outcome.extraMs);
+
+        await safeSendMessage(
+          msg.chat.id,
+          `💥 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}, но всё пошло криво.
+
+⛓ К сроку добавлено: ${formatRemainingTime(outcome.extraMs)}
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+🧩 Предмет сломался после использования.
+⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+          { parse_mode: "HTML", disable_web_page_preview: true }
+        );
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🪨 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}.
+
+❌ Ничего полезного не вышло.
+🧩 Предмет сломался после использования.
+⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+        { parse_mode: "HTML", disable_web_page_preview: true }
+      );
+      return;
     }
 
     if (isExactCommand(lowerText, "тюремная драка")) {
@@ -8550,7 +8794,8 @@ ${getUserLink(child)}, выбери ниже:
         `${outcome.type === "hard_fail" ? "💀" : "😬"} ${getUserLink(msg.from)} проиграл(а) тюремную драку.
 
 ⛓ Добавлено к сроку: ${formatRemainingTime(outcome.extraMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун побега с сообщником: 30 мин`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -8560,6 +8805,13 @@ ${getUserLink(child)}, выбери ниже:
       const jail = await getJailStatus(msg.from.id);
       if (!jail) {
         await safeSendMessage(msg.chat.id, "🧩 Побег с сообщником можно готовить только из тюрьмы.");
+        return;
+      }
+
+      const partnerRow = await getJailActionRow(msg.from.id);
+      const partnerCd = getTimestampRemaining(partnerRow?.partner_escape_available_at);
+      if (partnerCd > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Снова готовить побег с сообщником можно через ${formatRemainingTime(partnerCd)}`);
         return;
       }
 
@@ -8580,7 +8832,8 @@ ${getUserLink(child)}, выбери ниже:
         `🧩 ${getUserLink(msg.from)} ищет сообщника для побега.
 
 Ответь командой: помочь сбежать
-⏳ Заявка активна ${formatRemainingTime(JAIL_PARTNER_ESCAPE_REQUEST_MS)}`,
+⏳ Заявка активна ${formatRemainingTime(JAIL_PARTNER_ESCAPE_REQUEST_MS)}
+⏳ После результата у обоих будет кулдаун 30 мин`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -8598,6 +8851,20 @@ ${getUserLink(child)}, выбери ниже:
         return;
       }
 
+      const helperRow = await getJailActionRow(msg.from.id);
+      const helperCd = getTimestampRemaining(helperRow?.partner_escape_available_at);
+      if (helperCd > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Ты ещё не отошёл от прошлого побега. Снова можно через ${formatRemainingTime(helperCd)}`);
+        return;
+      }
+
+      const prisonerRow = await getJailActionRow(request.prisonerId);
+      const prisonerCd = getTimestampRemaining(prisonerRow?.partner_escape_available_at);
+      if (prisonerCd > 0) {
+        await safeSendMessage(msg.chat.id, `⏳ Этому заключённому ещё нельзя повторять побег. Осталось ждать ${formatRemainingTime(prisonerCd)}`);
+        return;
+      }
+
       const prisoner = await getStoredUser(request.prisonerId);
       const prisonerJail = await getJailStatus(request.prisonerId);
       if (!prisonerJail) {
@@ -8610,6 +8877,8 @@ ${getUserLink(child)}, выбери ниже:
       const prisonerTools = await getJailTools(request.prisonerId);
       const outcome = getRandomPartnerEscapeOutcome(prisonerTools, helperBonuses);
       delete pendingJailPartnerEscapes[String(msg.chat.id)];
+      await setPartnerEscapeCooldown(request.prisonerId, PARTNER_ESCAPE_COOLDOWN_MS);
+      await setPartnerEscapeCooldown(msg.from.id, PARTNER_ESCAPE_COOLDOWN_MS);
 
       if (outcome.type === "success") {
         await removeUserFromJail(request.prisonerId);
@@ -8623,7 +8892,8 @@ ${getUserLink(child)}, выбери ниже:
 
 ${getUserLink(prisoner)} сбежал(а) из тюрьмы.
 🤝 Помощник: ${getUserLink(msg.from)}
-🚨 Розыск вырос у обоих.`,
+🚨 Розыск вырос у обоих.
+⏳ Новый кулдаун побега с сообщником: 30 мин.`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -8639,7 +8909,8 @@ ${getUserLink(prisoner)} сбежал(а) из тюрьмы.
 
 ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extraMs)}
 🤝 Помощник: ${getUserLink(msg.from)} получил розыск
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун побега с сообщником: 30 мин`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -8688,6 +8959,11 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
 • подкупить охрану
 • дать взятку 300
 • тюремный магазин
+• ложка
+• напильник
+• карта тюрьмы
+• записка охраннику
+• фальшивый пропуск
 • тюремная драка
 • молиться
 • отсидеть`,
@@ -8744,7 +9020,8 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
         let out = `🙏 ${getUserLink(msg.from)} молился в тюрьме...
 
 ⏳ Срок уменьшен на ${formatRemainingTime(reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`;
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун побега с сообщником: 30 мин`;
 
         out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
 
@@ -8855,7 +9132,8 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
         `⛓ ${getUserLink(msg.from)} попытался(ась) сбежать, но был(а) пойман(а).
 
 ➕ Срок увеличен на 20 минут.
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун побега с сообщником: 30 мин`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -8981,7 +9259,8 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
           `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
 
 📉 Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун побега с сообщником: 30 мин`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
@@ -9045,7 +9324,8 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
 
 ✅ Охранник помог
 ⏳ Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун побега с сообщником: 30 мин`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -9072,7 +9352,8 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
 
 💸 Потрачено: ${bribeAmount} монет
 ⛓ Добавлено к сроку: ${formatRemainingTime(outcome.extraMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}`,
+🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
+⏳ Новый кулдаун побега с сообщником: 30 мин`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
