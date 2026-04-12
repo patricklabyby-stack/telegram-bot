@@ -36,6 +36,9 @@ const pendingAdoptionsByRequestId = {};
 const pendingAdoptionsByUserKey = {};
 const pendingJailPartnerEscapes = {};
 const prisonFightCooldowns = {};
+const pendingClearCommandsConfirm = {};
+const activeTruthOrDareGames = {};
+const activeGuessWordGames = {};
 
 const JAIL_PARTNER_ESCAPE_REQUEST_MS = 5 * 60 * 1000;
 const PARTNER_ESCAPE_COOLDOWN_MS = 30 * 60 * 1000;
@@ -252,6 +255,63 @@ const DIAGNOSIS_TEXTS = [
 function getRandomDiagnosisText() {
   return getRandomFromArray(DIAGNOSIS_TEXTS) || "синдром неизвестной смешнявости 🤪";
 }
+
+const TRUTH_QUESTIONS = [
+  "Что ты скрываешь чаще всего? 👀",
+  "Кому ты писал(а) последним?",
+  "Какой самый кринжовый поступок у тебя был?",
+  "Чего ты боишься больше всего?",
+  "На кого ты чаще всего злишься?",
+  "Какой секрет ты никому не рассказывал(а)?",
+  "Кого ты хотел(а) бы обнять прямо сейчас?",
+  "Когда ты в последний раз врал(а)?",
+  "Что тебя бесит в людях больше всего?",
+  "Какой твой самый странный сон?"
+];
+
+const DARE_TASKS = [
+  "Напиши в чат 3 смешных эмодзи подряд 😹🔥🐸",
+  "Поставь себе смешной статус на 10 минут 😅",
+  "Напиши в чат «я легенда этой группы» 😎",
+  "Отправь одно сообщение только капсом 📢",
+  "Напиши комплимент первому человеку, который ответит 💬",
+  "Отправь в чат самый странный смайлик, который найдёшь 🤨",
+  "Напиши «я сегодня подозрительно добрый(ая)» 😇",
+  "Скажи в чат одно случайное слово без объяснений 🌀",
+  "Придумай себе смешную кличку на 5 минут 🤡",
+  "Напиши в чат «мне срочно нужен чай и отдых» ☕"
+];
+
+const GUESS_WORD_ITEMS = [
+  { word: "яблоко", hint: "Это фрукт 🍎" },
+  { word: "банан", hint: "Это жёлтый фрукт 🍌" },
+  { word: "тигр", hint: "Это полосатое животное 🐯" },
+  { word: "книга", hint: "Это читают 📚" },
+  { word: "кошка", hint: "Это домашнее животное 🐱" },
+  { word: "пицца", hint: "Это еда 🍕" },
+  { word: "радуга", hint: "Это видно после дождя 🌈" },
+  { word: "космос", hint: "Там звёзды и планеты 🚀" },
+  { word: "телефон", hint: "Это почти всегда у тебя в руке 📱" },
+  { word: "подушка", hint: "С этим обычно спят 🛏️" }
+];
+
+const WOULD_BE_VARIANTS = [
+  "детективом 🕵️",
+  "космонавтом 🚀",
+  "владельцем шаурмичной 🌯",
+  "ночным баристой ☕",
+  "королём дивана 👑",
+  "охотником за мемами 😂",
+  "смотрителем маяка 🌊",
+  "тайным агентом 🕶️",
+  "водителем такси 🚕",
+  "мастером странных советов 🧠"
+];
+
+const FUN_GAME_TIMEOUT_MS = 5 * 60 * 1000;
+const GUESS_WORD_REWARD = 12;
+const STATUS_MAX_LENGTH = 80;
+const BIO_MAX_LENGTH = 180;
 
 const JAIL_STORE_ITEMS = {
   spoon: { key: "jail_spoon", title: "Ложка", price: 40, emoji: "🥄" },
@@ -1338,6 +1398,15 @@ await pool.query(`
 `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_profile_extras (
+      user_id BIGINT PRIMARY KEY,
+      status_text TEXT DEFAULT '',
+      bio_text TEXT DEFAULT '',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS dark_work_sessions (
       chat_id BIGINT PRIMARY KEY,
       worker_user_id BIGINT NOT NULL,
@@ -1482,6 +1551,138 @@ async function getStoredUser(userId) {
     last_name: stats.last_name || "",
     username: stats.username || ""
   };
+}
+
+async function ensureUserProfileExtrasRow(userId) {
+  await pool.query(
+    `
+    INSERT INTO user_profile_extras (user_id, status_text, bio_text, updated_at)
+    VALUES ($1, '', '', NOW())
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId]
+  );
+}
+
+async function getUserProfileExtras(userId) {
+  await ensureUserProfileExtrasRow(userId);
+  const result = await pool.query(
+    `SELECT user_id, status_text, bio_text, updated_at FROM user_profile_extras WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function setUserStatusText(userId, statusText) {
+  await ensureUserProfileExtrasRow(userId);
+  const result = await pool.query(
+    `
+    UPDATE user_profile_extras
+    SET status_text = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING status_text, bio_text
+    `,
+    [userId, String(statusText || "").trim()]
+  );
+  return result.rows[0] || null;
+}
+
+async function clearUserStatusText(userId) {
+  return setUserStatusText(userId, "");
+}
+
+async function setUserBioText(userId, bioText) {
+  await ensureUserProfileExtrasRow(userId);
+  const result = await pool.query(
+    `
+    UPDATE user_profile_extras
+    SET bio_text = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    RETURNING status_text, bio_text
+    `,
+    [userId, String(bioText || "").trim()]
+  );
+  return result.rows[0] || null;
+}
+
+async function clearUserBioText(userId) {
+  return setUserBioText(userId, "");
+}
+
+function getFunChatKey(chatId) {
+  return String(chatId);
+}
+
+async function cleanupExpiredFunGames(chatId) {
+  const key = getFunChatKey(chatId);
+  const now = Date.now();
+
+  const tdGame = activeTruthOrDareGames[key];
+  if (tdGame && tdGame.expiresAt <= now) {
+    delete activeTruthOrDareGames[key];
+    await safeSendMessage(chatId, "⌛ Игра «Правда или действие» отменена. Время вышло.");
+  }
+
+  const gwGame = activeGuessWordGames[key];
+  if (gwGame && gwGame.expiresAt <= now) {
+    const answer = gwGame.word;
+    delete activeGuessWordGames[key];
+    await safeSendMessage(chatId, `⌛ Игра «Угадай слово» отменена.\nСлово было: ${escapeHtml(answer)}`, {
+      parse_mode: "HTML"
+    });
+  }
+}
+
+function getAnyActiveFunGame(chatId) {
+  const key = getFunChatKey(chatId);
+  return activeTruthOrDareGames[key] || activeGuessWordGames[key] || null;
+}
+
+function startTruthOrDareGame(chatId, ownerUser, mode) {
+  const key = getFunChatKey(chatId);
+  const actualMode = mode === "truth" || mode === "dare"
+    ? mode
+    : (Math.random() < 0.5 ? "truth" : "dare");
+  const prompt = actualMode === "truth"
+    ? getRandomFromArray(TRUTH_QUESTIONS)
+    : getRandomFromArray(DARE_TASKS);
+
+  activeTruthOrDareGames[key] = {
+    ownerUserId: Number(ownerUser.id),
+    ownerName: getUserName(ownerUser),
+    mode: actualMode,
+    prompt,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + FUN_GAME_TIMEOUT_MS
+  };
+
+  return activeTruthOrDareGames[key];
+}
+
+function clearTruthOrDareGame(chatId) {
+  delete activeTruthOrDareGames[getFunChatKey(chatId)];
+}
+
+function startGuessWordGame(chatId, ownerUser) {
+  const key = getFunChatKey(chatId);
+  const item = getRandomFromArray(GUESS_WORD_ITEMS);
+
+  activeGuessWordGames[key] = {
+    ownerUserId: Number(ownerUser.id),
+    ownerName: getUserName(ownerUser),
+    word: item.word,
+    hint: item.hint,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + FUN_GAME_TIMEOUT_MS
+  };
+
+  return activeGuessWordGames[key];
+}
+
+function clearGuessWordGame(chatId) {
+  delete activeGuessWordGames[getFunChatKey(chatId)];
 }
 
 async function saveProfileMessage(messageId, targetUserId) {
@@ -4314,11 +4515,15 @@ async function getProfileText(user) {
   const levelInfo = getLevelInfoByXp(Number(stats.xp || 0));
   const wanted = await getWantedRow(user.id);
   const layLow = await getLayLowStatus(user.id);
+  const extras = await getUserProfileExtras(user.id);
 
   const layLowText =
     layLow && layLow.is_active
       ? `✅ Да (${formatRemainingTime(new Date(layLow.until_at).getTime() - Date.now())})`
       : "❌ Нет";
+
+  const statusText = String(extras?.status_text || "").trim() || "—";
+  const bioText = String(extras?.bio_text || "").trim() || "—";
 
   return `👤 Профиль пользователя
 
@@ -4331,6 +4536,8 @@ ID: ${user.id}
 ⭐ Уровень: ${Number(stats.level || 1)}
 🚨 Розыск: ${Number(wanted?.level || 0)}/${MAX_WANTED_LEVEL}
 🕶 Скрытность: ${layLowText}
+📝 Статус: ${escapeHtml(statusText)}
+📖 Био: ${escapeHtml(bioText)}
 
 📊 Статистика:
 💀 Убили: ${stats.kills}
@@ -6446,6 +6653,193 @@ ${escapeHtml(parsed.actionText)} — текст бота
   await safeSendMessage(msg.chat.id, resultText, { parse_mode: "HTML" });
   return;
 }
+
+    if (pendingClearCommandsConfirm[pendingKey] && isExactCommand(lowerText, "подтвердить удаление команд")) {
+      delete pendingClearCommandsConfirm[pendingKey];
+      const deletedCount = await clearUserCustomCommands(msg.from.id);
+      await safeSendMessage(msg.chat.id, `🗑 Все твои команды удалены.\nУдалено: ${deletedCount}`);
+      return;
+    }
+
+    await cleanupExpiredFunGames(msg.chat.id);
+
+    const activeTruthGame = activeTruthOrDareGames[getFunChatKey(msg.chat.id)];
+    if (activeTruthGame) {
+      if (Number(msg.from.id) !== Number(activeTruthGame.ownerUserId)) return;
+
+      if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
+        if (activeTruthGame.mode === "truth") {
+          await safeSendMessage(
+            msg.chat.id,
+            `😅 ${escapeHtml(activeTruthGame.ownerName)} сдаётся.\n\nЭто был вопрос на честность. Игра окончена.`,
+            { parse_mode: "HTML" }
+          );
+        } else {
+          await safeSendMessage(
+            msg.chat.id,
+            `😅 ${escapeHtml(activeTruthGame.ownerName)} сдаётся.\n\nЗадание было:\n${escapeHtml(activeTruthGame.prompt)}\n\nИгра окончена.`,
+            { parse_mode: "HTML" }
+          );
+        }
+        clearTruthOrDareGame(msg.chat.id);
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ Ответ принят\n\n${escapeHtml(activeTruthGame.ownerName)} выбрал(а) ${activeTruthGame.mode === "truth" ? "правду" : "действие"} и ответил(а):\n«${escapeHtml(originalText)}»`,
+        { parse_mode: "HTML" }
+      );
+      clearTruthOrDareGame(msg.chat.id);
+      return;
+    }
+
+    const activeGuessGame = activeGuessWordGames[getFunChatKey(msg.chat.id)];
+    if (activeGuessGame) {
+      if (Number(msg.from.id) !== Number(activeGuessGame.ownerUserId)) return;
+
+      if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
+        await safeSendMessage(
+          msg.chat.id,
+          `😅 ${escapeHtml(activeGuessGame.ownerName)} сдаётся.\n\nПравильный ответ: ${escapeHtml(activeGuessGame.word)}`,
+          { parse_mode: "HTML" }
+        );
+        clearGuessWordGame(msg.chat.id);
+        return;
+      }
+
+      if (normalizeText(originalText) === normalizeText(activeGuessGame.word)) {
+        const newBalance = await addCoinsToUser(msg.from.id, GUESS_WORD_REWARD);
+        await safeSendMessage(
+          msg.chat.id,
+          `✅ Верно!\n\nСлово было: ${escapeHtml(activeGuessGame.word)}\n💰 Награда: ${GUESS_WORD_REWARD} монет\nНовый баланс: ${newBalance}`,
+          { parse_mode: "HTML" }
+        );
+        clearGuessWordGame(msg.chat.id);
+        return;
+      }
+
+      await safeSendMessage(msg.chat.id, "❌ Неверно\nПопробуй ещё раз");
+      return;
+    }
+
+    if (lowerText.startsWith("мой статус ")) {
+      const statusText = originalText.slice(originalText.toLowerCase().indexOf("мой статус") + "мой статус".length).trim();
+      if (!statusText) {
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nмой статус отдыхаю");
+        return;
+      }
+      if (statusText.length > STATUS_MAX_LENGTH) {
+        await safeSendMessage(msg.chat.id, `❌ Статус слишком длинный. Максимум: ${STATUS_MAX_LENGTH} символов.`);
+        return;
+      }
+      await setUserStatusText(msg.from.id, statusText);
+      await safeSendMessage(
+        msg.chat.id,
+        `📝 Статус обновлён\n\nТеперь твой статус:\n«${escapeHtml(statusText)}»`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "удалить статус")) {
+      await clearUserStatusText(msg.from.id);
+      await safeSendMessage(msg.chat.id, "🗑️ Статус удалён");
+      return;
+    }
+
+    if (lowerText.startsWith("моя био ")) {
+      const bioText = originalText.slice(originalText.toLowerCase().indexOf("моя био") + "моя био".length).trim();
+      if (!bioText) {
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nмоя био люблю мемы");
+        return;
+      }
+      if (bioText.length > BIO_MAX_LENGTH) {
+        await safeSendMessage(msg.chat.id, `❌ Био слишком длинная. Максимум: ${BIO_MAX_LENGTH} символов.`);
+        return;
+      }
+      await setUserBioText(msg.from.id, bioText);
+      await safeSendMessage(
+        msg.chat.id,
+        `📖 Био обновлена\n\nТеперь твоя био:\n«${escapeHtml(bioText)}»`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "удалить био")) {
+      await clearUserBioText(msg.from.id);
+      await safeSendMessage(msg.chat.id, "🗑️ Био удалена");
+      return;
+    }
+
+    if (
+      isExactCommand(lowerText, "правда или действие") ||
+      isExactCommand(lowerText, "правда") ||
+      isExactCommand(lowerText, "действие")
+    ) {
+      if (getAnyActiveFunGame(msg.chat.id)) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+        return;
+      }
+
+      const mode = isExactCommand(lowerText, "правда")
+        ? "truth"
+        : isExactCommand(lowerText, "действие")
+          ? "dare"
+          : null;
+      const game = startTruthOrDareGame(msg.chat.id, msg.from, mode);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎲 ${getUserLink(msg.from)} играет в «Правда или действие»\n\nТебе выпало: ${game.mode === "truth" ? "ПРАВДА" : "ДЕЙСТВИЕ"}\n\n${game.mode === "truth" ? "Вопрос" : "Задание"}:\n${escapeHtml(game.prompt)}\n\nОтветить должен только ${escapeHtml(getUserName(msg.from))}.\nЕсли сдаёшься — напиши: Я сдаюсь`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "угадай слово")) {
+      if (getAnyActiveFunGame(msg.chat.id)) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+        return;
+      }
+
+      const game = startGuessWordGame(msg.chat.id, msg.from);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🧠 ${getUserLink(msg.from)} играет в «Угадай слово»\n\nПодсказка:\n${escapeHtml(game.hint)}\nСлово из ${String(game.word).length} букв\n\nОтвечать должен только ${escapeHtml(getUserName(msg.from))}.\nЕсли сдаёшься — напиши: Я сдаюсь`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (lowerText.startsWith("насколько ты ")) {
+      const subject = originalText.slice(originalText.toLowerCase().indexOf("насколько ты") + "насколько ты".length).trim();
+      if (!subject) {
+        await safeSendMessage(msg.chat.id, "❌ Напиши так:\nнасколько ты крутой");
+        return;
+      }
+      const percent = getRandomIntInclusive(0, 100);
+      await safeSendMessage(msg.chat.id, `📊 Проверка...\n\nТы ${escapeHtml(subject)} на ${percent}%`, {
+        parse_mode: "HTML"
+      });
+      return;
+    }
+
+    if (isExactCommand(lowerText, "кем ты был бы")) {
+      const variant = getRandomFromArray(WOULD_BE_VARIANTS) || "человеком-загадкой 🌀";
+      await safeSendMessage(msg.chat.id, `🎭 Если бы ты был кем-то, то был бы:\n\n${escapeHtml(variant)}`, {
+        parse_mode: "HTML"
+      });
+      return;
+    }
 
     // PENDING YES / NO
     const pendingMarriage = findMarriageRequestByUser(msg.chat.id, msg.from.id);
@@ -12198,6 +12592,44 @@ async function createCustomCommand(userId, trigger, actionText) {
   );
 }
 
+async function getUserCustomCommandByTrigger(userId, trigger) {
+  const result = await pool.query(
+    `
+    SELECT id, user_id, trigger, action_text, created_at
+    FROM custom_commands
+    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
+    LIMIT 1
+    `,
+    [userId, trigger]
+  );
+  return result.rows[0] || null;
+}
+
+async function updateCustomCommand(userId, trigger, actionText) {
+  const result = await pool.query(
+    `
+    UPDATE custom_commands
+    SET action_text = $3
+    WHERE user_id = $1 AND LOWER(trigger) = LOWER($2)
+    RETURNING id, user_id, trigger, action_text, created_at
+    `,
+    [userId, trigger, actionText]
+  );
+  return result.rows[0] || null;
+}
+
+async function clearUserCustomCommands(userId) {
+  const result = await pool.query(
+    `
+    DELETE FROM custom_commands
+    WHERE user_id = $1
+    RETURNING id
+    `,
+    [userId]
+  );
+  return Number(result.rowCount || 0);
+}
+
 async function deleteCustomCommand(userId, trigger) {
   const result = await pool.query(
     `
@@ -12310,6 +12742,102 @@ bot.onText(/^\/deletecommand(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) 
   } catch (error) {
     console.error("Ошибка /deletecommand:", error);
     await safeSendMessage(msg.chat.id, "Ошибка удаления команды.");
+  }
+});
+
+bot.onText(/^\/editcommand(@[A-Za-z0-9_]+)?(?:\s+([^\s]+)\s+([\s\S]+))?$/, async (msg, match) => {
+  try {
+    await initUser(msg.from);
+    const trigger = normalizeText(match?.[2] || "");
+    const newText = String(match?.[3] || "").trim();
+
+    if (!trigger || !newText) {
+      await safeSendMessage(msg.chat.id, "❌ Напиши так:\n/editcommand привет Новый текст");
+      return;
+    }
+
+    if (newText.length < 2 || newText.length > 120) {
+      await safeSendMessage(msg.chat.id, "❌ Новый текст команды должен быть от 2 до 120 символов.");
+      return;
+    }
+
+    const updated = await updateCustomCommand(msg.from.id, trigger, newText);
+    if (!updated) {
+      await safeSendMessage(msg.chat.id, "❌ Такой твоей команды нет.");
+      return;
+    }
+
+    await safeSendMessage(
+      msg.chat.id,
+      `✏️ Команда обновлена\n\nТриггер: ${escapeHtml(updated.trigger)}\nНовый ответ: ${escapeHtml(updated.action_text)}`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("Ошибка /editcommand:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка редактирования команды.");
+  }
+});
+
+bot.onText(/^\/commandinfo(@[A-Za-z0-9_]+)?(?:\s+(.+))?$/, async (msg, match) => {
+  try {
+    await initUser(msg.from);
+    const trigger = normalizeText(match?.[2] || "");
+
+    if (!trigger) {
+      await safeSendMessage(msg.chat.id, "❌ Напиши так:\n/commandinfo привет");
+      return;
+    }
+
+    const command = await getUserCustomCommandByTrigger(msg.from.id, trigger);
+    if (!command) {
+      await safeSendMessage(msg.chat.id, "❌ Команда не найдена.");
+      return;
+    }
+
+    await safeSendMessage(
+      msg.chat.id,
+      `ℹ️ Информация о команде\n\nТриггер: ${escapeHtml(command.trigger)}\nОтвет: ${escapeHtml(command.action_text)}\nСоздана: ${formatDateTime(command.created_at)}`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("Ошибка /commandinfo:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка получения информации о команде.");
+  }
+});
+
+bot.onText(/^\/commandlist(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    const commands = await getUserCustomCommands(msg.from.id);
+
+    if (!commands.length) {
+      await safeSendMessage(msg.chat.id, "📭 У тебя пока нет своих команд.");
+      return;
+    }
+
+    const lines = commands.map((cmd, index) => `${index + 1}. ${escapeHtml(cmd.trigger)} — ${escapeHtml(cmd.action_text)}`);
+    await safeSendMessage(
+      msg.chat.id,
+      `🛠️ Твои команды\n\n${lines.join("\n")}\n\nВсего команд: ${commands.length}/${MAX_CUSTOM_COMMANDS}`,
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    console.error("Ошибка /commandlist:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка при получении списка команд.");
+  }
+});
+
+bot.onText(/^\/clearcommands(@[A-Za-z0-9_]+)?$/, async (msg) => {
+  try {
+    await initUser(msg.from);
+    pendingClearCommandsConfirm[getPendingKey(msg.chat.id, msg.from.id)] = true;
+    await safeSendMessage(
+      msg.chat.id,
+      "⚠️ Ты точно хочешь удалить все свои команды?\n\nНапиши: подтвердить удаление команд"
+    );
+  } catch (error) {
+    console.error("Ошибка /clearcommands:", error);
+    await safeSendMessage(msg.chat.id, "Ошибка очистки команд.");
   }
 });
 
