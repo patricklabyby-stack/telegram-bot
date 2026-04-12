@@ -309,7 +309,6 @@ const WOULD_BE_VARIANTS = [
 ];
 
 const FUN_GAME_TIMEOUT_MS = 5 * 60 * 1000;
-const GUESS_WORD_REWARD = 12;
 const STATUS_MAX_LENGTH = 80;
 const BIO_MAX_LENGTH = 180;
 
@@ -6709,10 +6708,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
       }
 
       if (normalizeText(originalText) === normalizeText(activeGuessGame.word)) {
-        const newBalance = await addCoinsToUser(msg.from.id, GUESS_WORD_REWARD);
         await safeSendMessage(
           msg.chat.id,
-          `✅ Верно!\n\nСлово было: ${escapeHtml(activeGuessGame.word)}\n💰 Награда: ${GUESS_WORD_REWARD} монет\nНовый баланс: ${newBalance}`,
+          `✅ Верно!\n\nСлово было: ${escapeHtml(activeGuessGame.word)}`,
           { parse_mode: "HTML" }
         );
         clearGuessWordGame(msg.chat.id);
@@ -9089,9 +9087,8 @@ ${getUserLink(child)}, выбери ниже:
           msg.chat.id,
           `🛠 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}.
 
-✅ Предмет сработал идеально — побег удался.
-🧩 Предмет сломался после использования.
-⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+✅ Он(а) смог(ла) выбраться из тюрьмы.
+🧩 Предмет сломался после использования.`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -9107,9 +9104,7 @@ ${getUserLink(child)}, выбери ниже:
 
 ✅ Предмет помог.
 ⏳ Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-🧩 Предмет сломался после использования.
-⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+🧩 Предмет сломался после использования.`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -9120,12 +9115,11 @@ ${getUserLink(child)}, выбери ниже:
 
         await safeSendMessage(
           msg.chat.id,
-          `💥 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}, но всё пошло криво.
+          `🛠 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}.
 
+❌ Сбежать не получилось.
 ⛓ К сроку добавлено: ${formatRemainingTime(outcome.extraMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-🧩 Предмет сломался после использования.
-⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+🧩 Предмет сломался после использования.`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -9133,11 +9127,10 @@ ${getUserLink(child)}, выбери ниже:
 
       await safeSendMessage(
         msg.chat.id,
-        `🪨 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}.
+        `🛠 ${getUserLink(msg.from)} использовал(а) предмет ${escapeHtml(itemInfo?.title || lowerText)}.
 
-❌ Ничего полезного не вышло.
-🧩 Предмет сломался после использования.
-⏳ Новый кулдаун предмета: ${formatRemainingTime(toolCooldownMs)}`,
+❌ Сбежать не получилось.
+🧩 Предмет сломался после использования.`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -9159,24 +9152,11 @@ ${getUserLink(child)}, выбери ниже:
       setPrisonFightCooldown(msg.from.id);
       const outcome = getRandomPrisonFightOutcome();
 
-      if (outcome.type === "win") {
-        const balance = await addCoinsToUser(msg.from.id, outcome.coins);
+      if (outcome.type === "win" || outcome.type === "item") {
         let out = `🥊 ${getUserLink(msg.from)} влез(ла) в тюремную драку.
 
 ✅ Победа
-💰 Награда: ${outcome.coins} монет
-💳 Баланс: ${balance}`;
-        out = await appendLevelUpIfNeeded(out, msg.from.id, outcome.xp);
-        await safeSendMessage(msg.chat.id, out, { parse_mode: "HTML", disable_web_page_preview: true });
-        return;
-      }
-
-      if (outcome.type === "item") {
-        const newCount = await addItemToInventory(msg.from.id, outcome.item.key, 1);
-        let out = `🥊 ${getUserLink(msg.from)} выиграл(а) тюремную драку.
-
-🎁 Получен предмет: ${outcome.item.emoji} ${outcome.item.title}
-🎒 Теперь у тебя: ${newCount}`;
+😈 Репутация выросла`;
         out = await appendLevelUpIfNeeded(out, msg.from.id, outcome.xp);
         await safeSendMessage(msg.chat.id, out, { parse_mode: "HTML", disable_web_page_preview: true });
         return;
@@ -9188,8 +9168,7 @@ ${getUserLink(child)}, выбери ниже:
         `${outcome.type === "hard_fail" ? "💀" : "😬"} ${getUserLink(msg.from)} проиграл(а) тюремную драку.
 
 ⛓ Добавлено к сроку: ${formatRemainingTime(outcome.extraMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун побега с сообщником: 30 мин`,
+😈 Репутация упала`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -9286,8 +9265,7 @@ ${getUserLink(child)}, выбери ниже:
 
 ${getUserLink(prisoner)} сбежал(а) из тюрьмы.
 🤝 Помощник: ${getUserLink(msg.from)}
-🚨 Розыск вырос у обоих.
-⏳ Новый кулдаун побега с сообщником: 30 мин.`,
+🚨 Розыск вырос у обоих.`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -9303,8 +9281,7 @@ ${getUserLink(prisoner)} сбежал(а) из тюрьмы.
 
 ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extraMs)}
 🤝 Помощник: ${getUserLink(msg.from)} получил розыск
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун побега с сообщником: 30 мин`,
+⛓ Добавлено к сроку: ${formatRemainingTime(outcome.extraMs)}`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -9338,7 +9315,6 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
         `🚔 Тюрьма
 
 Игрок: ${getUserLink(targetUser)}
-🕒 До: ${formatDateTime(jail.until_at)}
 ⏳ Осталось: ${formatRemainingTime(remainingMs)}
 
 Доступно:
@@ -9413,9 +9389,7 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
 
         let out = `🙏 ${getUserLink(msg.from)} молился в тюрьме...
 
-⏳ Срок уменьшен на ${formatRemainingTime(reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун побега с сообщником: 30 мин`;
+⏳ Срок уменьшен на ${formatRemainingTime(reduceMs)}`;
 
         out = await appendLevelUpIfNeeded(out, msg.from.id, 3);
 
@@ -9525,9 +9499,7 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
         msg.chat.id,
         `⛓ ${getUserLink(msg.from)} попытался(ась) сбежать, но был(а) пойман(а).
 
-➕ Срок увеличен на 20 минут.
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун побега с сообщником: 30 мин`,
+➕ Срок увеличен на 20 минут.`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -9567,8 +9539,7 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
         await changeWantedLevel(msg.from.id, -2);
         let out = `👔 ${getUserLink(msg.from)} нанял(а) элитного адвоката за ${ELITE_LAWYER_COST} монет.
 
-✅ Игрок освобождён.
-⏳ Новый кулдаун адвоката: ${formatRemainingTime(eliteCooldownMs)}`;
+✅ Игрок освобождён.`;
         out = await appendLevelUpIfNeeded(out, msg.from.id, 8);
         await safeSendMessage(msg.chat.id, out, { parse_mode: "HTML", disable_web_page_preview: true });
         return;
@@ -9584,8 +9555,7 @@ ${getUserLink(prisoner)} добавлено: ${formatRemainingTime(outcome.extra
 
 ⏳ Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
 ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted}
-` : ''}🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун адвоката: ${formatRemainingTime(eliteCooldownMs)}`,
+` : ''}`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -9595,8 +9565,7 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
         msg.chat.id,
         `👔 ${getUserLink(msg.from)} нанял(а) элитного адвоката за ${ELITE_LAWYER_COST} монет.
 
-❌ Даже он ничего не смог сделать.
-⏳ Новый кулдаун адвоката: ${formatRemainingTime(eliteCooldownMs)}`,
+❌ Даже он ничего не смог сделать.`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
@@ -9652,9 +9621,7 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
           msg.chat.id,
           `⚖️ ${getUserLink(msg.from)} нанял(а) адвоката за ${JAIL_LAWYER_COST} монет.
 
-📉 Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун побега с сообщником: 30 мин`,
+📉 Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}`,
           {
             parse_mode: "HTML",
             disable_web_page_preview: true
@@ -9717,9 +9684,7 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
           `💸 ${getUserLink(msg.from)} передал(а) взятку ${bribeAmount} монет.
 
 ✅ Охранник помог
-⏳ Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун побега с сообщником: 30 мин`,
+⏳ Срок уменьшен на ${formatRemainingTime(outcome.reduceMs)}`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         return;
@@ -9745,9 +9710,7 @@ ${outcome.dropWanted ? `🚨 Розыск снижен на ${outcome.dropWanted
         `🚨 Попытка взятки раскрыта.
 
 💸 Потрачено: ${bribeAmount} монет
-⛓ Добавлено к сроку: ${formatRemainingTime(outcome.extraMs)}
-🕒 Новый срок до: ${formatDateTime(updatedJail.until_at)}
-⏳ Новый кулдаун побега с сообщником: 30 мин`,
+⛓ Добавлено к сроку: ${formatRemainingTime(outcome.extraMs)}`,
         { parse_mode: "HTML", disable_web_page_preview: true }
       );
       return;
