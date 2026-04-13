@@ -40,6 +40,8 @@ const pendingClearCommandsConfirm = {};
 const activeTruthOrDareGames = {};
 const activeGuessWordGames = {};
 const activeHangmanGames = {};
+const activeGuessNumberGames = {};
+const activeEmojiGuessGames = {};
 
 const JAIL_PARTNER_ESCAPE_REQUEST_MS = 5 * 60 * 1000;
 const PARTNER_ESCAPE_COOLDOWN_MS = 30 * 60 * 1000;
@@ -753,6 +755,30 @@ const GUESS_WORD_ITEMS = [
   { word: "бутылка", hint: "в ней носят воду" },
   { word: "тарелочка", hint: "маленькая тарелка" },
 ];
+
+const EMOJI_GUESS_ITEMS = [
+  { word: "яблоко", emojis: "🍎" },
+  { word: "банан", emojis: "🍌🟡" },
+  { word: "лимон", emojis: "🍋🟡" },
+  { word: "кошка", emojis: "🐱🏠" },
+  { word: "собака", emojis: "🐶🏠" },
+  { word: "телефон", emojis: "📱☎️" },
+  { word: "кровать", emojis: "🛏️😴" },
+  { word: "книга", emojis: "📚" },
+  { word: "пицца", emojis: "🍕" },
+  { word: "машина", emojis: "🚗" },
+  { word: "солнце", emojis: "☀️" },
+  { word: "луна", emojis: "🌙" },
+  { word: "мороженое", emojis: "🍦" },
+  { word: "рыбка", emojis: "🐟💧" },
+  { word: "будильник", emojis: "⏰😴" },
+  { word: "дождь", emojis: "☔🌧️" },
+  { word: "огонь", emojis: "🔥" },
+  { word: "шарик", emojis: "🎈" },
+  { word: "подарок", emojis: "🎁" },
+  { word: "футбол", emojis: "⚽🥅" }
+];
+
 
 const WOULD_BE_VARIANTS = [
   "детективом 🕵️",
@@ -2113,11 +2139,29 @@ async function cleanupExpiredFunGames(chatId) {
       parse_mode: "HTML"
     });
   }
+
+  const numberGame = activeGuessNumberGames[key];
+  if (numberGame && numberGame.expiresAt <= now) {
+    const answer = numberGame.number;
+    delete activeGuessNumberGames[key];
+    await safeSendMessage(chatId, `Время вышло.\n\nЧисло было: ${escapeHtml(answer)}`, {
+      parse_mode: "HTML"
+    });
+  }
+
+  const emojiGame = activeEmojiGuessGames[key];
+  if (emojiGame && emojiGame.expiresAt <= now) {
+    const answer = emojiGame.word;
+    delete activeEmojiGuessGames[key];
+    await safeSendMessage(chatId, `Время вышло.\n\nСлово было: ${escapeHtml(answer)}`, {
+      parse_mode: "HTML"
+    });
+  }
 }
 
 function getAnyActiveFunGame(chatId) {
   const key = getFunChatKey(chatId);
-  return activeTruthOrDareGames[key] || activeGuessWordGames[key] || activeHangmanGames[key] || null;
+  return activeTruthOrDareGames[key] || activeGuessWordGames[key] || activeHangmanGames[key] || activeGuessNumberGames[key] || activeEmojiGuessGames[key] || null;
 }
 
 function startTruthOrDareGame(chatId, ownerUser, mode) {
@@ -2189,6 +2233,7 @@ function startHangmanGame(chatId, ownerUser) {
     guessedLetters: [],
     wrongAttempts: 0,
     maxWrongAttempts: 6,
+    hintShown: false,
     createdAt: Date.now(),
     expiresAt: Date.now() + FUN_GAME_TIMEOUT_MS
   };
@@ -2198,6 +2243,47 @@ function startHangmanGame(chatId, ownerUser) {
 
 function clearHangmanGame(chatId) {
   delete activeHangmanGames[getFunChatKey(chatId)];
+}
+
+function startGuessNumberGame(chatId, ownerUser) {
+  const key = getFunChatKey(chatId);
+  const number = getRandomIntInclusive(1, 20);
+
+  activeGuessNumberGames[key] = {
+    ownerUserId: Number(ownerUser.id),
+    ownerName: getUserName(ownerUser),
+    number,
+    hintShown: false,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + FUN_GAME_TIMEOUT_MS
+  };
+
+  return activeGuessNumberGames[key];
+}
+
+function clearGuessNumberGame(chatId) {
+  delete activeGuessNumberGames[getFunChatKey(chatId)];
+}
+
+function startEmojiGuessGame(chatId, ownerUser) {
+  const key = getFunChatKey(chatId);
+  const item = getRandomFromArray(EMOJI_GUESS_ITEMS);
+
+  activeEmojiGuessGames[key] = {
+    ownerUserId: Number(ownerUser.id),
+    ownerName: getUserName(ownerUser),
+    word: item.word,
+    emojis: item.emojis,
+    hintShown: false,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + FUN_GAME_TIMEOUT_MS
+  };
+
+  return activeEmojiGuessGames[key];
+}
+
+function clearEmojiGuessGame(chatId) {
+  delete activeEmojiGuessGames[getFunChatKey(chatId)];
 }
 
 async function saveProfileMessage(messageId, targetUserId) {
@@ -7223,6 +7309,16 @@ ${escapeHtml(parsed.actionText)} — текст бота
         return;
       }
 
+      if (isExactCommand(lowerText, "подсказка")) {
+        if (activeHangmanGame.hintShown) return;
+        activeHangmanGame.hintShown = true;
+        await safeSendMessage(
+          msg.chat.id,
+          `Подсказка:\nСлово из ${String(activeHangmanGame.word).length} букв`
+        );
+        return;
+      }
+
       const answerText = normalizeText(originalText);
       const cleanLettersOnly = answerText.replace(/[^a-zа-яёіїєґ]/gi, "");
 
@@ -7426,6 +7522,44 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
+    if (isExactCommand(lowerText, "угадай число")) {
+      if (getAnyActiveFunGame(msg.chat.id)) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+        return;
+      }
+
+      const game = startGuessNumberGame(msg.chat.id, msg.from);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `${getUserLink(msg.from)}, угадай число.\n\nЯ загадал число от 1 до 20\nЕсли нужна подсказка — напиши: подсказка\nЕсли сдаёшься — напиши: Я сдаюсь`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "угадай по эмодзи")) {
+      if (getAnyActiveFunGame(msg.chat.id)) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+        return;
+      }
+
+      const game = startEmojiGuessGame(msg.chat.id, msg.from);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `${getUserLink(msg.from)}, угадай слово по эмодзи.\n\n${escapeHtml(game.emojis)}\nЕсли нужна подсказка — напиши: подсказка\nЕсли сдаёшься — напиши: Я сдаюсь`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
     if (isExactCommand(lowerText, "виселица")) {
       if (getAnyActiveFunGame(msg.chat.id)) {
         await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
@@ -7436,7 +7570,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
       await safeSendMessage(
         msg.chat.id,
-        `${getUserLink(msg.from)}, играем в виселицу.\n\nСлово:\n${getMaskedHangmanWord(game.word, game.guessedLetters)}\n\nОшибок: ${game.wrongAttempts}/${game.maxWrongAttempts}\n\nПиши букву или всё слово сразу.\nЕсли сдаёшься — напиши: Я сдаюсь`,
+        `${getUserLink(msg.from)}, играем в виселицу.\n\nСлово:\n${getMaskedHangmanWord(game.word, game.guessedLetters)}\n\nОшибок: ${game.wrongAttempts}/${game.maxWrongAttempts}\n\nПиши букву или всё слово сразу.\nЕсли нужна подсказка — напиши: подсказка\nЕсли сдаёшься — напиши: Я сдаюсь`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
