@@ -57,6 +57,11 @@ const WOODEN_CASE_COIN_MIN = 10;
 const WOODEN_CASE_COIN_MAX = 25;
 const GOLD_CASE_COIN_MIN = 50;
 const GOLD_CASE_COIN_MAX = 100;
+const LOTTERY_TICKET_PRICE = 250;
+const LOTTERY_MAX_TICKETS = 5;
+const LOTTERY_COOLDOWN_MS = 15 * 60 * 1000;
+const OWNER_LOTTERY_COOLDOWN_MS = 1000;
+
 
 const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -813,6 +818,15 @@ function getCaseTypeByText(rawText) {
   return null;
 }
 
+
+function getLotteryPrize() {
+  const roll = Math.random();
+
+  if (roll < 0.55) return getRandomIntInclusive(10, 100);
+  if (roll < 0.80) return getRandomIntInclusive(101, 140);
+  if (roll < 0.95) return getRandomIntInclusive(141, 190);
+  return getRandomIntInclusive(191, 250);
+}
 
 function getAllInventoryItems() {
   return [
@@ -1617,6 +1631,8 @@ async function initDb() {
       respect INTEGER DEFAULT 0,
       xp INTEGER DEFAULT 0,
       level INTEGER DEFAULT 1,
+      lottery_tickets INTEGER DEFAULT 0,
+      last_lottery_buy_at TIMESTAMPTZ,
       last_daily_at TIMESTAMPTZ,
       last_hunt_at TIMESTAMPTZ,
       last_sniper_at TIMESTAMPTZ,
@@ -1915,6 +1931,8 @@ await pool.query(`
 
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS xp INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lottery_tickets INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lottery_buy_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS saves INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS snowballs INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_robbery_at TIMESTAMPTZ`);
@@ -7729,6 +7747,151 @@ ${lines.join("\n")}`,
       return;
     }
 
+
+
+    if (isExactCommand(lowerText, "мои лотереи") || isExactCommand(lowerText, "моя лотерея")) {
+      const stats = await getUserStats(msg.from.id);
+      const tickets = Number(stats?.lottery_tickets || 0);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎟 Лотереи игрока ${getUserLink(msg.from)}
+
+У тебя лотерейных билетов: ${tickets}/${LOTTERY_MAX_TICKETS}`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "купить лотерею") || isExactCommand(lowerText, "купить лотерейный билет")) {
+      const client = await pool.connect();
+
+      try {
+        await client.query("BEGIN");
+
+        const row = await client.query(
+          `SELECT balance, lottery_tickets, last_lottery_buy_at FROM users WHERE user_id = $1 FOR UPDATE`,
+          [msg.from.id]
+        );
+
+        if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+        const balance = Number(row.rows[0].balance || 0);
+        const tickets = Number(row.rows[0].lottery_tickets || 0);
+        const lastBuyAt = row.rows[0].last_lottery_buy_at ? new Date(row.rows[0].last_lottery_buy_at).getTime() : 0;
+        const cooldownMs = Number(msg.from.id) === Number(OWNER_ID) ? OWNER_LOTTERY_COOLDOWN_MS : LOTTERY_COOLDOWN_MS;
+        const remaining = Math.max(0, cooldownMs - (Date.now() - lastBuyAt));
+
+        if (tickets >= LOTTERY_MAX_TICKETS) {
+          await client.query("ROLLBACK");
+          await safeSendMessage(msg.chat.id, `❌ У тебя уже максимум лотерей: ${tickets}/${LOTTERY_MAX_TICKETS}\n\nСначала открой хотя бы одну.`);
+          return;
+        }
+
+        if (remaining > 0) {
+          await client.query("ROLLBACK");
+          await safeSendMessage(msg.chat.id, `⏳ Купить лотерею снова можно через ${formatRemainingTime(remaining)}`);
+          return;
+        }
+
+        if (balance < LOTTERY_TICKET_PRICE) {
+          await client.query("ROLLBACK");
+          await safeSendMessage(msg.chat.id, `❌ У тебя не хватает монет.\nНужно: ${LOTTERY_TICKET_PRICE} монет`);
+          return;
+        }
+
+        const updated = await client.query(
+          `UPDATE users
+           SET balance = balance - $2,
+               lottery_tickets = lottery_tickets + 1,
+               last_lottery_buy_at = NOW()
+           WHERE user_id = $1
+           RETURNING balance, lottery_tickets`,
+          [msg.from.id, LOTTERY_TICKET_PRICE]
+        );
+
+        await client.query("COMMIT");
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🎟 ${getUserLink(msg.from)} купил(а) лотерейный билет за ${LOTTERY_TICKET_PRICE} монет.\n\nТеперь у тебя лотерей: ${Number(updated.rows[0]?.lottery_tickets || 0)}/${LOTTERY_MAX_TICKETS}\n👛 Баланс: ${Number(updated.rows[0]?.balance || 0)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (_) {}
+        console.error("Ошибка покупки лотереи:", error);
+        await safeSendMessage(msg.chat.id, "❌ Не удалось купить лотерею.");
+      } finally {
+        client.release();
+      }
+      return;
+    }
+
+    if (isExactCommand(lowerText, "открыть лотерею")) {
+      const client = await pool.connect();
+
+      try {
+        await client.query("BEGIN");
+
+        const row = await client.query(
+          `SELECT lottery_tickets FROM users WHERE user_id = $1 FOR UPDATE`,
+          [msg.from.id]
+        );
+
+        if (!row.rows[0]) throw new Error("USER_NOT_FOUND");
+
+        const tickets = Number(row.rows[0].lottery_tickets || 0);
+        if (tickets <= 0) {
+          await client.query("ROLLBACK");
+          await safeSendMessage(msg.chat.id, "❌ У тебя нет лотерей.\n\nСначала купи билет.");
+          return;
+        }
+
+        const prize = getLotteryPrize();
+
+        const updated = await client.query(
+          `UPDATE users
+           SET lottery_tickets = lottery_tickets - 1,
+               balance = balance + $2
+           WHERE user_id = $1
+           RETURNING balance, lottery_tickets`,
+          [msg.from.id, prize]
+        );
+
+        await client.query("COMMIT");
+
+        let extra = "";
+        if (prize >= 191) extra = "\nОчень повезло.";
+        else if (prize >= 141) extra = "\nПовезло.";
+        else if (prize <= 40) extra = "\nНе повезло.";
+
+        await safeSendMessage(
+          msg.chat.id,
+          `🎟 ${getUserLink(msg.from)} открыл(а) лотерею.\n\nВыигрыш: ${prize} монет${extra}\nОсталось лотерей: ${Number(updated.rows[0]?.lottery_tickets || 0)}/${LOTTERY_MAX_TICKETS}\n👛 Баланс: ${Number(updated.rows[0]?.balance || 0)}`,
+          {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }
+        );
+      } catch (error) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (_) {}
+        console.error("Ошибка открытия лотереи:", error);
+        await safeSendMessage(msg.chat.id, "❌ Не удалось открыть лотерею.");
+      } finally {
+        client.release();
+      }
+      return;
+    }
 
     if (isExactCommand(lowerText, "черный рынок") || isExactCommand(lowerText, "чёрный рынок")) {
       const lines = Object.values(ITEMS).map((item) =>
