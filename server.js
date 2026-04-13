@@ -7276,15 +7276,6 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
     await cleanupExpiredFunGames(msg.chat.id);
 
-      await safeSendMessage(
-        msg.chat.id,
-        `✅ Ответ принят\n\n${escapeHtml(activeTruthGame.ownerName)} выбрал(а) ${activeTruthGame.mode === "truth" ? "правду" : "действие"} и ответил(а):\n«${escapeHtml(originalText)}»`,
-        { parse_mode: "HTML" }
-      );
-      clearTruthOrDareGame(msg.chat.id);
-      return;
-    }
-
     const activeTruthGame = activeTruthOrDareGames[getFunChatKey(msg.chat.id)];
     if (activeTruthGame && Number(msg.from.id) === Number(activeTruthGame.ownerUserId)) {
       if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
