@@ -2164,6 +2164,18 @@ function getAnyActiveFunGame(chatId) {
   return activeTruthOrDareGames[key] || activeGuessWordGames[key] || activeHangmanGames[key] || activeGuessNumberGames[key] || activeEmojiGuessGames[key] || null;
 }
 
+function hasActiveFunGameOfType(chatId, type) {
+  const key = getFunChatKey(chatId);
+
+  if (type === "truth_or_dare") return !!activeTruthOrDareGames[key];
+  if (type === "guess_word") return !!activeGuessWordGames[key];
+  if (type === "hangman") return !!activeHangmanGames[key];
+  if (type === "guess_number") return !!activeGuessNumberGames[key];
+  if (type === "emoji_guess") return !!activeEmojiGuessGames[key];
+
+  return false;
+}
+
 function startTruthOrDareGame(chatId, ownerUser, mode) {
   const key = getFunChatKey(chatId);
   const actualMode = mode === "truth" || mode === "dare"
@@ -7264,10 +7276,17 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
     await cleanupExpiredFunGames(msg.chat.id);
 
-    const activeTruthGame = activeTruthOrDareGames[getFunChatKey(msg.chat.id)];
-    if (activeTruthGame) {
-      if (Number(msg.from.id) !== Number(activeTruthGame.ownerUserId)) return;
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ Ответ принят\n\n${escapeHtml(activeTruthGame.ownerName)} выбрал(а) ${activeTruthGame.mode === "truth" ? "правду" : "действие"} и ответил(а):\n«${escapeHtml(originalText)}»`,
+        { parse_mode: "HTML" }
+      );
+      clearTruthOrDareGame(msg.chat.id);
+      return;
+    }
 
+    const activeTruthGame = activeTruthOrDareGames[getFunChatKey(msg.chat.id)];
+    if (activeTruthGame && Number(msg.from.id) === Number(activeTruthGame.ownerUserId)) {
       if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
         if (activeTruthGame.mode === "truth") {
           await safeSendMessage(
@@ -7295,9 +7314,92 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
+    const activeGuessNumberGame = activeGuessNumberGames[getFunChatKey(msg.chat.id)];
+    if (activeGuessNumberGame && Number(msg.from.id) === Number(activeGuessNumberGame.ownerUserId)) {
+      if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
+        await safeSendMessage(
+          msg.chat.id,
+          `Ты сдался.\n\nЧисло было: ${escapeHtml(activeGuessNumberGame.number)}`,
+          { parse_mode: "HTML" }
+        );
+        clearGuessNumberGame(msg.chat.id);
+        return;
+      }
+
+      if (isExactCommand(lowerText, "подсказка")) {
+        if (activeGuessNumberGame.hintShown) return;
+        activeGuessNumberGame.hintShown = true;
+
+        const num = Number(activeGuessNumberGame.number);
+        await safeSendMessage(
+          msg.chat.id,
+          `Подсказка:\nЧисло ${num % 2 === 0 ? "чётное" : "нечётное"}`
+        );
+        return;
+      }
+
+      const guess = Number(String(originalText || "").trim());
+      if (!Number.isInteger(guess)) {
+        return;
+      }
+
+      if (guess === Number(activeGuessNumberGame.number)) {
+        await safeSendMessage(
+          msg.chat.id,
+          `Верно.\n\nЧисло было: ${escapeHtml(activeGuessNumberGame.number)}`,
+          { parse_mode: "HTML" }
+        );
+        clearGuessNumberGame(msg.chat.id);
+        return;
+      }
+
+      await safeSendMessage(
+        msg.chat.id,
+        guess < Number(activeGuessNumberGame.number)
+          ? "Неверно.\n\nМоё число больше."
+          : "Неверно.\n\nМоё число меньше."
+      );
+      return;
+    }
+
+    const activeEmojiGuessGame = activeEmojiGuessGames[getFunChatKey(msg.chat.id)];
+    if (activeEmojiGuessGame && Number(msg.from.id) === Number(activeEmojiGuessGame.ownerUserId)) {
+      if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
+        await safeSendMessage(
+          msg.chat.id,
+          `Ты сдался.\n\nСлово было: ${escapeHtml(activeEmojiGuessGame.word)}`,
+          { parse_mode: "HTML" }
+        );
+        clearEmojiGuessGame(msg.chat.id);
+        return;
+      }
+
+      if (isExactCommand(lowerText, "подсказка")) {
+        if (activeEmojiGuessGame.hintShown) return;
+        activeEmojiGuessGame.hintShown = true;
+        await safeSendMessage(
+          msg.chat.id,
+          `Подсказка:\nСлово из ${String(activeEmojiGuessGame.word).length} букв`
+        );
+        return;
+      }
+
+      if (normalizeText(originalText) === normalizeText(activeEmojiGuessGame.word)) {
+        await safeSendMessage(
+          msg.chat.id,
+          `Верно.\n\nСлово было: ${escapeHtml(activeEmojiGuessGame.word)}`,
+          { parse_mode: "HTML" }
+        );
+        clearEmojiGuessGame(msg.chat.id);
+        return;
+      }
+
+      await safeSendMessage(msg.chat.id, "Неверно.\nПопробуй ещё.");
+      return;
+    }
+
     const activeHangmanGame = activeHangmanGames[getFunChatKey(msg.chat.id)];
-    if (activeHangmanGame) {
-      if (Number(msg.from.id) !== Number(activeHangmanGame.ownerUserId)) return;
+    if (activeHangmanGame && Number(msg.from.id) === Number(activeHangmanGame.ownerUserId)) {
 
       if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
         await safeSendMessage(
@@ -7407,8 +7509,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     const activeGuessGame = activeGuessWordGames[getFunChatKey(msg.chat.id)];
-    if (activeGuessGame) {
-      if (Number(msg.from.id) !== Number(activeGuessGame.ownerUserId)) return;
+    if (activeGuessGame && Number(msg.from.id) === Number(activeGuessGame.ownerUserId)) {
 
       if (isExactCommand(lowerText, "я сдаюсь") || isExactCommand(lowerText, "сдаюсь")) {
         await safeSendMessage(
@@ -7499,8 +7600,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
       isExactCommand(lowerText, "правда") ||
       isExactCommand(lowerText, "действие")
     ) {
-      if (getAnyActiveFunGame(msg.chat.id)) {
-        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+      if (hasActiveFunGameOfType(msg.chat.id, "truth_or_dare")) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт «Правда или действие». Сначала закончи её.");
         return;
       }
 
@@ -7523,8 +7624,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     if (isExactCommand(lowerText, "угадай число")) {
-      if (getAnyActiveFunGame(msg.chat.id)) {
-        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+      if (hasActiveFunGameOfType(msg.chat.id, "guess_number")) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт «Угадай число». Сначала закончи её.");
         return;
       }
 
@@ -7542,8 +7643,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     if (isExactCommand(lowerText, "угадай по эмодзи")) {
-      if (getAnyActiveFunGame(msg.chat.id)) {
-        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+      if (hasActiveFunGameOfType(msg.chat.id, "emoji_guess")) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт «Угадай по эмодзи». Сначала закончи её.");
         return;
       }
 
@@ -7561,8 +7662,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     if (isExactCommand(lowerText, "виселица")) {
-      if (getAnyActiveFunGame(msg.chat.id)) {
-        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+      if (hasActiveFunGameOfType(msg.chat.id, "hangman")) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт «Виселица». Сначала закончи её.");
         return;
       }
 
@@ -7580,8 +7681,8 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     if (isExactCommand(lowerText, "угадай слово")) {
-      if (getAnyActiveFunGame(msg.chat.id)) {
-        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт игра. Сначала закончи её.");
+      if (hasActiveFunGameOfType(msg.chat.id, "guess_word")) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт «Угадай слово». Сначала закончи её.");
         return;
       }
 
