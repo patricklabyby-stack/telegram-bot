@@ -42,6 +42,7 @@ const activeGuessWordGames = {};
 const activeHangmanGames = {};
 const activeGuessNumberGames = {};
 const activeEmojiGuessGames = {};
+const activeHangmanPvPGames = {};
 
 const JAIL_PARTNER_ESCAPE_REQUEST_MS = 5 * 60 * 1000;
 const PARTNER_ESCAPE_COOLDOWN_MS = 30 * 60 * 1000;
@@ -794,6 +795,11 @@ const WOULD_BE_VARIANTS = [
 ];
 
 const FUN_GAME_TIMEOUT_MS = 5 * 60 * 1000;
+const HANGMAN_PVP_JOIN_TIMEOUT_MS = 3 * 60 * 1000;
+const HANGMAN_PVP_WORD_TIMEOUT_MS = 5 * 60 * 1000;
+const HANGMAN_PVP_TURN_TIMEOUT_MS = 5 * 60 * 1000;
+const HANGMAN_PVP_MIN_WORD_LENGTH = 3;
+const HANGMAN_PVP_MAX_WORD_LENGTH = 12;
 const STATUS_MAX_LENGTH = 80;
 const BIO_MAX_LENGTH = 180;
 
@@ -2157,11 +2163,31 @@ async function cleanupExpiredFunGames(chatId) {
       parse_mode: "HTML"
     });
   }
+
+  const hangmanPvpGame = activeHangmanPvPGames[key];
+  if (hangmanPvpGame && hangmanPvpGame.expiresAt <= now) {
+    if (hangmanPvpGame.state === "waiting_player") {
+      delete activeHangmanPvPGames[key];
+      await safeSendMessage(chatId, "⌛ Виселица ПВП отменена. Никто не присоединился.");
+    } else if (hangmanPvpGame.state === "waiting_word") {
+      delete activeHangmanPvPGames[key];
+      await safeSendMessage(chatId, `⌛ Виселица ПВП отменена. ${getUserLink(hangmanPvpGame.ownerUser)} не отправил(а) слово в личку боту.`, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+    } else if (hangmanPvpGame.state === "active") {
+      const answer = hangmanPvpGame.word;
+      delete activeHangmanPvPGames[key];
+      await safeSendMessage(chatId, `⌛ Виселица ПВП остановлена. Время на ход вышло.\n\nСлово было: ${escapeHtml(answer)}`, {
+        parse_mode: "HTML"
+      });
+    }
+  }
 }
 
 function getAnyActiveFunGame(chatId) {
   const key = getFunChatKey(chatId);
-  return activeTruthOrDareGames[key] || activeGuessWordGames[key] || activeHangmanGames[key] || activeGuessNumberGames[key] || activeEmojiGuessGames[key] || null;
+  return activeTruthOrDareGames[key] || activeGuessWordGames[key] || activeHangmanGames[key] || activeGuessNumberGames[key] || activeEmojiGuessGames[key] || activeHangmanPvPGames[key] || null;
 }
 
 function hasActiveFunGameOfType(chatId, type) {
@@ -2255,6 +2281,76 @@ function startHangmanGame(chatId, ownerUser) {
 
 function clearHangmanGame(chatId) {
   delete activeHangmanGames[getFunChatKey(chatId)];
+}
+
+function getActiveHangmanPvpGame(chatId) {
+  return activeHangmanPvPGames[getFunChatKey(chatId)] || null;
+}
+
+function clearHangmanPvpGame(chatId) {
+  delete activeHangmanPvPGames[getFunChatKey(chatId)];
+}
+
+function getMaskedHangmanPvpWord(word, guessedLetters = []) {
+  return getMaskedHangmanWord(word, guessedLetters);
+}
+
+function isValidHangmanPvpWord(word) {
+  const normalized = normalizeText(word).replace(/[^a-zа-яёіїєґ]/gi, "");
+  if (!normalized) {
+    return { ok: false, reason: `❌ Напиши слово только буквами. Без цифр, пробелов и символов.` };
+  }
+
+  if (normalized.length < HANGMAN_PVP_MIN_WORD_LENGTH || normalized.length > HANGMAN_PVP_MAX_WORD_LENGTH) {
+    return { ok: false, reason: `❌ Слово должно быть от ${HANGMAN_PVP_MIN_WORD_LENGTH} до ${HANGMAN_PVP_MAX_WORD_LENGTH} букв.` };
+  }
+
+  return { ok: true, word: normalized };
+}
+
+function formatHangmanPvpGameState(game) {
+  const usedLetters = (game.guessedLetters || []).length
+    ? game.guessedLetters.map((x) => escapeHtml(x)).join(", ")
+    : "нет";
+
+  return [
+    `🎯 Виселица ПВП`,
+    `Загадывает: ${getUserLink(game.ownerUser)}`,
+    `Угадывает: ${getUserLink(game.guesserUser)}`,
+    ``,
+    `Слово: ${escapeHtml(getMaskedHangmanPvpWord(game.word, game.guessedLetters))}`,
+    `Ошибки: ${game.wrongAttempts}/${game.maxWrongAttempts}`,
+    `Буквы: ${usedLetters}`
+  ].join("\n");
+}
+
+function startHangmanPvpGame(chatId, ownerUser) {
+  const key = getFunChatKey(chatId);
+
+  activeHangmanPvPGames[key] = {
+    type: "hangman_pvp",
+    state: "waiting_player",
+    ownerUserId: Number(ownerUser.id),
+    ownerUser,
+    guesserUserId: null,
+    guesserUser: null,
+    word: "",
+    guessedLetters: [],
+    wrongAttempts: 0,
+    maxWrongAttempts: 6,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    expiresAt: Date.now() + HANGMAN_PVP_JOIN_TIMEOUT_MS
+  };
+
+  return activeHangmanPvPGames[key];
+}
+
+function findPendingHangmanPvpGameByOwner(userId) {
+  const ownerId = Number(userId);
+  return Object.values(activeHangmanPvPGames).find((game) =>
+    game && game.state === "waiting_word" && Number(game.ownerUserId) === ownerId
+  ) || null;
 }
 
 function startGuessNumberGame(chatId, ownerUser) {
@@ -7190,6 +7286,50 @@ bot.on("message", async (msg) => {
     const originalText = (msg.text || "").trim();
     const lowerText = normalizeText(originalText);
 
+    const pendingPrivateHangmanPvpGame = msg.chat.type === "private"
+      ? findPendingHangmanPvpGameByOwner(msg.from.id)
+      : null;
+
+    if (pendingPrivateHangmanPvpGame) {
+      if (isExactCommand(lowerText, "отмена") || isExactCommand(lowerText, "отмена виселицы")) {
+        const targetChatId = pendingPrivateHangmanPvpGame.chatId || msg.from.id;
+        clearHangmanPvpGame(targetChatId);
+        await safeSendMessage(msg.chat.id, "🗑️ Виселица ПВП отменена.");
+        await safeSendMessage(
+          targetChatId,
+          `🗑️ ${getUserLink(msg.from)} отменил(а) Виселицу ПВП.`,
+          { parse_mode: "HTML", disable_web_page_preview: true }
+        );
+        return;
+      }
+
+      const validation = isValidHangmanPvpWord(originalText);
+      if (!validation.ok) {
+        await safeSendMessage(msg.chat.id, `${validation.reason}\n\nПопробуй ещё раз или напиши: отмена`);
+        return;
+      }
+
+      pendingPrivateHangmanPvpGame.word = validation.word;
+      pendingPrivateHangmanPvpGame.state = "active";
+      pendingPrivateHangmanPvpGame.guessedLetters = [];
+      pendingPrivateHangmanPvpGame.wrongAttempts = 0;
+      pendingPrivateHangmanPvpGame.updatedAt = Date.now();
+      pendingPrivateHangmanPvpGame.expiresAt = Date.now() + HANGMAN_PVP_TURN_TIMEOUT_MS;
+
+      await safeSendMessage(
+        msg.chat.id,
+        `✅ Слово принято: ${escapeHtml(validation.word)}\n\nЯ запускаю игру в группе.`,
+        { parse_mode: "HTML" }
+      );
+
+      await safeSendMessage(
+        pendingPrivateHangmanPvpGame.chatId,
+        `${formatHangmanPvpGameState(pendingPrivateHangmanPvpGame)}\n\n${getUserLink(pendingPrivateHangmanPvpGame.guesserUser)}, пиши одну букву или всё слово целиком.`,
+        { parse_mode: "HTML", disable_web_page_preview: true }
+      );
+      return;
+    }
+
     if (lowerText.startsWith("/")) return;
 
     const pendingKey = getPendingKey(msg.chat.id, msg.from.id);
@@ -7275,6 +7415,152 @@ ${escapeHtml(parsed.actionText)} — текст бота
     }
 
     await cleanupExpiredFunGames(msg.chat.id);
+
+    const activeHangmanPvpGame = getActiveHangmanPvpGame(msg.chat.id);
+    if (activeHangmanPvpGame) {
+      if ((isExactCommand(lowerText, "отмена") || isExactCommand(lowerText, "отмена виселицы")) && Number(msg.from.id) === Number(activeHangmanPvpGame.ownerUserId)) {
+        const revealText = activeHangmanPvpGame.word
+          ? `\n\nСлово было: ${escapeHtml(activeHangmanPvpGame.word)}`
+          : "";
+        clearHangmanPvpGame(msg.chat.id);
+        await safeSendMessage(msg.chat.id, `🗑️ ${getUserLink(msg.from)} отменил(а) Виселицу ПВП.${revealText}`, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        return;
+      }
+
+      if (activeHangmanPvpGame.state === "waiting_player") {
+        if (isExactCommand(lowerText, "играю")) {
+          if (Number(msg.from.id) === Number(activeHangmanPvpGame.ownerUserId)) {
+            await safeSendMessage(msg.chat.id, "❌ Нельзя играть против самого себя.");
+            return;
+          }
+
+          activeHangmanPvpGame.guesserUserId = Number(msg.from.id);
+          activeHangmanPvpGame.guesserUser = msg.from;
+          activeHangmanPvpGame.state = "waiting_word";
+          activeHangmanPvpGame.updatedAt = Date.now();
+          activeHangmanPvpGame.expiresAt = Date.now() + HANGMAN_PVP_WORD_TIMEOUT_MS;
+
+          await safeSendMessage(
+            msg.chat.id,
+            `✅ Игрок найден!\n\nЗагадывает слово: ${getUserLink(activeHangmanPvpGame.ownerUser)}\nУгадывает слово: ${getUserLink(activeHangmanPvpGame.guesserUser)}\n\n${getUserLink(activeHangmanPvpGame.ownerUser)}, отправь слово мне в личку.\nЕсли бот не принимает личку, сначала напиши ему любое сообщение в личные сообщения.`,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
+
+          await safeSendMessage(
+            activeHangmanPvpGame.ownerUserId,
+            `✉️ Напиши слово для Виселицы ПВП.\n\nТолько буквы, без пробелов и символов.\nДлина: от ${HANGMAN_PVP_MIN_WORD_LENGTH} до ${HANGMAN_PVP_MAX_WORD_LENGTH} букв.\n\nЧтобы отменить, напиши: отмена`,
+            { parse_mode: "HTML" }
+          );
+          return;
+        }
+
+        return;
+      }
+
+      if (activeHangmanPvpGame.state === "waiting_word") {
+        return;
+      }
+
+      if (activeHangmanPvpGame.state === "active") {
+        if (Number(msg.from.id) !== Number(activeHangmanPvpGame.guesserUserId)) {
+          return;
+        }
+
+        const answerText = normalizeText(originalText);
+        const cleanLettersOnly = answerText.replace(/[^a-zа-яёіїєґ]/gi, "");
+        if (!cleanLettersOnly) return;
+
+        const wordNormalized = normalizeText(activeHangmanPvpGame.word);
+        activeHangmanPvpGame.updatedAt = Date.now();
+        activeHangmanPvpGame.expiresAt = Date.now() + HANGMAN_PVP_TURN_TIMEOUT_MS;
+
+        if (cleanLettersOnly.length === 1) {
+          const letter = cleanLettersOnly[0];
+
+          if (activeHangmanPvpGame.guessedLetters.includes(letter)) {
+            await safeSendMessage(
+              msg.chat.id,
+              `⚠️ Буква «${escapeHtml(letter)}» уже была.\n\n${formatHangmanPvpGameState(activeHangmanPvpGame)}`,
+              { parse_mode: "HTML", disable_web_page_preview: true }
+            );
+            return;
+          }
+
+          activeHangmanPvpGame.guessedLetters.push(letter);
+
+          if (wordNormalized.includes(letter)) {
+            const masked = getMaskedHangmanPvpWord(activeHangmanPvpGame.word, activeHangmanPvpGame.guessedLetters);
+            if (!masked.includes("_")) {
+              clearHangmanPvpGame(msg.chat.id);
+              await safeSendMessage(
+                msg.chat.id,
+                `🏆 Победа!\n\n${getUserLink(msg.from)} угадал(а) слово: ${escapeHtml(activeHangmanPvpGame.word)}`,
+                { parse_mode: "HTML", disable_web_page_preview: true }
+              );
+              return;
+            }
+
+            await safeSendMessage(
+              msg.chat.id,
+              `✅ Буква «${escapeHtml(letter)}» есть!\n\n${formatHangmanPvpGameState(activeHangmanPvpGame)}`,
+              { parse_mode: "HTML", disable_web_page_preview: true }
+            );
+            return;
+          }
+
+          activeHangmanPvpGame.wrongAttempts += 1;
+
+          if (activeHangmanPvpGame.wrongAttempts >= activeHangmanPvpGame.maxWrongAttempts) {
+            clearHangmanPvpGame(msg.chat.id);
+            await safeSendMessage(
+              msg.chat.id,
+              `💀 Попытки закончились.\n\n${getUserLink(activeHangmanPvpGame.guesserUser)} не смог(ла) угадать слово.\nСлово было: ${escapeHtml(activeHangmanPvpGame.word)}\nПобеждает: ${getUserLink(activeHangmanPvpGame.ownerUser)}`,
+              { parse_mode: "HTML", disable_web_page_preview: true }
+            );
+            return;
+          }
+
+          await safeSendMessage(
+            msg.chat.id,
+            `❌ Буквы «${escapeHtml(letter)}» нет.\n\n${formatHangmanPvpGameState(activeHangmanPvpGame)}`,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
+          return;
+        }
+
+        if (cleanLettersOnly === wordNormalized) {
+          clearHangmanPvpGame(msg.chat.id);
+          await safeSendMessage(
+            msg.chat.id,
+            `🏆 Победа!\n\n${getUserLink(msg.from)} угадал(а) слово: ${escapeHtml(activeHangmanPvpGame.word)}`,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
+          return;
+        }
+
+        activeHangmanPvpGame.wrongAttempts += 1;
+
+        if (activeHangmanPvpGame.wrongAttempts >= activeHangmanPvpGame.maxWrongAttempts) {
+          clearHangmanPvpGame(msg.chat.id);
+          await safeSendMessage(
+            msg.chat.id,
+            `💀 Попытки закончились.\n\n${getUserLink(activeHangmanPvpGame.guesserUser)} не смог(ла) угадать слово.\nСлово было: ${escapeHtml(activeHangmanPvpGame.word)}\nПобеждает: ${getUserLink(activeHangmanPvpGame.ownerUser)}`,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
+          return;
+        }
+
+        await safeSendMessage(
+          msg.chat.id,
+          `❌ Это не то слово.\n\n${formatHangmanPvpGameState(activeHangmanPvpGame)}`,
+          { parse_mode: "HTML", disable_web_page_preview: true }
+        );
+        return;
+      }
+    }
 
     const activeTruthGame = activeTruthOrDareGames[getFunChatKey(msg.chat.id)];
     if (activeTruthGame && Number(msg.from.id) === Number(activeTruthGame.ownerUserId)) {
@@ -7644,6 +7930,25 @@ ${escapeHtml(parsed.actionText)} — текст бота
       await safeSendMessage(
         msg.chat.id,
         `${getUserLink(msg.from)}, угадай слово по эмодзи.\n\n${escapeHtml(game.emojis)}\nЕсли нужна подсказка — напиши: подсказка\nЕсли сдаёшься — напиши: Я сдаюсь`,
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
+      return;
+    }
+
+    if (isExactCommand(lowerText, "виселица пвп")) {
+      if (getAnyActiveFunGame(msg.chat.id)) {
+        await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт другая игра. Сначала закончи её.");
+        return;
+      }
+
+      startHangmanPvpGame(msg.chat.id, msg.from);
+
+      await safeSendMessage(
+        msg.chat.id,
+        `🎯 Виселица ПВП создана!\nСоздатель игры: ${getUserLink(msg.from)}\n\nКто хочет играть — напиши в чат: играю\n\nЧтобы отменить игру, создатель может написать: отмена`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
