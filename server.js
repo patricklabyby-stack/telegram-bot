@@ -66,7 +66,6 @@ const LOTTERY_MAX_TICKETS = 5;
 const LOTTERY_COOLDOWN_MS = 15 * 60 * 1000;
 const OWNER_LOTTERY_COOLDOWN_MS = 1000;
 
-
 const MONEY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const HUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const SNIPER_COOLDOWN_MS = 12 * 60 * 60 * 1000;
@@ -780,7 +779,6 @@ const EMOJI_GUESS_ITEMS = [
   { word: "футбол", emojis: "⚽🥅" }
 ];
 
-
 const WOULD_BE_VARIANTS = [
   "детективом 🕵️",
   "космонавтом 🚀",
@@ -823,7 +821,6 @@ const JAIL_STORE_ALIASES = {
   "фальшивый пропуск": "pass"
 };
 
-
 const CASE_TYPES = {
   wooden: {
     key: "wooden",
@@ -851,7 +848,6 @@ function getCaseTypeByText(rawText) {
   if (["золотой кейс", "золотой ящик", "золотой"].includes(t)) return "gold";
   return null;
 }
-
 
 function getLotteryPrize() {
   const roll = Math.random();
@@ -1918,7 +1914,6 @@ await pool.query(`
     )
   `);
 
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_cases (
       user_id BIGINT PRIMARY KEY,
@@ -2909,7 +2904,6 @@ function resolveItemKey(raw) {
 
   return null;
 }
-
 
 async function ensureUserCasesRow(userId) {
   await pool.query(
@@ -5374,7 +5368,6 @@ async function finalizeMarriageAccept(request, chatId, messageId = null) {
 
 ${getUserLink(request.fromUser)} + ${getUserLink(request.targetUser)}
 
-📅 Дата: ${formatDate(marriage.created_at)}
 🏡 Теперь вы семья!`;
 
   text = await appendLevelUpIfNeeded(text, request.fromUser.id, 15);
@@ -5454,8 +5447,7 @@ ${getUserLink(request.parentUser)} теперь родитель для ${getUse
   if (spouseUser) {
     successText += `\n💍 Второй родитель: ${getUserLink(spouseUser)}`;
   }
-
-  successText += `\n📅 Дата: ${formatDate(creation.adoption.created_at)}`;
+;
 
   deleteAdoptionRequest(request);
 
@@ -7095,7 +7087,6 @@ async function deleteBirthday(userId) {
   return result.rows[0] || null;
 }
 
-
 function getRandomDarkWorkIntro() {
   return getRandomFromArray([
     "📦 Тебе выдали подозрительный пакет. Точка уже под наблюдением, поэтому любая ошибка будет стоить дорого.",
@@ -8343,7 +8334,6 @@ ${lines.join("\n")}`,
       return;
     }
 
-
     if (isExactCommand(lowerText, "мои кейсы") || isExactCommand(lowerText, "кейсы")) {
       const cases = await getUserCases(msg.from.id);
 
@@ -8462,8 +8452,6 @@ ${lines.join("\n")}`,
       });
       return;
     }
-
-
 
     if (isExactCommand(lowerText, "мои лотереи") || isExactCommand(lowerText, "моя лотерея")) {
       const stats = await getUserStats(msg.from.id);
@@ -8731,8 +8719,7 @@ ${mood}`;
 👤 Игрок: ${getUserLink(targetUser)}
 💍 Пара: ${getUserLink(partnerUser)}
 📈 Уровень ревности: ${Number(state.jealousy || 0)}/100
-📝 Состояние: ${mood}
-🕒 Обновлено: ${formatDateTime(state.updated_at)}`,
+📝 Состояние: ${mood}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -9209,8 +9196,7 @@ ${lines.join("\n")}`,
         msg.chat.id,
         `📈 Послушание ${getUserLink(targetUser)}
 
-Уровень: ${Number(obedience?.value || 0)}/100
-🕒 Обновлено: ${formatDateTime(obedience.updated_at)}`,
+Уровень: ${Number(obedience?.value || 0)}/100`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -9256,8 +9242,7 @@ ${lines.join("\n")}`,
         let out = `🏦 ${getUserLink(msg.from)} вложил(а) в семейный бюджет ${amount} монет
 
 💰 Бюджет семьи: ${result.familyBalance}
-👛 Твой баланс: ${result.userBalance}
-🕒 Обновлён: ${formatDateTime(result.updatedAt)}`;
+👛 Твой баланс: ${result.userBalance}`;
 
         out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
 
@@ -9307,8 +9292,7 @@ ${lines.join("\n")}`,
         let out = `🏦 ${getUserLink(msg.from)} взял(а) из семейного бюджета ${amount} монет
 
 💰 Бюджет семьи: ${result.familyBalance}
-👛 Твой баланс: ${result.userBalance}
-🕒 Обновлён: ${formatDateTime(result.updatedAt)}`;
+👛 Твой баланс: ${result.userBalance}`;
 
         out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
 
@@ -9381,8 +9365,7 @@ ${lines.join("\n")}`,
         msg.chat.id,
         `🐷 Копилка ${getUserLink(msg.from)}
 
-💰 В копилке: ${Number(piggy.balance || 0)} монет
-🕒 Обновлена: ${formatDateTime(piggy.updated_at)}`,
+💰 В копилке: ${Number(piggy.balance || 0)} монет`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
@@ -9413,8 +9396,7 @@ ${lines.join("\n")}`,
         let out = `🐷 ${getUserLink(msg.from)} положил(а) в копилку ${amount} монет
 
 💰 В копилке: ${result.piggyBalance}
-👛 Твой баланс: ${result.userBalance}
-🕒 Обновлена: ${formatDateTime(result.updatedAt)}`;
+👛 Твой баланс: ${result.userBalance}`;
 
         out = await appendLevelUpIfNeeded(out, msg.from.id, 4);
 
@@ -9529,8 +9511,7 @@ ${lines.join("\n")}`,
         `🌠 Мечта ${getUserLink(msg.from)}
 
 🎯 Мечта: ${escapeHtml(dream.dream_text)}
-💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}
-🕒 Обновлена: ${formatDateTime(dream.updated_at)}`,
+💰 Баланс на мечту: ${Number(dream.dream_balance || 0)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
