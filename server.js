@@ -9233,7 +9233,6 @@ ${lines.join("\n")}`,
 
 👤 Игрок: ${getUserLink(msg.from)}
 💰 В бюджете семьи: ${Number(budget.balance || 0)} монет
-🕒 Обновлён: ${formatDateTime(budget.updated_at)}`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
