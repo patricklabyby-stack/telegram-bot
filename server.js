@@ -800,6 +800,7 @@ const HANGMAN_PVP_WORD_TIMEOUT_MS = 5 * 60 * 1000;
 const HANGMAN_PVP_TURN_TIMEOUT_MS = 5 * 60 * 1000;
 const HANGMAN_PVP_MIN_WORD_LENGTH = 3;
 const HANGMAN_PVP_MAX_WORD_LENGTH = 12;
+const HANGMAN_PVP_MAX_WRONG = 6;
 const STATUS_MAX_LENGTH = 80;
 const BIO_MAX_LENGTH = 180;
 
@@ -7333,9 +7334,7 @@ bot.on("message", async (msg) => {
 
       await safeSendMessage(
         msg.chat.id,
-        `✅ Слово принято.
-
-Я запускаю игру в группе.`,
+        `✅ Слово принято.`,
         { parse_mode: "HTML" }
       );
 
@@ -7957,8 +7956,9 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
     if (
       isExactCommand(lowerText, "виселица пвп") ||
-      /^\/виселицапвп(@[A-Za-z0-9_]+)?$/i.test(text) ||
-      /^\/hangmanpvp(@[A-Za-z0-9_]+)?$/i.test(text)
+      /^\/виселицапвп(@[A-Za-z0-9_]+)?$/i.test(originalText) ||
+      /^\/hangmanpvp(@[A-Za-z0-9_]+)?$/i.test(originalText) ||
+      isExactCommand(lowerText, "виселицапвп")
     ) {
       if (getAnyActiveFunGame(msg.chat.id)) {
         await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт другая игра. Сначала закончи её.");
@@ -14346,4 +14346,3 @@ bot.on("message", async (msg) => {
     console.error("Ошибка удаления:", error.message);
   }
 });
-
