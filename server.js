@@ -8829,120 +8829,115 @@ ${mood}`;
     }
 
     // FAMILY COMMANDS
-    if (lowerText.startsWith("наказать ребенка")) {
-      const parent = msg.from;
-      const child = await resolveTargetUserUniversal(msg);
+if (lowerText.startsWith("наказать ребенка")) {
+  const parent = msg.from;
+  const child = await resolveTargetUserUniversal(msg);
 
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: наказать ребенка 1 @username");
-        return;
-      }
+  if (!child) {
+    await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: наказать ребенка 1 @username");
+    return;
+  }
 
-      const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^наказать ребенка\s+(\d+)$/);
-      const days = match ? Number(match[1]) : NaN;
+  const match = normalizeText(cleanupTextWithoutMention(originalText)).match(/^наказать ребенка\s+(\d+)$/);
+  const days = match ? Number(match[1]) : NaN;
 
-      if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
-        await safeSendMessage(msg.chat.id, `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.`);
-        return;
-      }
+  if (!Number.isInteger(days) || days < 1 || days > MAX_PUNISHMENT_DAYS) {
+    await safeSendMessage(msg.chat.id, `❌ Укажи от 1 до ${MAX_PUNISHMENT_DAYS} дней.`);
+    return;
+  }
 
-      const childCheck = await assertChildInMyFamily(parent.id, child.id);
-      if (!childCheck.ok) {
-        await safeSendMessage(msg.chat.id, childCheck.text);
-        return;
-      }
+  const childCheck = await assertChildInMyFamily(parent.id, child.id);
+  if (!childCheck.ok) {
+    await safeSendMessage(msg.chat.id, childCheck.text);
+    return;
+  }
 
-      const punishment = await setPunishment(parent.id, child.id, days);
-      await changeChildObedience(child.id, -10);
+  await setPunishment(parent.id, child.id, days);
+  await changeChildObedience(child.id, -10);
 
-      let out = `⛔ ${getUserLink(parent)} наказал(а) ${getUserLink(child)} на ${days} дн.
+  let out = `⛔ ${getUserLink(parent)} наказал(а) ${getUserLink(child)} на ${days} дн.
 
 📌 Ограничения:
 • нельзя просить деньги
 • нельзя получать карманные деньги
-• нельзя брать из семейного бюджета
+• нельзя брать из семейного бюджета`;
 
-🕒 До: ${formatDateTime(punishment.until_at)}`;
+  out = await appendLevelUpIfNeeded(out, parent.id, 4);
 
-      out = await appendLevelUpIfNeeded(out, parent.id, 4);
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
+if (isExactCommand(lowerText, "снять наказание")) {
+  const parent = msg.from;
+  const child = await resolveTargetUserUniversal(msg);
 
-    if (isExactCommand(lowerText, "снять наказание")) {
-      const parent = msg.from;
-      const child = await resolveTargetUserUniversal(msg);
+  if (!child) {
+    await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: снять наказание @username");
+    return;
+  }
 
-      if (!child) {
-        await safeSendMessage(msg.chat.id, "❌ Ответь на сообщение ребёнка или напиши: снять наказание @username");
-        return;
-      }
+  const childCheck = await assertChildInMyFamily(parent.id, child.id);
+  if (!childCheck.ok) {
+    await safeSendMessage(msg.chat.id, childCheck.text);
+    return;
+  }
 
-      const childCheck = await assertChildInMyFamily(parent.id, child.id);
-      if (!childCheck.ok) {
-        await safeSendMessage(msg.chat.id, childCheck.text);
-        return;
-      }
+  const removed = await removePunishment(child.id);
+  if (!removed) {
+    await safeSendMessage(msg.chat.id, "✅ У этого ребёнка и так нет активного наказания.");
+    return;
+  }
 
-      const removed = await removePunishment(child.id);
-      if (!removed) {
-        await safeSendMessage(msg.chat.id, "✅ У этого ребёнка и так нет активного наказания.");
-        return;
-      }
+  await changeChildObedience(child.id, 5);
 
-      await changeChildObedience(child.id, 5);
+  let out = `✅ ${getUserLink(parent)} снял(а) наказание с ${getUserLink(child)}.`;
+  out = await appendLevelUpIfNeeded(out, parent.id, 3);
 
-      let out = `✅ ${getUserLink(parent)} снял(а) наказание с ${getUserLink(child)}.`;
-      out = await appendLevelUpIfNeeded(out, parent.id, 3);
+  await safeSendMessage(msg.chat.id, out, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
-      await safeSendMessage(msg.chat.id, out, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-      return;
-    }
+if (isExactCommand(lowerText, "наказание")) {
+  let targetUser = msg.from;
 
-    if (isExactCommand(lowerText, "наказание")) {
-      let targetUser = msg.from;
+  if (msg.reply_to_message) {
+    const resolved = await resolveTargetUserFromReply(msg);
+    if (resolved) targetUser = resolved;
+  }
 
-      if (msg.reply_to_message) {
-        const resolved = await resolveTargetUserFromReply(msg);
-        if (resolved) targetUser = resolved;
-      }
+  const punishment = await getActivePunishment(targetUser.id);
+  if (!punishment) {
+    await safeSendMessage(msg.chat.id, "✅ Наказания нет.");
+    return;
+  }
 
-      const punishment = await getActivePunishment(targetUser.id);
-      if (!punishment) {
-        await safeSendMessage(msg.chat.id, "✅ Наказания нет.");
-        return;
-      }
+  const punisher = await getStoredUser(Number(punishment.punished_by_user_id));
 
-      const punisher = await getStoredUser(Number(punishment.punished_by_user_id));
-      const remaining = new Date(punishment.until_at).getTime() - Date.now();
-
-      await safeSendMessage(
-        msg.chat.id,
-        `⛔ Наказание активно
+  await safeSendMessage(
+    msg.chat.id,
+    `⛔ Наказание активно
 
 👶 Ребёнок: ${getUserLink(targetUser)}
 👨 Наказал(а): ${getUserLink(punisher)}
-🕒 До: ${formatDateTime(punishment.until_at)}
-⏳ Осталось: ${formatRemainingTime(remaining)}
 
 📌 Ограничения:
 • нельзя просить деньги
 • нельзя получать карманные деньги
 • нельзя брать из семейного бюджета`,
-        {
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        }
-      );
-      return;
+    {
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     }
+  );
+  return;
+}
 
     if (isExactCommand(lowerText, "похвалить ребенка")) {
       const parent = msg.from;
