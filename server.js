@@ -7314,6 +7314,10 @@ bot.on("message", async (msg) => {
         return;
       }
 
+      if (originalText.startsWith("/")) {
+        return;
+      }
+
       const validation = isValidHangmanPvpWord(originalText);
       if (!validation.ok) {
         await safeSendMessage(msg.chat.id, `${validation.reason}\n\nПопробуй ещё раз или напиши: отмена`);
@@ -7951,7 +7955,11 @@ ${escapeHtml(parsed.actionText)} — текст бота
       return;
     }
 
-    if (isExactCommand(lowerText, "виселица пвп")) {
+    if (
+      isExactCommand(lowerText, "виселица пвп") ||
+      /^\/виселицапвп(@[A-Za-z0-9_]+)?$/i.test(text) ||
+      /^\/hangmanpvp(@[A-Za-z0-9_]+)?$/i.test(text)
+    ) {
       if (getAnyActiveFunGame(msg.chat.id)) {
         await safeSendMessage(msg.chat.id, "⏳ В этом чате уже идёт другая игра. Сначала закончи её.");
         return;
@@ -7961,7 +7969,7 @@ ${escapeHtml(parsed.actionText)} — текст бота
 
       await safeSendMessage(
         msg.chat.id,
-        `🎯 Виселица ПВП создана!\nСоздатель игры: ${getUserLink(msg.from)}\n\nКто хочет играть — напиши в чат: играю\n\nЧтобы отменить игру, создатель может написать: отмена`,
+        `🎯 Виселица ПВП создана!\nСоздатель игры: ${getUserLink(msg.from)}\n\nКто хочет играть — напиши в чат: играю\n\nЗапускать игру можно так: виселица пвп или /виселицапвп\n\nЧтобы отменить игру, создатель может написать: отмена`,
         {
           parse_mode: "HTML",
           disable_web_page_preview: true
