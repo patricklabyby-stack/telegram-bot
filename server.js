@@ -2270,7 +2270,7 @@ function startHangmanGame(chatId, ownerUser) {
     word: item.word,
     guessedLetters: [],
     wrongAttempts: 0,
-    maxWrongAttempts: 6,
+    maxWrongAttempts: HANGMAN_PVP_MAX_WRONG,
     hintShown: false,
     createdAt: Date.now(),
     expiresAt: Date.now() + FUN_GAME_TIMEOUT_MS
@@ -2296,10 +2296,21 @@ function getMaskedHangmanPvpWord(word, guessedLetters = []) {
 }
 
 function isValidHangmanPvpWord(word) {
-  const normalized = normalizeText(word).replace(/[^a-zа-яёіїєґ]/gi, "");
-  if (!normalized) {
+  const raw = String(word || "").trim();
+
+  if (!raw) {
     return { ok: false, reason: `❌ Напиши слово только буквами. Без цифр, пробелов и символов.` };
   }
+
+  if (raw.startsWith("/")) {
+    return { ok: false, reason: `❌ Команды нельзя использовать как слово для Виселицы ПВП.` };
+  }
+
+  if (!/^[a-zа-яёіїєґ]+$/i.test(raw)) {
+    return { ok: false, reason: `❌ Напиши слово только буквами. Без цифр, пробелов и символов.` };
+  }
+
+  const normalized = normalizeText(raw);
 
   if (normalized.length < HANGMAN_PVP_MIN_WORD_LENGTH || normalized.length > HANGMAN_PVP_MAX_WORD_LENGTH) {
     return { ok: false, reason: `❌ Слово должно быть от ${HANGMAN_PVP_MIN_WORD_LENGTH} до ${HANGMAN_PVP_MAX_WORD_LENGTH} букв.` };
@@ -2337,7 +2348,7 @@ function startHangmanPvpGame(chatId, ownerUser) {
     word: "",
     guessedLetters: [],
     wrongAttempts: 0,
-    maxWrongAttempts: 6,
+    maxWrongAttempts: HANGMAN_PVP_MAX_WRONG,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     expiresAt: Date.now() + HANGMAN_PVP_JOIN_TIMEOUT_MS
@@ -7318,7 +7329,9 @@ bot.on("message", async (msg) => {
 
       await safeSendMessage(
         msg.chat.id,
-        `✅ Слово принято: ${escapeHtml(validation.word)}\n\nЯ запускаю игру в группе.`,
+        `✅ Слово принято.
+
+Я запускаю игру в группе.`,
         { parse_mode: "HTML" }
       );
 
