@@ -347,9 +347,7 @@ bot.on("message", async (msg) => {
   if (/^\/start(@[a-z0-9_]+)?$/i.test(text)) {
     await safeSendMessage(
       chatId,
-      `🔥 Привет! Я Мини Модератор для Telegram-групп.\n\n` +
-      `Чтобы посмотреть список команд, напиши: /help\n\n` +
-      `Ссылка на команды:\n${HELP_ARTICLE_URL}`
+      `🔥 Привет, ${getUserName(msg.from)}!\n\nЯ Мини Модератор для Telegram-групп.\nЧтобы посмотреть список команд, напиши: /help`
     );
     return;
   }
@@ -357,7 +355,7 @@ bot.on("message", async (msg) => {
   if (/^\/help(@[a-z0-9_]+)?$/i.test(text)) {
     await safeSendMessage(
       chatId,
-      `📘 Полный список команд бота:\n${HELP_ARTICLE_URL}`
+      `📘 Список команд бота:\n${HELP_ARTICLE_URL}`
     );
     return;
   }
