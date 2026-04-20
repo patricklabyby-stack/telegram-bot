@@ -345,29 +345,29 @@ bot.on("message", async (msg) => {
 
 
   if (/^\/start(@[a-z0-9_]+)?$/i.test(text)) {
-    await safeSendMessage(
-      chatId,
-      `🔥 Привет, ${getUserName(msg.from)}!\n\nЯ Мини Модератор для Telegram-групп.\nЧтобы посмотреть список команд, напиши: /help`
-    );
-    return;
-  }
+  await safeSendMessage(
+    chatId,
+    `🔥 Привет, ${getUserName(msg.from)}!\n\nЯ Мини Модератор для Telegram-групп.\nЧтобы посмотреть список команд, напиши: /help`
+  );
+  return;
+}
 
-  if (/^\/help(@[a-z0-9_]+)?$/i.test(text)) {
-    await safeSendMessage(
-      chatId,
-      `📘 Список команд бота:\n${HELP_ARTICLE_URL}`
-    );
-    return;
-  }
+if (/^\/help(@[a-z0-9_]+)?$/i.test(text)) {
+  await safeSendMessage(
+    chatId,
+    `📘 Список команд бота:\nhttps://teletype.in/@mini_moderator/KBilsLxWXpV`
+  );
+  return;
+}
 
-  if (lowerText === "бомба") {
-    activeBombs[getChatKey(chatId)] = { holder: msg.from };
-    await safeSendMessage(chatId, `💣 Бомба активирована!\nДержит: ${getUserLink(msg.from)}\n\nЧтобы передать, напиши: передать`, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
-    return;
-  }
+if (lowerText === "бомба") {
+  activeBombs[getChatKey(chatId)] = { holder: msg.from };
+  await safeSendMessage(chatId, `💣 Бомба активирована!\nДержит: ${getUserLink(msg.from)}\n\nЧтобы передать, напиши: передать`, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+  return;
+}
 
   if (lowerText === "передать") {
     const bomb = activeBombs[getChatKey(chatId)];
