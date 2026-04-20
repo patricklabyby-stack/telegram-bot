@@ -24,6 +24,8 @@ const activeEmojiGuessGames = {};
 const activeHangmanGames = {};
 const activeHangmanPvPGames = {};
 
+const HELP_ARTICLE_URL = "https://teletype.in/@mini_moderator/mini_moderator";
+
 const TRUTH_QUESTIONS = [
   "Что ты скрываешь чаще всего? 👀",
   "Кому ты писал(а) последним?",
@@ -339,6 +341,25 @@ bot.on("message", async (msg) => {
         return;
       }
     }
+  }
+
+
+  if (/^\/start(@[a-z0-9_]+)?$/i.test(text)) {
+    await safeSendMessage(
+      chatId,
+      `🔥 Привет! Я Мини Модератор для Telegram-групп.\n\n` +
+      `Чтобы посмотреть список команд, напиши: /help\n\n` +
+      `Ссылка на команды:\n${HELP_ARTICLE_URL}`
+    );
+    return;
+  }
+
+  if (/^\/help(@[a-z0-9_]+)?$/i.test(text)) {
+    await safeSendMessage(
+      chatId,
+      `📘 Полный список команд бота:\n${HELP_ARTICLE_URL}`
+    );
+    return;
   }
 
   if (lowerText === "бомба") {
