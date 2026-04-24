@@ -17,14 +17,15 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+const HELP_ARTICLE_URL = "https://teletype.in/@mini_moderator/KBilsLxWXpV";
+
 const activeBombs = {};
 const activeGuessWordGames = {};
 const activeGuessNumberGames = {};
 const activeEmojiGuessGames = {};
 const activeHangmanGames = {};
 const activeHangmanPvPGames = {};
-
-const HELP_ARTICLE_URL = "https://teletype.in/@mini_moderator/KBilsLxWXpV";
+const activeAnagramGames = {};
 
 const TRUTH_QUESTIONS = [
   "Что ты скрываешь чаще всего? 👀",
@@ -63,6 +64,32 @@ const WOULD_BE_VARIANTS = [
   "тайным агентом 🕶️",
   "водителем такси 🚕",
   "мастером странных советов 🧠"
+];
+
+const FORTUNE_BALL_ANSWERS = [
+  "Да ✅",
+  "Нет ❌",
+  "Скорее да 😏",
+  "Скорее нет 🤨",
+  "Возможно 🤔",
+  "Спроси позже ⏳",
+  "Сегодня тебе повезёт 🍀",
+  "Не рискуй 😬",
+  "Однозначно да 🔥",
+  "Очень сомнительно 🫠"
+];
+
+const RANDOM_FACTS = [
+  "У осьминога три сердца. ❤️",
+  "Мёд никогда не портится. 🍯",
+  "Бананы — это ягоды, а клубника — нет. 🍌",
+  "Улитки могут спать до трёх лет. 🐌",
+  "У акул нет костей. 🦈",
+  "Коровы могут иметь лучших друзей. 🐄",
+  "У жирафа язык может быть длиной до 50 см. 🦒",
+  "У пчёл пять глаз. 🐝",
+  "Луна отдаляется от Земли каждый год. 🌕",
+  "Дельфины дают друг другу имена. 🐬"
 ];
 
 const GUESS_WORD_ITEMS = [
@@ -140,6 +167,19 @@ function getRandomFromArray(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+function shuffleWord(word) {
+  const arr = word.split("");
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  const shuffled = arr.join("");
+  if (shuffled === word && arr.length > 1) {
+    return shuffleWord(word);
+  }
+  return shuffled;
+}
+
 function formatMaskedWord(word, guessedLetters) {
   return word.split("").map(ch => (guessedLetters.has(ch) ? ch : "_")).join(" ");
 }
@@ -213,6 +253,22 @@ function clearHangman(chatId) {
   delete activeHangmanGames[getChatKey(chatId)];
 }
 
+function startAnagram(chatId, user) {
+  const item = getRandomFromArray(GUESS_WORD_ITEMS);
+  activeAnagramGames[getChatKey(chatId)] = {
+    word: item.word,
+    shuffled: shuffleWord(item.word),
+    hint: item.hint,
+    ownerUserId: user.id,
+    ownerUserName: getUserName(user)
+  };
+  return activeAnagramGames[getChatKey(chatId)];
+}
+
+function clearAnagram(chatId) {
+  delete activeAnagramGames[getChatKey(chatId)];
+}
+
 function getHangmanStateText(game) {
   return `🎯 Виселица\n\nСлово: ${formatMaskedWord(game.word, game.guessedLetters)}\nОшибки: ${game.wrongLetters.size}/${game.maxWrong}\nБуквы: ${game.wrongLetters.size ? [...game.wrongLetters].join(", ") : "нет"}`;
 }
@@ -228,6 +284,57 @@ function isValidPvpWord(word) {
 
 function formatPvpState(game) {
   return `🎯 Виселица ПВП\nЗагадывает: ${getUserName(game.ownerUser)}\nУгадывает: ${getUserName(game.guesserUser)}\n\nСлово: ${formatMaskedWord(game.word, game.guessedLetters)}\nОшибки: ${game.wrongLetters.size}/6\nБуквы: ${game.allLetters.size ? [...game.allLetters].join(", ") : "нет"}`;
+}
+
+function clearAllGames(chatId) {
+  const key = getChatKey(chatId);
+  delete activeGuessWordGames[key];
+  delete activeGuessNumberGames[key];
+  delete activeEmojiGuessGames[key];
+  delete activeHangmanGames[key];
+  delete activeHangmanPvPGames[key];
+  delete activeAnagramGames[key];
+}
+
+function getActiveGameName(chatId) {
+  const key = getChatKey(chatId);
+  if (activeGuessWordGames[key]) return "угадай слово";
+  if (activeGuessNumberGames[key]) return "угадай число";
+  if (activeEmojiGuessGames[key]) return "угадай по эмодзи";
+  if (activeHangmanGames[key]) return "виселица";
+  if (activeHangmanPvPGames[key]) return "виселица пвп";
+  if (activeAnagramGames[key]) return "анаграмма";
+  return null;
+}
+
+function getRulesText(chatId) {
+  const key = getChatKey(chatId);
+
+  if (activeGuessWordGames[key]) {
+    return "🎯 Правила игры «Угадай слово»:\nПиши варианты слова в чат.\nЧтобы получить помощь, напиши: подсказка\nЧтобы сдаться, напиши: я сдаюсь";
+  }
+
+  if (activeGuessNumberGames[key]) {
+    return "🔢 Правила игры «Угадай число»:\nНужно угадать число от 1 до 20.\nБот подскажет: больше или меньше.";
+  }
+
+  if (activeEmojiGuessGames[key]) {
+    return "😀 Правила игры «Угадай по эмодзи»:\nСмотри на эмодзи и пиши слово в чат.\nЧтобы сдаться, напиши: я сдаюсь";
+  }
+
+  if (activeHangmanGames[key]) {
+    return "🎯 Правила игры «Виселица»:\nПиши по одной букве или сразу всё слово.\nЧтобы получить помощь, напиши: подсказка\nЧтобы сдаться, напиши: я сдаюсь";
+  }
+
+  if (activeHangmanPvPGames[key]) {
+    return "⚔️ Правила игры «Виселица ПВП»:\nОдин игрок загадывает слово, другой угадывает.\nКоманды: играю, отмена";
+  }
+
+  if (activeAnagramGames[key]) {
+    return "🔀 Правила игры «Анаграмма»:\nБот присылает перемешанное слово.\nНужно угадать исходное слово.\nЧтобы получить помощь, напиши: подсказка\nЧтобы сдаться, напиши: я сдаюсь";
+  }
+
+  return "❌ Сейчас в этом чате нет активной игры.";
 }
 
 bot.on("message", async (msg) => {
@@ -306,10 +413,11 @@ bot.on("message", async (msg) => {
 
           const fullyGuessed = pvp.word.split("").every(ch => pvp.guessedLetters.has(ch));
           if (fullyGuessed) {
-            await safeSendMessage(chatId, `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}`, {
-              parse_mode: "HTML",
-              disable_web_page_preview: true
-            });
+            await safeSendMessage(
+              chatId,
+              `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}`,
+              { parse_mode: "HTML", disable_web_page_preview: true }
+            );
             delete activeHangmanPvPGames[getChatKey(chatId)];
             return;
           }
@@ -320,10 +428,11 @@ bot.on("message", async (msg) => {
 
         pvp.wrongLetters.add(answer);
         if (pvp.wrongLetters.size >= 6) {
-          await safeSendMessage(chatId, `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}`, {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          });
+          await safeSendMessage(
+            chatId,
+            `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}`,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
           delete activeHangmanPvPGames[getChatKey(chatId)];
           return;
         }
@@ -334,20 +443,22 @@ bot.on("message", async (msg) => {
 
       if (answer.length > 1) {
         if (answer === pvp.word) {
-          await safeSendMessage(chatId, `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}`, {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          });
+          await safeSendMessage(
+            chatId,
+            `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}`,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
           delete activeHangmanPvPGames[getChatKey(chatId)];
           return;
         }
 
         pvp.wrongLetters.add(`слово:${answer}`);
         if (pvp.wrongLetters.size >= 6) {
-          await safeSendMessage(chatId, `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}`, {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          });
+          await safeSendMessage(
+            chatId,
+            `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}`,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
           delete activeHangmanPvPGames[getChatKey(chatId)];
           return;
         }
@@ -374,12 +485,77 @@ bot.on("message", async (msg) => {
     return;
   }
 
+  if (lowerText === "стоп" || lowerText === "отмена игры") {
+    const activeGame = getActiveGameName(chatId);
+    if (!activeGame) {
+      await safeSendMessage(chatId, "❌ В этом чате сейчас нет активной игры.");
+      return;
+    }
+
+    clearAllGames(chatId);
+    await safeSendMessage(chatId, `🛑 Игра остановлена: ${activeGame}`);
+    return;
+  }
+
+  if (lowerText === "правила") {
+    await safeSendMessage(chatId, getRulesText(chatId));
+    return;
+  }
+
+  if (lowerText === "монетка") {
+    const result = Math.random() < 0.5 ? "Орёл 🦅" : "Решка 🪙";
+    await safeSendMessage(chatId, `🪙 Монетка: ${result}`);
+    return;
+  }
+
+  if (lowerText === "кубик") {
+    const roll = Math.floor(Math.random() * 6) + 1;
+    await safeSendMessage(chatId, `🎲 Выпало: ${roll}`);
+    return;
+  }
+
+  if (lowerText === "рулетка") {
+    const result = getRandomFromArray([
+      "🔴 Пусто. Сегодня не повезло.",
+      "🟢 Повезло! Ты победил удачу.",
+      "⚫ Опасный результат... но ты выжил.",
+      "🎁 Джекпот настроения!",
+      "💀 Почти проиграл всё.",
+      "🍀 Сегодня фортуна на твоей стороне."
+    ]);
+    await safeSendMessage(chatId, `🎰 Рулетка:\n${result}`);
+    return;
+  }
+
+  if (lowerText === "да или нет") {
+    const result = getRandomFromArray([
+      "Да ✅",
+      "Нет ❌",
+      "Скорее да 😏",
+      "Скорее нет 🤨",
+      "Возможно 🤔"
+    ]);
+    await safeSendMessage(chatId, `❓ Ответ:\n${result}`);
+    return;
+  }
+
+  if (lowerText === "шар судьбы") {
+    await safeSendMessage(chatId, `🔮 Шар судьбы:\n${getRandomFromArray(FORTUNE_BALL_ANSWERS)}`);
+    return;
+  }
+
+  if (lowerText === "случайный факт") {
+    await safeSendMessage(chatId, `📚 Факт:\n${getRandomFromArray(RANDOM_FACTS)}`);
+    return;
+  }
+
   if (lowerText === "бомба") {
     activeBombs[getChatKey(chatId)] = { holder: msg.from };
-    await safeSendMessage(chatId, `💣 Бомба активирована!\nДержит: ${getUserLink(msg.from)}\n\nЧтобы передать, напиши: передать`, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
+    await safeSendMessage(
+      chatId,
+      `💣 Бомба активирована!\nДержит: ${getUserLink(msg.from)}\n\nЧтобы передать, напиши: передать`,
+      { parse_mode: "HTML", disable_web_page_preview: true }
+    );
     return;
   }
 
@@ -391,15 +567,19 @@ bot.on("message", async (msg) => {
     }
 
     bomb.holder = msg.from;
-    await safeSendMessage(chatId, `💣 Бомба передана!\nТеперь держит: ${getUserLink(msg.from)}`, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
+    await safeSendMessage(
+      chatId,
+      `💣 Бомба передана!\nТеперь держит: ${getUserLink(msg.from)}`,
+      { parse_mode: "HTML", disable_web_page_preview: true }
+    );
     return;
   }
 
   if (lowerText === "пара") {
-    await safeSendMessage(chatId, `💘 Пара дня: ${getUserName(msg.from)} + ${getRandomFromArray(["пицца", "сон", "мемы", "удача", "кофе"])} 😄`);
+    await safeSendMessage(
+      chatId,
+      `💘 Пара дня: ${getUserName(msg.from)} + ${getRandomFromArray(["пицца", "сон", "мемы", "удача", "кофе"])} 😄`
+    );
     return;
   }
 
@@ -414,13 +594,16 @@ bot.on("message", async (msg) => {
   }
 
   if (lowerText === "прогноз") {
-    await safeSendMessage(chatId, `🔮 Прогноз: ${getRandomFromArray([
-      "Сегодня тебе повезёт 😎",
-      "Будь осторожен сегодня 😬",
-      "Тебя ждёт сюрприз 🎁",
-      "Сегодня твой день 🔥",
-      "Лучше отдохни 😴"
-    ])}`);
+    await safeSendMessage(
+      chatId,
+      `🔮 Прогноз: ${getRandomFromArray([
+        "Сегодня тебе повезёт 😎",
+        "Будь осторожен сегодня 😬",
+        "Тебя ждёт сюрприз 🎁",
+        "Сегодня твой день 🔥",
+        "Лучше отдохни 😴"
+      ])}`
+    );
     return;
   }
 
@@ -487,6 +670,18 @@ bot.on("message", async (msg) => {
     return;
   }
 
+  if (lowerText === "анаграмма") {
+    const existing = activeAnagramGames[getChatKey(chatId)];
+    if (existing) {
+      await safeSendMessage(chatId, `❌ Игра уже идёт.\nСейчас играет: ${existing.ownerUserName}`);
+      return;
+    }
+
+    const game = startAnagram(chatId, msg.from);
+    await safeSendMessage(chatId, `🔀 Анаграмма!\nИгрок: ${game.ownerUserName}\n\nСлово: ${game.shuffled}`);
+    return;
+  }
+
   if (lowerText === "подсказка") {
     const wordGame = activeGuessWordGames[getChatKey(chatId)];
     if (wordGame) {
@@ -500,10 +695,16 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    const anagramGame = activeAnagramGames[getChatKey(chatId)];
+    if (anagramGame) {
+      await safeSendMessage(chatId, `💡 Подсказка: ${anagramGame.hint}`);
+      return;
+    }
+
     return;
   }
 
-  if (lowerText === "я сдаюсь") {
+  if (lowerText === "я сдаюсь" || lowerText === "сдаться") {
     const wordGame = activeGuessWordGames[getChatKey(chatId)];
     if (wordGame && msg.from.id === wordGame.ownerUserId) {
       await safeSendMessage(chatId, `😢 Ты сдался.\nСлово было: ${wordGame.word}`);
@@ -522,6 +723,13 @@ bot.on("message", async (msg) => {
     if (hangmanGame && msg.from.id === hangmanGame.ownerUserId) {
       await safeSendMessage(chatId, `😢 Ты сдался.\nСлово было: ${hangmanGame.word}`);
       clearHangman(chatId);
+      return;
+    }
+
+    const anagramGame = activeAnagramGames[getChatKey(chatId)];
+    if (anagramGame && msg.from.id === anagramGame.ownerUserId) {
+      await safeSendMessage(chatId, `😢 Ты сдался.\nСлово было: ${anagramGame.word}`);
+      clearAnagram(chatId);
       return;
     }
 
@@ -574,22 +782,14 @@ bot.on("message", async (msg) => {
   }
 
   const guessWordGame = activeGuessWordGames[getChatKey(chatId)];
-  if (
-    guessWordGame &&
-    msg.from.id === guessWordGame.ownerUserId &&
-    lowerText === normalizeText(guessWordGame.word)
-  ) {
+  if (guessWordGame && msg.from.id === guessWordGame.ownerUserId && lowerText === normalizeText(guessWordGame.word)) {
     await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${guessWordGame.word}`);
     clearGuessWord(chatId);
     return;
   }
 
   const guessNumberGame = activeGuessNumberGames[getChatKey(chatId)];
-  if (
-    guessNumberGame &&
-    msg.from.id === guessNumberGame.ownerUserId &&
-    /^\d+$/.test(lowerText)
-  ) {
+  if (guessNumberGame && msg.from.id === guessNumberGame.ownerUserId && /^\d+$/.test(lowerText)) {
     const num = Number(lowerText);
     if (num === guessNumberGame.target) {
       await safeSendMessage(chatId, `🏆 Правильно! Я загадал число ${guessNumberGame.target}`);
@@ -603,22 +803,21 @@ bot.on("message", async (msg) => {
   }
 
   const emojiGame = activeEmojiGuessGames[getChatKey(chatId)];
-  if (
-    emojiGame &&
-    msg.from.id === emojiGame.ownerUserId &&
-    lowerText === normalizeText(emojiGame.word)
-  ) {
+  if (emojiGame && msg.from.id === emojiGame.ownerUserId && lowerText === normalizeText(emojiGame.word)) {
     await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${emojiGame.word}`);
     clearEmojiGuess(chatId);
     return;
   }
 
+  const anagramGame = activeAnagramGames[getChatKey(chatId)];
+  if (anagramGame && msg.from.id === anagramGame.ownerUserId && lowerText === normalizeText(anagramGame.word)) {
+    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${anagramGame.word}`);
+    clearAnagram(chatId);
+    return;
+  }
+
   const hangmanGame = activeHangmanGames[getChatKey(chatId)];
-  if (
-    hangmanGame &&
-    msg.from.id === hangmanGame.ownerUserId &&
-    /^[a-zа-яёіїєґ]+$/i.test(text)
-  ) {
+  if (hangmanGame && msg.from.id === hangmanGame.ownerUserId && /^[a-zа-яёіїєґ]+$/i.test(text)) {
     const answer = normalizeText(text);
 
     if (answer.length === 1) {
