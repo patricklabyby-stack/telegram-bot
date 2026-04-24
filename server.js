@@ -24,7 +24,7 @@ const activeEmojiGuessGames = {};
 const activeHangmanGames = {};
 const activeHangmanPvPGames = {};
 
-const HELP_ARTICLE_URL = "https://teletype.in/@mini_moderator/mini_moderator";
+const HELP_ARTICLE_URL = "https://teletype.in/@mini_moderator/KBilsLxWXpV";
 
 const TRUTH_QUESTIONS = [
   "Что ты скрываешь чаще всего? 👀",
@@ -214,7 +214,7 @@ function clearHangman(chatId) {
 }
 
 function getHangmanStateText(game) {
-  return `🎯 Виселица\n\nСлово: ${formatMaskedWord(game.word, game.guessedLetters)}\nОшибки: ${game.wrongLetters.size}/${game.maxWrong}\nБуквы: ${game.wrongLetters.size ? [...game.wrongLetters].join(", ") : "нет"}\nПодсказка: ${game.hint}`;
+  return `🎯 Виселица\n\nСлово: ${formatMaskedWord(game.word, game.guessedLetters)}\nОшибки: ${game.wrongLetters.size}/${game.maxWrong}\nБуквы: ${game.wrongLetters.size ? [...game.wrongLetters].join(", ") : "нет"}`;
 }
 
 function isValidPvpWord(word) {
@@ -361,7 +361,7 @@ bot.on("message", async (msg) => {
   if (/^\/start(@[a-z0-9_]+)?$/i.test(text)) {
     await safeSendMessage(
       chatId,
-      `🔥 Привет, ${getUserName(msg.from)}!\n\nЯ Мини Модератор для Telegram-групп.\nЧтобы посмотреть список команд, напиши: /help`
+      `🔥 Привет, ${getUserName(msg.from)}!\n\nЯ Мини Модератор для Telegram-групп.\nНапиши /help, чтобы получить ссылку на список команд.`
     );
     return;
   }
@@ -369,7 +369,7 @@ bot.on("message", async (msg) => {
   if (/^\/help(@[a-z0-9_]+)?$/i.test(text)) {
     await safeSendMessage(
       chatId,
-      `📘 Список команд бота:\nhttps://teletype.in/@mini_moderator/KBilsLxWXpV`
+      `📘 Ссылка на список команд бота:\n${HELP_ARTICLE_URL}`
     );
     return;
   }
@@ -447,7 +447,7 @@ bot.on("message", async (msg) => {
     }
 
     const game = startGuessWord(chatId, msg.from);
-    await safeSendMessage(chatId, `🎯 Угадай слово!\nИгрок: ${game.ownerUserName}\nПодсказка: ${game.hint}`);
+    await safeSendMessage(chatId, `🎯 Угадай слово!\nИгрок: ${game.ownerUserName}\n\nЧтобы получить подсказку, напиши в чат: подсказка`);
     return;
   }
 
@@ -483,19 +483,19 @@ bot.on("message", async (msg) => {
     }
 
     const game = startHangman(chatId, msg.from);
-    await safeSendMessage(chatId, `👤 Игрок: ${game.ownerUserName}\n\n${getHangmanStateText(game)}`);
+    await safeSendMessage(chatId, `👤 Игрок: ${game.ownerUserName}\n\n${getHangmanStateText(game)}\n\nЧтобы получить подсказку, напиши в чат: подсказка`);
     return;
   }
 
   if (lowerText === "подсказка") {
     const wordGame = activeGuessWordGames[getChatKey(chatId)];
-    if (wordGame && msg.from.id === wordGame.ownerUserId) {
+    if (wordGame) {
       await safeSendMessage(chatId, `💡 Подсказка: ${wordGame.hint}`);
       return;
     }
 
     const hangmanGame = activeHangmanGames[getChatKey(chatId)];
-    if (hangmanGame && msg.from.id === hangmanGame.ownerUserId) {
+    if (hangmanGame) {
       await safeSendMessage(chatId, `💡 Подсказка: ${hangmanGame.hint}`);
       return;
     }
