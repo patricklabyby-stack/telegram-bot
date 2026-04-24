@@ -447,7 +447,7 @@ bot.on("message", async (msg) => {
     }
 
     const game = startGuessWord(chatId, msg.from);
-    await safeSendMessage(chatId, `🎯 Угадай слово!\nИгрок: ${game.ownerUserName}\n\nЧтобы получить подсказку, напиши в чат: подсказка`);
+    await safeSendMessage(chatId, `🎯 Угадай слово!\nИгрок: ${game.ownerUserName}`);
     return;
   }
 
@@ -483,7 +483,7 @@ bot.on("message", async (msg) => {
     }
 
     const game = startHangman(chatId, msg.from);
-    await safeSendMessage(chatId, `👤 Игрок: ${game.ownerUserName}\n\n${getHangmanStateText(game)}\n\nЧтобы получить подсказку, напиши в чат: подсказка`);
+    await safeSendMessage(chatId, `👤 Игрок: ${game.ownerUserName}\n\n${getHangmanStateText(game)}`);
     return;
   }
 
