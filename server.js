@@ -28,6 +28,11 @@ const activeHangmanPvPGames = {};
 const activeAnagramGames = {};
 const activeReverseWordGames = {};
 const activeMathGames = {};
+const activeQuizGames = {};
+const activeOddOneGames = {};
+const activeCapitalGames = {};
+const activeCipherGames = {};
+const activeReactionGames = {};
 const recentActiveUsers = {};
 
 const RECENT_ACTIVE_MS = 15 * 60 * 1000;
@@ -96,6 +101,31 @@ const RANDOM_FACTS = [
   "Луна отдаляется от Земли каждый год. 🌕",
   "Дельфины дают друг другу имена. 🐬"
 ];
+
+const QUIZ_ITEMS = [
+  { question: "Сколько дней в неделе?", options: ["5", "6", "7", "8"], correctIndex: 2 },
+  { question: "Какого цвета небо в ясную погоду?", options: ["Синее", "Зелёное", "Чёрное", "Оранжевое"], correctIndex: 0 },
+  { question: "Сколько будет 2 + 2?", options: ["3", "4", "5", "6"], correctIndex: 1 },
+  { question: "Какое животное говорит «мяу»?", options: ["Собака", "Кошка", "Корова", "Лошадь"], correctIndex: 1 },
+  { question: "Что светит ночью на небе?", options: ["Солнце", "Луна", "Радуга", "Облако"], correctIndex: 1 }
+];
+
+const ODD_ONE_ITEMS = [
+  { options: ["яблоко", "банан", "машина", "груша"], correctIndex: 2, explanation: "машина — не фрукт" },
+  { options: ["стол", "стул", "диван", "лимон"], correctIndex: 3, explanation: "лимон — не мебель" },
+  { options: ["кот", "собака", "поезд", "хомяк"], correctIndex: 2, explanation: "поезд — не животное" },
+  { options: ["красный", "синий", "арбуз", "зелёный"], correctIndex: 2, explanation: "арбуз — не цвет" }
+];
+
+const CAPITAL_ITEMS = [
+  { country: "Украина", capital: "киев" },
+  { country: "Франция", capital: "париж" },
+  { country: "Германия", capital: "берлин" },
+  { country: "Италия", capital: "рим" },
+  { country: "Испания", capital: "мадрид" },
+  { country: "Япония", capital: "токио" }
+];
+
 
 const GUESS_WORD_ITEMS = [
   { word: "кровать", hint: "на чем ты спишь" },
@@ -297,6 +327,67 @@ function clearHangman(chatId) { delete activeHangmanGames[getChatKey(chatId)]; }
 function clearAnagram(chatId) { delete activeAnagramGames[getChatKey(chatId)]; }
 function clearReverseWord(chatId) { delete activeReverseWordGames[getChatKey(chatId)]; }
 function clearMathGame(chatId) { delete activeMathGames[getChatKey(chatId)]; }
+function clearQuizGame(chatId) { delete activeQuizGames[getChatKey(chatId)]; }
+function clearOddOneGame(chatId) { delete activeOddOneGames[getChatKey(chatId)]; }
+function clearCapitalGame(chatId) { delete activeCapitalGames[getChatKey(chatId)]; }
+function clearCipherGame(chatId) { delete activeCipherGames[getChatKey(chatId)]; }
+function clearReactionGame(chatId) { delete activeReactionGames[getChatKey(chatId)]; }
+
+function startQuizGame(chatId, user) {
+  const item = getRandomFromArray(QUIZ_ITEMS);
+  activeQuizGames[getChatKey(chatId)] = {
+    ...item,
+    startedByUserId: user.id,
+    startedByUserName: getUserName(user)
+  };
+  return activeQuizGames[getChatKey(chatId)];
+}
+
+function startOddOneGame(chatId, user) {
+  const item = getRandomFromArray(ODD_ONE_ITEMS);
+  activeOddOneGames[getChatKey(chatId)] = {
+    ...item,
+    startedByUserId: user.id,
+    startedByUserName: getUserName(user)
+  };
+  return activeOddOneGames[getChatKey(chatId)];
+}
+
+function startCapitalGame(chatId, user) {
+  const item = getRandomFromArray(CAPITAL_ITEMS);
+  activeCapitalGames[getChatKey(chatId)] = {
+    ...item,
+    startedByUserId: user.id,
+    startedByUserName: getUserName(user)
+  };
+  return activeCapitalGames[getChatKey(chatId)];
+}
+
+function startCipherGame(chatId, user) {
+  const item = getRandomFromArray(GUESS_WORD_ITEMS);
+  const word = normalizeText(item.word);
+  const shifted = word.split("").map(ch => String.fromCharCode(ch.charCodeAt(0) + 1)).join("");
+  activeCipherGames[getChatKey(chatId)] = {
+    word,
+    cipher: shifted,
+    hint: item.hint,
+    startedByUserId: user.id,
+    startedByUserName: getUserName(user)
+  };
+  return activeCipherGames[getChatKey(chatId)];
+}
+
+function startReactionGame(chatId, user) {
+  const target = getRandomFromArray(["молния", "ракета", "огонь", "победа"]);
+  activeReactionGames[getChatKey(chatId)] = {
+    target,
+    startedByUserId: user.id,
+    startedByUserName: getUserName(user),
+    startedAt: Date.now()
+  };
+  return activeReactionGames[getChatKey(chatId)];
+}
+
 
 function startGuessWord(chatId, user) {
   const item = getRandomFromArray(GUESS_WORD_ITEMS);
@@ -412,6 +503,11 @@ function clearAllGames(chatId) {
   delete activeAnagramGames[key];
   delete activeReverseWordGames[key];
   delete activeMathGames[key];
+  delete activeQuizGames[key];
+  delete activeOddOneGames[key];
+  delete activeCapitalGames[key];
+  delete activeCipherGames[key];
+  delete activeReactionGames[key];
 }
 
 function getActiveGameName(chatId) {
@@ -425,6 +521,11 @@ function getActiveGameName(chatId) {
   if (activeAnagramGames[key]) return "анаграмма";
   if (activeReverseWordGames[key]) return "слово наоборот";
   if (activeMathGames[key]) return "математика";
+  if (activeQuizGames[key]) return "викторина";
+  if (activeOddOneGames[key]) return "лишнее";
+  if (activeCapitalGames[key]) return "угадай столицу";
+  if (activeCipherGames[key]) return "шифр";
+  if (activeReactionGames[key]) return "реакция";
   return null;
 }
 
@@ -438,6 +539,11 @@ function getRulesText(chatId) {
   if (activeHangmanGames[key]) return "🎯 Правила игры «Виселица»:\nПиши по одной букве или сразу всё слово.\nЧтобы получить помощь, напиши: подсказка\nЧтобы сдаться, напиши: я сдаюсь";
   if (activeHangmanPvPGames[key]) return "⚔️ Правила игры «Виселица ПВП»:\nОдин игрок загадывает слово, другой угадывает.\nКоманды: играю, отмена.\nЕсли угадывающий напишет: я сдаюсь — бот покажет правильный ответ.";
   if (activeAnagramGames[key]) return "🔀 Правила игры «Анаграмма»:\nБот присылает перемешанное слово.\nНужно угадать исходное слово.\nЧтобы получить помощь, напиши: подсказка";
+  if (activeQuizGames[key]) return "📚 Правила игры «Викторина»:\nНапиши: ответ 1, ответ 2, ответ 3 или ответ 4";
+  if (activeOddOneGames[key]) return "🧩 Правила игры «Лишнее»:\nВыбери лишнее слово командой: вариант 1, вариант 2, вариант 3 или вариант 4";
+  if (activeCapitalGames[key]) return "🌍 Правила игры «Угадай столицу»:\nНапиши столицу страны в чат.";
+  if (activeCipherGames[key]) return "🔐 Правила игры «Шифр»:\nБот пишет зашифрованное слово. Нужно угадать исходное слово.\nЧтобы получить помощь, напиши: подсказка";
+  if (activeReactionGames[key]) return "⚡ Правила игры «Реакция»:\nКто первым напишет нужное слово — тот победил.";
   if (activeReverseWordGames[key]) return "↩️ Правила игры «Слово наоборот»:\nБот пишет слово наоборот.\nНужно угадать нормальное слово.\nЧтобы получить помощь, напиши: подсказка";
   if (activeMathGames[key]) return "🧮 Правила игры «Математика»:\nРеши пример и напиши ответ в чат.";
 
@@ -757,6 +863,119 @@ bot.on("message", async (msg) => {
     return;
   }
 
+
+  if (lowerText === "кнб камень" || lowerText === "кнб ножницы" || lowerText === "кнб бумага") {
+    const userChoice = lowerText.split(" ")[1];
+    const botChoice = getRandomFromArray(["камень", "ножницы", "бумага"]);
+    let result = "🤝 Ничья!";
+    if (
+      (userChoice === "камень" && botChoice === "ножницы") ||
+      (userChoice === "ножницы" && botChoice === "бумага") ||
+      (userChoice === "бумага" && botChoice === "камень")
+    ) {
+      result = "🏆 Ты победил!";
+    } else if (userChoice !== botChoice) {
+      result = "💀 Бот победил!";
+    }
+    await safeSendMessage(chatId, `✊ КНБ\nТы: ${userChoice}\nБот: ${botChoice}\n\n${result}`);
+    return;
+  }
+
+  if (lowerText === "викторина") {
+    if (getActiveGameName(chatId)) {
+      await safeSendMessage(chatId, `❌ Игра уже идёт: ${getActiveGameName(chatId)}`);
+      return;
+    }
+    const game = startQuizGame(chatId, msg.from);
+    await safeSendMessage(
+      chatId,
+      `📚 Викторина!\nЗапустил(а): ${game.startedByUserName}\n\n${game.question}\n1) ${game.options[0]}\n2) ${game.options[1]}\n3) ${game.options[2]}\n4) ${game.options[3]}\n\nПиши: ответ 1`
+    );
+    return;
+  }
+
+  if (lowerText === "лишнее") {
+    if (getActiveGameName(chatId)) {
+      await safeSendMessage(chatId, `❌ Игра уже идёт: ${getActiveGameName(chatId)}`);
+      return;
+    }
+    const game = startOddOneGame(chatId, msg.from);
+    await safeSendMessage(
+      chatId,
+      `🧩 Найди лишнее!\nЗапустил(а): ${game.startedByUserName}\n\n1) ${game.options[0]}\n2) ${game.options[1]}\n3) ${game.options[2]}\n4) ${game.options[3]}\n\nПиши: вариант 1`
+    );
+    return;
+  }
+
+  if (lowerText === "угадай столицу") {
+    if (getActiveGameName(chatId)) {
+      await safeSendMessage(chatId, `❌ Игра уже идёт: ${getActiveGameName(chatId)}`);
+      return;
+    }
+    const game = startCapitalGame(chatId, msg.from);
+    await safeSendMessage(chatId, `🌍 Угадай столицу!\nЗапустил(а): ${game.startedByUserName}\n\nСтрана: ${game.country}`);
+    return;
+  }
+
+  if (lowerText === "шифр") {
+    if (getActiveGameName(chatId)) {
+      await safeSendMessage(chatId, `❌ Игра уже идёт: ${getActiveGameName(chatId)}`);
+      return;
+    }
+    const game = startCipherGame(chatId, msg.from);
+    await safeSendMessage(chatId, `🔐 Шифр!\nЗапустил(а): ${game.startedByUserName}\n\nСлово: ${game.cipher}`);
+    return;
+  }
+
+  if (lowerText === "реакция") {
+    if (getActiveGameName(chatId)) {
+      await safeSendMessage(chatId, `❌ Игра уже идёт: ${getActiveGameName(chatId)}`);
+      return;
+    }
+    const game = startReactionGame(chatId, msg.from);
+    await safeSendMessage(chatId, `⚡ Реакция!\nЗапустил(а): ${game.startedByUserName}\n\nКто первым напишет слово «${game.target}» — победил!`);
+    return;
+  }
+
+  if (lowerText === "совместимость") {
+    const pair = getTwoRandomActiveUsers(chatId);
+    if (!pair) {
+      await safeSendMessage(chatId, "❌ Нужно хотя бы 2 активных человека в чате.");
+      return;
+    }
+    const percent = Math.floor(Math.random() * 101);
+    await safeSendMessage(
+      chatId,
+      `💞 Совместимость:\n${getUserLink(pair[0])} + ${getUserLink(pair[1])}\n\n${percent}%`,
+      { parse_mode: "HTML", disable_web_page_preview: true }
+    );
+    return;
+  }
+
+  if (lowerText === "выбери") {
+    const picked = getRandomActiveUser(chatId);
+    if (!picked) {
+      await safeSendMessage(chatId, "❌ Нет активных людей в чате.");
+      return;
+    }
+    await safeSendMessage(
+      chatId,
+      `🎯 Я выбираю: ${getUserLink(picked)}`,
+      { parse_mode: "HTML", disable_web_page_preview: true }
+    );
+    return;
+  }
+
+  if (lowerText === "удача") {
+    await safeSendMessage(chatId, `🍀 Удача дня: ${Math.floor(Math.random() * 101)}%`);
+    return;
+  }
+
+  if (lowerText === "настроение") {
+    await safeSendMessage(chatId, `😊 Настроение: ${getRandomFromArray(["огонь 🔥", "спокойное 😌", "сонное 😴", "боевое 😎", "хаотичное 🤪"])}`);
+    return;
+  }
+
   if (lowerText === "угадай слово") {
     if (getActiveGameName(chatId)) {
       await safeSendMessage(chatId, `❌ Игра уже идёт: ${getActiveGameName(chatId)}`);
@@ -859,6 +1078,12 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    const cipherGame = activeCipherGames[getChatKey(chatId)];
+    if (cipherGame) {
+      await safeSendMessage(chatId, `💡 Подсказка: ${cipherGame.hint}`);
+      return;
+    }
+
     return;
   }
 
@@ -897,6 +1122,41 @@ bot.on("message", async (msg) => {
       const game = activeReverseWordGames[key];
       await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
       clearReverseWord(chatId);
+      return;
+    }
+
+    if (activeCapitalGames[key]) {
+      const game = activeCapitalGames[key];
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный ответ: ${game.capital}`);
+      clearCapitalGame(chatId);
+      return;
+    }
+
+    if (activeCipherGames[key]) {
+      const game = activeCipherGames[key];
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
+      clearCipherGame(chatId);
+      return;
+    }
+
+    if (activeQuizGames[key]) {
+      const game = activeQuizGames[key];
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный ответ: ${game.options[game.correctIndex]}`);
+      clearQuizGame(chatId);
+      return;
+    }
+
+    if (activeOddOneGames[key]) {
+      const game = activeOddOneGames[key];
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный вариант: ${game.correctIndex + 1} (${game.explanation})`);
+      clearOddOneGame(chatId);
+      return;
+    }
+
+    if (activeReactionGames[key]) {
+      const game = activeReactionGames[key];
+      await safeSendMessage(chatId, `😢 Игра остановлена. Нужно было написать: ${game.target}`);
+      clearReactionGame(chatId);
       return;
     }
 
@@ -963,6 +1223,55 @@ bot.on("message", async (msg) => {
       `🎯 Виселица ПВП создана!\nСоздатель игры: ${getUserLink(msg.from)}\n\nКто хочет играть — напиши:\nиграю\n\nЧтобы отменить игру, создатель может написать:\nотмена`,
       { parse_mode: "HTML", disable_web_page_preview: true }
     );
+    return;
+  }
+
+
+  const quizGame = activeQuizGames[getChatKey(chatId)];
+  const answerMatch = lowerText.match(/^ответ\s+([1-4])$/);
+  if (quizGame && answerMatch) {
+    const index = Number(answerMatch[1]) - 1;
+    if (index === quizGame.correctIndex) {
+      await safeSendMessage(chatId, `🏆 Правильно! Ответ: ${quizGame.options[quizGame.correctIndex]}\nУгадал(а): ${getUserName(msg.from)}`);
+      clearQuizGame(chatId);
+    } else {
+      await safeSendMessage(chatId, "❌ Неверно!");
+    }
+    return;
+  }
+
+  const oddOneGame = activeOddOneGames[getChatKey(chatId)];
+  const variantMatch = lowerText.match(/^вариант\s+([1-4])$/);
+  if (oddOneGame && variantMatch) {
+    const index = Number(variantMatch[1]) - 1;
+    if (index === oddOneGame.correctIndex) {
+      await safeSendMessage(chatId, `🏆 Правильно! Лишнее: ${oddOneGame.options[oddOneGame.correctIndex]}\n${oddOneGame.explanation}\nУгадал(а): ${getUserName(msg.from)}`);
+      clearOddOneGame(chatId);
+    } else {
+      await safeSendMessage(chatId, "❌ Неверно!");
+    }
+    return;
+  }
+
+  const capitalGame = activeCapitalGames[getChatKey(chatId)];
+  if (capitalGame && lowerText === normalizeText(capitalGame.capital)) {
+    await safeSendMessage(chatId, `🏆 Правильно! Столица страны ${capitalGame.country} — ${capitalGame.capital}\nУгадал(а): ${getUserName(msg.from)}`);
+    clearCapitalGame(chatId);
+    return;
+  }
+
+  const cipherGame = activeCipherGames[getChatKey(chatId)];
+  if (cipherGame && lowerText === normalizeText(cipherGame.word)) {
+    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${cipherGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+    clearCipherGame(chatId);
+    return;
+  }
+
+  const reactionGame = activeReactionGames[getChatKey(chatId)];
+  if (reactionGame && lowerText === normalizeText(reactionGame.target)) {
+    const ms = Date.now() - reactionGame.startedAt;
+    await safeSendMessage(chatId, `⚡ Победа!\n${getUserName(msg.from)} успел(а) первым(ой) за ${ms} мс`);
+    clearReactionGame(chatId);
     return;
   }
 
