@@ -881,6 +881,31 @@ bot.on("message", async (msg) => {
     return;
   }
 
+  
+  if (["ударить","обнять","поцеловать","убить","пнуть"].includes(lowerText)) {
+    const target = getRandomActiveUser(chatId, [msg.from.id]);
+
+    if (!target) {
+      await safeSendMessage(chatId, "❌ Нет другого игрока.");
+      return;
+    }
+
+    const actions = {
+      "ударить": "💥 ударил(а)",
+      "обнять": "🤗 обнял(а)",
+      "поцеловать": "😘 поцеловал(а)",
+      "убить": "🔪 убил(а)",
+      "пнуть": "🦵 пнул(а)"
+    };
+
+    await safeSendMessage(
+      chatId,
+      `${getUserLink(msg.from)} ${actions[lowerText]} ${getUserLink(target)}`,
+      { parse_mode: "HTML" }
+    );
+    return;
+  }
+
   if (lowerText === "викторина") {
     if (getActiveGameName(chatId)) {
       await safeSendMessage(chatId, `❌ Игра уже идёт: ${getActiveGameName(chatId)}`);
@@ -1378,5 +1403,35 @@ bot.on("message", async (msg) => {
     return;
   }
 });
+
+
+  if (lowerText === "быстрый счет") {
+    if (getActiveGameName(chatId)) return;
+
+    const a = Math.floor(Math.random()*50);
+    const b = Math.floor(Math.random()*50);
+
+    activeMathGames[getChatKey(chatId)] = {
+      answer: a + b
+    };
+
+    await safeSendMessage(chatId, `⚡ Кто быстрее решит:\n${a} + ${b}`);
+    return;
+  }
+
+  if (lowerText === "кто быстрее") {
+    if (getActiveGameName(chatId)) return;
+
+    const words = ["огонь","кот","пицца","бот","игра"];
+    const word = getRandomFromArray(words);
+
+    activeReactionGames[getChatKey(chatId)] = {
+      target: word,
+      startedAt: Date.now()
+    };
+
+    await safeSendMessage(chatId, `⚡ Кто первый напишет: ${word}`);
+    return;
+  }
 
 console.log("Games-only bot started");
