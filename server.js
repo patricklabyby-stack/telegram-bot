@@ -102,6 +102,19 @@ const RANDOM_FACTS = [
   "Дельфины дают друг другу имена. 🐬"
 ];
 
+
+const BIRD_RP = [
+  "🐦 Птичка взлетела и какункула на голову {user} 💩",
+  "🐦 Птичка села на плечо {user} и улетела 😆",
+  "🐦 Птичка украла еду у {user} 🍞",
+  "🐦 Птичка клюнула {user} в макушку 😭",
+  "🐦 Птичка пролетела над {user} и громко чирикнула 🐤",
+  "🐦 Птичка уснула на голове у {user} 😴",
+  "🐦 Птичка случайно врезалась в {user} 💥",
+  "🐦 Птичка украла шапку у {user} 😂",
+  "🐦 Птичка села на голову {user} как король 👑"
+];
+
 const QUIZ_ITEMS = [
   { question: "Сколько дней в неделе?", options: ["5", "6", "7", "8"], correctIndex: 2 },
   { question: "Какого цвета небо в ясную погоду?", options: ["Синее", "Зелёное", "Чёрное", "Оранжевое"], correctIndex: 0 },
@@ -718,6 +731,17 @@ bot.on("message", async (msg) => {
 
   if (lowerText === "правила") {
     await safeSendMessage(chatId, getRulesText(chatId));
+    return;
+  }
+
+
+  if (lowerText === "птичка") {
+    const picked = getRandomActiveUser(chatId) || msg.from;
+
+    await safeSendMessage(
+      chatId,
+      getRandomFromArray(BIRD_RP).replace("{user}", getUserName(picked))
+    );
     return;
   }
 
