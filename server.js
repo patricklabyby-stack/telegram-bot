@@ -40,89 +40,130 @@ const recentActiveUsers = {};
 const RECENT_ACTIVE_MS = 15 * 60 * 1000;
 const BOMB_TIMER_MS = 5000;
 
-// Баланс сохраняется в обычный файл, без базы данных
-const DATA_FILE = path.join(__dirname, "coins_data.json");
+// Игроки сохраняются в обычный файл players.json, это НЕ база данных
+const PLAYERS_FILE = path.join(__dirname, "players.json");
 const START_BALANCE = 1000;
 const WIN_MULTIPLIER = 2.4;
 const LOSE_MULTIPLIER = 1.6;
-const activeBets = {}; // ключ: chatId:userId -> ставка
 
-function loadCoinsData() {
+function loadPlayers() {
   try {
-    if (!fs.existsSync(DATA_FILE)) return {};
-    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    if (!fs.existsSync(PLAYERS_FILE)) {
+      fs.writeFileSync(PLAYERS_FILE, "{}", "utf8");
+      return {};
+    }
+    const raw = fs.readFileSync(PLAYERS_FILE, "utf8").trim();
+    return raw ? JSON.parse(raw) : {};
   } catch (error) {
-    console.error("Ошибка чтения coins_data.json:", error?.message || error);
+    console.error("Ошибка чтения players.json:", error?.message || error);
     return {};
   }
 }
 
-let coinsData = loadCoinsData();
+let playersData = loadPlayers();
 
-function saveCoinsData() {
+function savePlayers() {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(coinsData, null, 2), "utf8");
+    fs.writeFileSync(PLAYERS_FILE, JSON.stringify(playersData, null, 2), "utf8");
   } catch (error) {
-    console.error("Ошибка сохранения coins_data.json:", error?.message || error);
+    console.error("Ошибка сохранения players.json:", error?.message || error);
   }
 }
 
-function getUserCoinKey(chatId, userId) {
-  return `${chatId}:${userId}`;
+function makeDefaultPlayer(userId, name = "Пользователь") {
+  return {
+    id: String(userId),
+    name,
+    coins: START_BALANCE,
+    bet: 0,
+    wins: 0,
+    loses: 0,
+    gamesPlayed: 0,
+    createdAt: new Date().toISOString(),
+    lastSeen: new Date().toISOString()
+  };
+}
+
+function getPlayer(user) {
+  const userId = String(user.id);
+  if (!playersData[userId]) playersData[userId] = makeDefaultPlayer(userId, getUserName(user));
+  playersData[userId].name = getUserName(user);
+  playersData[userId].lastSeen = new Date().toISOString();
+  savePlayers();
+  return playersData[userId];
 }
 
 function getBalance(chatId, userId) {
-  const key = getUserCoinKey(chatId, userId);
-  if (typeof coinsData[key] !== "number") {
-    coinsData[key] = START_BALANCE;
-    saveCoinsData();
+  const userIdStr = String(userId);
+  if (!playersData[userIdStr]) {
+    playersData[userIdStr] = makeDefaultPlayer(userIdStr);
+    savePlayers();
   }
-  return coinsData[key];
+  return Math.floor(playersData[userIdStr].coins || 0);
 }
 
 function setBalance(chatId, userId, amount) {
-  const key = getUserCoinKey(chatId, userId);
-  coinsData[key] = Math.max(0, Math.floor(amount));
-  saveCoinsData();
-  return coinsData[key];
+  const userIdStr = String(userId);
+  if (!playersData[userIdStr]) playersData[userIdStr] = makeDefaultPlayer(userIdStr);
+  playersData[userIdStr].coins = Math.max(0, Math.floor(amount));
+  savePlayers();
+  return playersData[userIdStr].coins;
 }
 
 function addCoins(chatId, userId, amount) {
   return setBalance(chatId, userId, getBalance(chatId, userId) + amount);
 }
 
-function getBetKey(chatId, userId) {
-  return `${chatId}:${userId}`;
-}
-
 function getBet(chatId, userId) {
-  return activeBets[getBetKey(chatId, userId)] || 0;
+  return Math.floor(playersData[String(userId)]?.bet || 0);
 }
 
 function clearBet(chatId, userId) {
-  delete activeBets[getBetKey(chatId, userId)];
+  const userIdStr = String(userId);
+  if (!playersData[userIdStr]) playersData[userIdStr] = makeDefaultPlayer(userIdStr);
+  playersData[userIdStr].bet = 0;
+  savePlayers();
 }
 
 function setBet(chatId, userId, amount) {
-  activeBets[getBetKey(chatId, userId)] = Math.floor(amount);
+  const userIdStr = String(userId);
+  if (!playersData[userIdStr]) playersData[userIdStr] = makeDefaultPlayer(userIdStr);
+  playersData[userIdStr].bet = Math.floor(amount);
+  savePlayers();
 }
 
 function applyWin(chatId, user) {
+  const player = getPlayer(user);
   const bet = getBet(chatId, user.id);
   if (!bet) return "";
   const win = Math.floor(bet * WIN_MULTIPLIER);
   const balance = addCoins(chatId, user.id, win);
+  player.wins = Math.floor(player.wins || 0) + 1;
+  player.gamesPlayed = Math.floor(player.gamesPlayed || 0) + 1;
   clearBet(chatId, user.id);
-  return `\n\n💰 Ставка: ${bet} монет\n✅ Выигрыш x${WIN_MULTIPLIER}: +${win}\n💳 Баланс: ${balance}`;
+  savePlayers();
+  return `
+
+💰 Ставка: ${bet} монет
+✅ Выигрыш x${WIN_MULTIPLIER}: +${win}
+💳 Баланс: ${balance}`;
 }
 
 function applyLose(chatId, user) {
+  const player = getPlayer(user);
   const bet = getBet(chatId, user.id);
   if (!bet) return "";
   const lose = Math.floor(bet * LOSE_MULTIPLIER);
   const balance = addCoins(chatId, user.id, -lose);
+  player.loses = Math.floor(player.loses || 0) + 1;
+  player.gamesPlayed = Math.floor(player.gamesPlayed || 0) + 1;
   clearBet(chatId, user.id);
-  return `\n\n💰 Ставка: ${bet} монет\n❌ Проигрыш x${LOSE_MULTIPLIER}: -${lose}\n💳 Баланс: ${balance}`;
+  savePlayers();
+  return `
+
+💰 Ставка: ${bet} монет
+❌ Проигрыш x${LOSE_MULTIPLIER}: -${lose}
+💳 Баланс: ${balance}`;
 }
 
 
@@ -659,10 +700,15 @@ bot.on("message", async (msg) => {
   const lowerText = normalizeText(text);
 
   touchActiveUser(chatId, msg.from);
+  getPlayer(msg.from);
 
   if (lowerText === "б" || lowerText === "баланс") {
-    const balance = getBalance(chatId, msg.from.id);
-    await safeSendMessage(chatId, `💳 ${getUserName(msg.from)}, твой баланс: ${balance} монет`);
+    const player = getPlayer(msg.from);
+    await safeSendMessage(chatId, `💳 ${getUserName(msg.from)}, твой баланс: ${player.coins} монет
+🏆 Побед: ${player.wins}
+💀 Поражений: ${player.loses}
+🎮 Игр: ${player.gamesPlayed}
+💰 Текущая ставка: ${player.bet || 0}`);
     return;
   }
 
