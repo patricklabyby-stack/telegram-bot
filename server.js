@@ -135,28 +135,50 @@ function setBet(chatId, userId, amount) {
 function applyWin(chatId, user) {
   const player = getPlayer(user);
   const bet = getBet(chatId, user.id);
-  if (!bet) return "";
-  const win = Math.floor(bet * WIN_MULTIPLIER);
-  const balance = addCoins(chatId, user.id, win);
+
   player.wins = Math.floor(player.wins || 0) + 1;
   player.gamesPlayed = Math.floor(player.gamesPlayed || 0) + 1;
+
+  if (!bet) {
+    const bonus = 50;
+    const balance = addCoins(chatId, user.id, bonus);
+    savePlayers();
+    return `
+
+🏆 Победа засчитана
+🎁 Бонус без ставки: +${bonus} монет
+💳 Баланс: ${balance}`;
+  }
+
+  const win = Math.floor(bet * WIN_MULTIPLIER);
+  const balance = addCoins(chatId, user.id, win);
   clearBet(chatId, user.id);
   savePlayers();
   return `
 
 💰 Ставка: ${bet} монет
-✅ Выигрыш x${WIN_MULTIPLIER}: +${win}
+✅ Победа x${WIN_MULTIPLIER}: +${win}
 💳 Баланс: ${balance}`;
 }
 
 function applyLose(chatId, user) {
   const player = getPlayer(user);
   const bet = getBet(chatId, user.id);
-  if (!bet) return "";
-  const lose = Math.floor(bet * LOSE_MULTIPLIER);
-  const balance = addCoins(chatId, user.id, -lose);
+
   player.loses = Math.floor(player.loses || 0) + 1;
   player.gamesPlayed = Math.floor(player.gamesPlayed || 0) + 1;
+
+  if (!bet) {
+    savePlayers();
+    return `
+
+💀 Поражение засчитано
+💰 Ставки не было — монеты не списаны
+💳 Баланс: ${player.coins}`;
+  }
+
+  const lose = Math.floor(bet * LOSE_MULTIPLIER);
+  const balance = addCoins(chatId, user.id, -lose);
   clearBet(chatId, user.id);
   savePlayers();
   return `
@@ -165,6 +187,90 @@ function applyLose(chatId, user) {
 ❌ Проигрыш x${LOSE_MULTIPLIER}: -${lose}
 💳 Баланс: ${balance}`;
 }
+
+function getRankEmoji(index) {
+  if (index === 0) return "🥇";
+  if (index === 1) return "🥈";
+  if (index === 2) return "🥉";
+  return `${index + 1}.`;
+}
+
+function formatProfile(user) {
+  const player = getPlayer(user);
+  const winrate = player.gamesPlayed ? Math.round((player.wins / player.gamesPlayed) * 100) : 0;
+  return `👤 Профиль: ${getUserName(user)}
+
+💳 Баланс: ${player.coins} монет
+🎲 Ставка: ${player.bet || 0}
+
+🏆 Побед: ${player.wins}
+💀 Поражений: ${player.loses}
+🎮 Игр: ${player.gamesPlayed}
+📊 Винрейт: ${winrate}%`;
+}
+
+function getTopText() {
+  const rows = Object.values(playersData)
+    .filter(p => p && p.id)
+    .sort((a, b) => Math.floor(b.coins || 0) - Math.floor(a.coins || 0))
+    .slice(0, 10);
+
+  if (!rows.length) return "🏆 Топ пустой. Пусть кто-то напишет Б.";
+
+  return "🏆 ТОП БОГАЧЕЙ ЧАТА\n\n" + rows.map((p, i) => {
+    return `${getRankEmoji(i)} ${p.name || "Игрок"} — ${Math.floor(p.coins || 0)} монет`;
+  }).join("\n");
+}
+
+function getGamesText() {
+  return `🎮 Игры с монетами
+
+🧮 математика
+📚 викторина
+🎯 угадай слово
+🔢 угадай число
+😀 угадай по эмодзи
+🎯 виселица
+⚔️ виселица пвп
+🔀 анаграмма
+↩️ слово наоборот
+🧩 лишнее
+🌍 угадай столицу
+🔐 шифр
+⚡ реакция
+✊ кнб камень / кнб ножницы / кнб бумага
+💣 бомба
+
+💰 Команды:
+Б — баланс
+ставка 100
+ставка 200
+ставка все
+топ
+профиль
+ежедневка`;
+}
+
+function claimDaily(user) {
+  const player = getPlayer(user);
+  const now = Date.now();
+  const last = Number(player.lastDaily || 0);
+  const day = 24 * 60 * 60 * 1000;
+
+  if (last && now - last < day) {
+    const left = day - (now - last);
+    const hours = Math.floor(left / (60 * 60 * 1000));
+    const minutes = Math.floor((left % (60 * 60 * 1000)) / (60 * 1000));
+    return `⏳ Ежедневку уже забирал. Осталось: ${hours}ч ${minutes}м`;
+  }
+
+  const reward = 250;
+  player.lastDaily = now;
+  player.coins = Math.floor(player.coins || 0) + reward;
+  savePlayers();
+  return `🎁 Ежедневка получена: +${reward} монет\n💳 Баланс: ${player.coins}`;
+}
+
 
 
 const TRUTH_QUESTIONS = [
@@ -702,23 +808,38 @@ bot.on("message", async (msg) => {
   touchActiveUser(chatId, msg.from);
   getPlayer(msg.from);
 
-  if (lowerText === "б" || lowerText === "баланс") {
-    const player = getPlayer(msg.from);
-    await safeSendMessage(chatId, `💳 ${getUserName(msg.from)}, твой баланс: ${player.coins} монет
-🏆 Побед: ${player.wins}
-💀 Поражений: ${player.loses}
-🎮 Игр: ${player.gamesPlayed}
-💰 Текущая ставка: ${player.bet || 0}`);
+  if (lowerText === "б" || lowerText === "баланс" || lowerText === "профиль") {
+    await safeSendMessage(chatId, formatProfile(msg.from));
     return;
   }
 
-  const betMatch = lowerText.match(/^(ставка|ставить|поставить)\s+(100|200|все)$/);
+  if (lowerText === "топ" || lowerText === "топ богатых" || lowerText === "топ монет") {
+    await safeSendMessage(chatId, getTopText());
+    return;
+  }
+
+  if (lowerText === "игры" || lowerText === "команды") {
+    await safeSendMessage(chatId, getGamesText());
+    return;
+  }
+
+  if (lowerText === "ежедневка" || lowerText === "daily" || lowerText === "дэйли") {
+    await safeSendMessage(chatId, claimDaily(msg.from));
+    return;
+  }
+
+  const betMatch = lowerText.match(/^(ставка|ставить|поставить)\s+(\d+|все)$/);
   if (betMatch) {
     const balance = getBalance(chatId, msg.from.id);
     const amount = betMatch[2] === "все" ? balance : Number(betMatch[2]);
 
     if (amount <= 0) {
       await safeSendMessage(chatId, "❌ У тебя нет монет для ставки.");
+      return;
+    }
+
+    if (amount < 10) {
+      await safeSendMessage(chatId, "❌ Минимальная ставка: 10 монет.");
       return;
     }
 
