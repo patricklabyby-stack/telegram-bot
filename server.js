@@ -1,5 +1,7 @@
 const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -37,6 +39,92 @@ const recentActiveUsers = {};
 
 const RECENT_ACTIVE_MS = 15 * 60 * 1000;
 const BOMB_TIMER_MS = 5000;
+
+// Баланс сохраняется в обычный файл, без базы данных
+const DATA_FILE = path.join(__dirname, "coins_data.json");
+const START_BALANCE = 1000;
+const WIN_MULTIPLIER = 2.4;
+const LOSE_MULTIPLIER = 1.6;
+const activeBets = {}; // ключ: chatId:userId -> ставка
+
+function loadCoinsData() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return {};
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  } catch (error) {
+    console.error("Ошибка чтения coins_data.json:", error?.message || error);
+    return {};
+  }
+}
+
+let coinsData = loadCoinsData();
+
+function saveCoinsData() {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(coinsData, null, 2), "utf8");
+  } catch (error) {
+    console.error("Ошибка сохранения coins_data.json:", error?.message || error);
+  }
+}
+
+function getUserCoinKey(chatId, userId) {
+  return `${chatId}:${userId}`;
+}
+
+function getBalance(chatId, userId) {
+  const key = getUserCoinKey(chatId, userId);
+  if (typeof coinsData[key] !== "number") {
+    coinsData[key] = START_BALANCE;
+    saveCoinsData();
+  }
+  return coinsData[key];
+}
+
+function setBalance(chatId, userId, amount) {
+  const key = getUserCoinKey(chatId, userId);
+  coinsData[key] = Math.max(0, Math.floor(amount));
+  saveCoinsData();
+  return coinsData[key];
+}
+
+function addCoins(chatId, userId, amount) {
+  return setBalance(chatId, userId, getBalance(chatId, userId) + amount);
+}
+
+function getBetKey(chatId, userId) {
+  return `${chatId}:${userId}`;
+}
+
+function getBet(chatId, userId) {
+  return activeBets[getBetKey(chatId, userId)] || 0;
+}
+
+function clearBet(chatId, userId) {
+  delete activeBets[getBetKey(chatId, userId)];
+}
+
+function setBet(chatId, userId, amount) {
+  activeBets[getBetKey(chatId, userId)] = Math.floor(amount);
+}
+
+function applyWin(chatId, user) {
+  const bet = getBet(chatId, user.id);
+  if (!bet) return "";
+  const win = Math.floor(bet * WIN_MULTIPLIER);
+  const balance = addCoins(chatId, user.id, win);
+  clearBet(chatId, user.id);
+  return `\n\n💰 Ставка: ${bet} монет\n✅ Выигрыш x${WIN_MULTIPLIER}: +${win}\n💳 Баланс: ${balance}`;
+}
+
+function applyLose(chatId, user) {
+  const bet = getBet(chatId, user.id);
+  if (!bet) return "";
+  const lose = Math.floor(bet * LOSE_MULTIPLIER);
+  const balance = addCoins(chatId, user.id, -lose);
+  clearBet(chatId, user.id);
+  return `\n\n💰 Ставка: ${bet} монет\n❌ Проигрыш x${LOSE_MULTIPLIER}: -${lose}\n💳 Баланс: ${balance}`;
+}
+
 
 const TRUTH_QUESTIONS = [
   "Что ты скрываешь чаще всего? 👀",
@@ -305,7 +393,7 @@ async function explodeBomb(chatId) {
   delete activeBombs[key];
   await safeSendMessage(
     chatId,
-    `💥 Бомба взорвалась у ${getUserLink(holder)}!`,
+    `💥 Бомба взорвалась у ${getUserLink(holder)}!${holder ? applyLose(chatId, holder) : ""}`,
     { parse_mode: "HTML", disable_web_page_preview: true }
   );
 }
@@ -572,6 +660,32 @@ bot.on("message", async (msg) => {
 
   touchActiveUser(chatId, msg.from);
 
+  if (lowerText === "б" || lowerText === "баланс") {
+    const balance = getBalance(chatId, msg.from.id);
+    await safeSendMessage(chatId, `💳 ${getUserName(msg.from)}, твой баланс: ${balance} монет`);
+    return;
+  }
+
+  const betMatch = lowerText.match(/^(ставка|ставить|поставить)\s+(100|200|все)$/);
+  if (betMatch) {
+    const balance = getBalance(chatId, msg.from.id);
+    const amount = betMatch[2] === "все" ? balance : Number(betMatch[2]);
+
+    if (amount <= 0) {
+      await safeSendMessage(chatId, "❌ У тебя нет монет для ставки.");
+      return;
+    }
+
+    if (balance < amount) {
+      await safeSendMessage(chatId, `❌ Недостаточно монет. Твой баланс: ${balance}`);
+      return;
+    }
+
+    setBet(chatId, msg.from.id, amount);
+    await safeSendMessage(chatId, `✅ Ставка поставлена: ${amount} монет\n🏆 Победа: x${WIN_MULTIPLIER}\n💀 Проигрыш: x${LOSE_MULTIPLIER} списание`);
+    return;
+  }
+
   if (msg.chat.type === "private") {
     for (const key of Object.keys(activeHangmanPvPGames)) {
       const game = activeHangmanPvPGames[key];
@@ -628,7 +742,7 @@ bot.on("message", async (msg) => {
       if (lowerText === "я сдаюсь" || lowerText === "сдаться") {
         await safeSendMessage(
           chatId,
-          `😢 ${getUserLink(pvp.guesserUser)} сдался(ась).\nПравильный ответ: ${escapeHtml(pvp.word)}`,
+          `😢 ${getUserLink(pvp.guesserUser)} сдался(ась).\nПравильный ответ: ${escapeHtml(pvp.word)}${applyLose(chatId, pvp.guesserUser)}`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         delete activeHangmanPvPGames[getChatKey(chatId)];
@@ -652,7 +766,7 @@ bot.on("message", async (msg) => {
           if (fullyGuessed) {
             await safeSendMessage(
               chatId,
-              `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}`,
+              `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}${applyWin(chatId, pvp.guesserUser)}`,
               { parse_mode: "HTML", disable_web_page_preview: true }
             );
             delete activeHangmanPvPGames[getChatKey(chatId)];
@@ -667,7 +781,7 @@ bot.on("message", async (msg) => {
         if (pvp.wrongLetters.size >= 6) {
           await safeSendMessage(
             chatId,
-            `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}`,
+            `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}${applyLose(chatId, pvp.guesserUser)}`,
             { parse_mode: "HTML", disable_web_page_preview: true }
           );
           delete activeHangmanPvPGames[getChatKey(chatId)];
@@ -681,7 +795,7 @@ bot.on("message", async (msg) => {
       if (answer === pvp.word) {
         await safeSendMessage(
           chatId,
-          `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}`,
+          `🏆 Победа!\n${getUserLink(pvp.guesserUser)} угадал(а) слово: ${escapeHtml(pvp.word)}${applyWin(chatId, pvp.guesserUser)}`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         delete activeHangmanPvPGames[getChatKey(chatId)];
@@ -692,7 +806,7 @@ bot.on("message", async (msg) => {
       if (pvp.wrongLetters.size >= 6) {
         await safeSendMessage(
           chatId,
-          `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}`,
+          `💀 Игра окончена!\n${getUserLink(pvp.guesserUser)} не смог(ла) угадать слово.\nЗагаданное слово: ${escapeHtml(pvp.word)}${applyLose(chatId, pvp.guesserUser)}`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         delete activeHangmanPvPGames[getChatKey(chatId)];
@@ -746,14 +860,20 @@ bot.on("message", async (msg) => {
   }
 
   if (lowerText === "монетка") {
-    const result = Math.random() < 0.5 ? "Орёл 🦅" : "Решка 🪙";
-    await safeSendMessage(chatId, `🪙 Монетка: ${result}`);
+    const win = Math.random() < 0.5;
+    const result = win ? "Орёл 🦅" : "Решка 🪙";
+    const moneyText = win ? applyWin(chatId, msg.from) : applyLose(chatId, msg.from);
+    await safeSendMessage(chatId, `🪙 Монетка: ${result}
+${win ? "🏆 Победа!" : "💀 Проигрыш!"}${moneyText}`);
     return;
   }
 
   if (lowerText === "кубик") {
     const roll = Math.floor(Math.random() * 6) + 1;
-    await safeSendMessage(chatId, `🎲 Выпало: ${roll}`);
+    const win = roll >= 4;
+    const moneyText = win ? applyWin(chatId, msg.from) : applyLose(chatId, msg.from);
+    await safeSendMessage(chatId, `🎲 Выпало: ${roll}
+${win ? "🏆 Победа!" : "💀 Проигрыш!"}${moneyText}`);
     return;
   }
 
@@ -1116,70 +1236,70 @@ bot.on("message", async (msg) => {
 
     if (activeGuessWordGames[key]) {
       const game = activeGuessWordGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}${applyLose(chatId, msg.from)}`);
       clearGuessWord(chatId);
       return;
     }
 
     if (activeEmojiGuessGames[key]) {
       const game = activeEmojiGuessGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}${applyLose(chatId, msg.from)}`);
       clearEmojiGuess(chatId);
       return;
     }
 
     if (activeHangmanGames[key]) {
       const game = activeHangmanGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}${applyLose(chatId, msg.from)}`);
       clearHangman(chatId);
       return;
     }
 
     if (activeAnagramGames[key]) {
       const game = activeAnagramGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}${applyLose(chatId, msg.from)}`);
       clearAnagram(chatId);
       return;
     }
 
     if (activeReverseWordGames[key]) {
       const game = activeReverseWordGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}${applyLose(chatId, msg.from)}`);
       clearReverseWord(chatId);
       return;
     }
 
     if (activeCapitalGames[key]) {
       const game = activeCapitalGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный ответ: ${game.capital}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный ответ: ${game.capital}${applyLose(chatId, msg.from)}`);
       clearCapitalGame(chatId);
       return;
     }
 
     if (activeCipherGames[key]) {
       const game = activeCipherGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nСлово было: ${game.word}${applyLose(chatId, msg.from)}`);
       clearCipherGame(chatId);
       return;
     }
 
     if (activeQuizGames[key]) {
       const game = activeQuizGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный ответ: ${game.options[game.correctIndex]}`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный ответ: ${game.options[game.correctIndex]}${applyLose(chatId, msg.from)}`);
       clearQuizGame(chatId);
       return;
     }
 
     if (activeOddOneGames[key]) {
       const game = activeOddOneGames[key];
-      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный вариант: ${game.correctIndex + 1} (${game.explanation})`);
+      await safeSendMessage(chatId, `😢 Сдался(ась): ${getUserName(msg.from)}.\nПравильный вариант: ${game.correctIndex + 1} (${game.explanation})${applyLose(chatId, msg.from)}`);
       clearOddOneGame(chatId);
       return;
     }
 
     if (activeReactionGames[key]) {
       const game = activeReactionGames[key];
-      await safeSendMessage(chatId, `😢 Игра остановлена. Нужно было написать: ${game.target}`);
+      await safeSendMessage(chatId, `😢 Игра остановлена. Нужно было написать: ${game.target}${applyLose(chatId, msg.from)}`);
       clearReactionGame(chatId);
       return;
     }
@@ -1189,7 +1309,7 @@ bot.on("message", async (msg) => {
       if (Number(msg.from.id) === Number(game.guesserUser.id)) {
         await safeSendMessage(
           chatId,
-          `😢 ${getUserLink(msg.from)} сдался(ась).\nПравильный ответ: ${escapeHtml(game.word)}`,
+          `😢 ${getUserLink(msg.from)} сдался(ась).\nПравильный ответ: ${escapeHtml(game.word)}${applyLose(chatId, msg.from)}`,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
         delete activeHangmanPvPGames[key];
@@ -1256,10 +1376,10 @@ bot.on("message", async (msg) => {
   if (quizGame && answerMatch) {
     const index = Number(answerMatch[1]) - 1;
     if (index === quizGame.correctIndex) {
-      await safeSendMessage(chatId, `🏆 Правильно! Ответ: ${quizGame.options[quizGame.correctIndex]}\nУгадал(а): ${getUserName(msg.from)}`);
+      await safeSendMessage(chatId, `🏆 Правильно! Ответ: ${quizGame.options[quizGame.correctIndex]}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
       clearQuizGame(chatId);
     } else {
-      await safeSendMessage(chatId, "❌ Неверно!");
+      await safeSendMessage(chatId, `❌ Неверно!${applyLose(chatId, msg.from)}`);
     }
     return;
   }
@@ -1269,24 +1389,24 @@ bot.on("message", async (msg) => {
   if (oddOneGame && variantMatch) {
     const index = Number(variantMatch[1]) - 1;
     if (index === oddOneGame.correctIndex) {
-      await safeSendMessage(chatId, `🏆 Правильно! Лишнее: ${oddOneGame.options[oddOneGame.correctIndex]}\n${oddOneGame.explanation}\nУгадал(а): ${getUserName(msg.from)}`);
+      await safeSendMessage(chatId, `🏆 Правильно! Лишнее: ${oddOneGame.options[oddOneGame.correctIndex]}\n${oddOneGame.explanation}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
       clearOddOneGame(chatId);
     } else {
-      await safeSendMessage(chatId, "❌ Неверно!");
+      await safeSendMessage(chatId, `❌ Неверно!${applyLose(chatId, msg.from)}`);
     }
     return;
   }
 
   const capitalGame = activeCapitalGames[getChatKey(chatId)];
   if (capitalGame && lowerText === normalizeText(capitalGame.capital)) {
-    await safeSendMessage(chatId, `🏆 Правильно! Столица страны ${capitalGame.country} — ${capitalGame.capital}\nУгадал(а): ${getUserName(msg.from)}`);
+    await safeSendMessage(chatId, `🏆 Правильно! Столица страны ${capitalGame.country} — ${capitalGame.capital}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
     clearCapitalGame(chatId);
     return;
   }
 
   const cipherGame = activeCipherGames[getChatKey(chatId)];
   if (cipherGame && lowerText === normalizeText(cipherGame.word)) {
-    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${cipherGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${cipherGame.word}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
     clearCipherGame(chatId);
     return;
   }
@@ -1294,14 +1414,14 @@ bot.on("message", async (msg) => {
   const reactionGame = activeReactionGames[getChatKey(chatId)];
   if (reactionGame && lowerText === normalizeText(reactionGame.target)) {
     const ms = Date.now() - reactionGame.startedAt;
-    await safeSendMessage(chatId, `⚡ Победа!\n${getUserName(msg.from)} успел(а) первым(ой) за ${ms} мс`);
+    await safeSendMessage(chatId, `⚡ Победа!\n${getUserName(msg.from)} успел(а) первым(ой) за ${ms} мс${applyWin(chatId, msg.from)}`);
     clearReactionGame(chatId);
     return;
   }
 
   const guessWordGame = activeGuessWordGames[getChatKey(chatId)];
   if (guessWordGame && lowerText === normalizeText(guessWordGame.word)) {
-    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${guessWordGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${guessWordGame.word}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
     clearGuessWord(chatId);
     return;
   }
@@ -1310,7 +1430,7 @@ bot.on("message", async (msg) => {
   if (guessNumberGame && /^\d+$/.test(lowerText)) {
     const num = Number(lowerText);
     if (num === guessNumberGame.target) {
-      await safeSendMessage(chatId, `🏆 Правильно! Я загадал число ${guessNumberGame.target}\nУгадал(а): ${getUserName(msg.from)}`);
+      await safeSendMessage(chatId, `🏆 Правильно! Я загадал число ${guessNumberGame.target}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
       clearGuessNumber(chatId);
     } else if (num < guessNumberGame.target) {
       await safeSendMessage(chatId, "📈 Больше!");
@@ -1322,21 +1442,21 @@ bot.on("message", async (msg) => {
 
   const emojiGame = activeEmojiGuessGames[getChatKey(chatId)];
   if (emojiGame && lowerText === normalizeText(emojiGame.word)) {
-    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${emojiGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${emojiGame.word}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
     clearEmojiGuess(chatId);
     return;
   }
 
   const anagramGame = activeAnagramGames[getChatKey(chatId)];
   if (anagramGame && lowerText === normalizeText(anagramGame.word)) {
-    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${anagramGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${anagramGame.word}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
     clearAnagram(chatId);
     return;
   }
 
   const reverseGame = activeReverseWordGames[getChatKey(chatId)];
   if (reverseGame && lowerText === normalizeText(reverseGame.word)) {
-    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${reverseGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+    await safeSendMessage(chatId, `🏆 Правильно! Слово было: ${reverseGame.word}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
     clearReverseWord(chatId);
     return;
   }
@@ -1345,7 +1465,7 @@ bot.on("message", async (msg) => {
   if (mathGame && /^-?\d+$/.test(lowerText)) {
     const num = Number(lowerText);
     if (num === mathGame.answer) {
-      await safeSendMessage(chatId, `🏆 Правильно! Ответ: ${mathGame.answer}\nУгадал(а): ${getUserName(msg.from)}`);
+      await safeSendMessage(chatId, `🏆 Правильно! Ответ: ${mathGame.answer}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
       clearMathGame(chatId);
     }
     return;
@@ -1365,7 +1485,7 @@ bot.on("message", async (msg) => {
         hangmanGame.guessedLetters.add(answer);
         const done = hangmanGame.word.split("").every(ch => hangmanGame.guessedLetters.has(ch));
         if (done) {
-          await safeSendMessage(chatId, `🏆 Ты выиграл!\nСлово: ${hangmanGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+          await safeSendMessage(chatId, `🏆 Ты выиграл!\nСлово: ${hangmanGame.word}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
           clearHangman(chatId);
           return;
         }
@@ -1376,7 +1496,7 @@ bot.on("message", async (msg) => {
 
       hangmanGame.wrongLetters.add(answer);
       if (hangmanGame.wrongLetters.size >= hangmanGame.maxWrong) {
-        await safeSendMessage(chatId, `💀 Ты проиграл.\nСлово было: ${hangmanGame.word}`);
+        await safeSendMessage(chatId, `💀 Ты проиграл.\nСлово было: ${hangmanGame.word}${applyLose(chatId, msg.from)}`);
         clearHangman(chatId);
         return;
       }
@@ -1386,14 +1506,14 @@ bot.on("message", async (msg) => {
     }
 
     if (answer === hangmanGame.word) {
-      await safeSendMessage(chatId, `🏆 Ты выиграл!\nСлово: ${hangmanGame.word}\nУгадал(а): ${getUserName(msg.from)}`);
+      await safeSendMessage(chatId, `🏆 Ты выиграл!\nСлово: ${hangmanGame.word}\nУгадал(а): ${getUserName(msg.from)}${applyWin(chatId, msg.from)}`);
       clearHangman(chatId);
       return;
     }
 
     hangmanGame.wrongLetters.add(answer);
     if (hangmanGame.wrongLetters.size >= hangmanGame.maxWrong) {
-      await safeSendMessage(chatId, `💀 Ты проиграл.\nСлово было: ${hangmanGame.word}`);
+      await safeSendMessage(chatId, `💀 Ты проиграл.\nСлово было: ${hangmanGame.word}${applyLose(chatId, msg.from)}`);
       clearHangman(chatId);
       return;
     }
