@@ -1,7 +1,5 @@
 const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
-const fs = require("fs");
-const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,7 +10,7 @@ if (!token) throw new Error("BOT_TOKEN не найден");
 const bot = new TelegramBot(token, { polling: true });
 
 app.get("/", (req, res) => {
-  res.send("Бот работает без базы данных");
+  res.send("Мини Модер работает ✅ Без базы данных, без players.json, без монет");
 });
 
 app.listen(PORT, () => {
@@ -36,195 +34,71 @@ const activeCapitalGames = {};
 const activeCipherGames = {};
 const activeReactionGames = {};
 const recentActiveUsers = {};
+const lastModerReply = {};
+
+const MODERCHIK_REPLIES = [
+  "✅ Модерчик на месте!",
+  "👀 Вызывали Модерчика?",
+  "🛡 Порядок под контролем.",
+  "🤖 Модерчик слушает.",
+  "🔥 Уже тут!",
+  "😎 Чем помочь?",
+  "📢 Модерчик на связи.",
+  "⚡ Прибыл по вызову.",
+  "💬 Кто меня звал?",
+  "🎯 Работаю!",
+  "🚨 На страже порядка!",
+  "🍕 Я ел пиццу, но пришёл.",
+  "😴 Почти спал, но проснулся.",
+  "🧠 Думаю над ситуацией...",
+  "🎮 Отвлёкся от игр и пришёл.",
+  "🔍 Проверяю чат...",
+  "👑 Король порядка прибыл.",
+  "🐸 Ква-ква, я тут.",
+  "🚀 Лечу на помощь.",
+  "😏 Да-да, я слушаю.",
+  "📱 Всегда онлайн.",
+  "🎉 Тут как тут!",
+  "💎 Модерчик сияет.",
+  "🐱 Мяу, порядок будет.",
+  "🐶 Гав, нарушителей нет.",
+  "🥔 Картошка одобряет.",
+  "🍀 Удача рядом.",
+  "🧹 Подметаю флуд.",
+  "🔔 Сигнал получен.",
+  "🔥 Всегда готов!"
+];
 
 const RECENT_ACTIVE_MS = 15 * 60 * 1000;
 const BOMB_TIMER_MS = 5000;
 
-// Игроки сохраняются в обычный файл players.json, это НЕ база данных
-const PLAYERS_FILE = path.join(__dirname, "players.json");
-const START_BALANCE = 1000;
-const WIN_MULTIPLIER = 2.4;
-const LOSE_MULTIPLIER = 1.6;
-
-function loadPlayers() {
-  try {
-    if (!fs.existsSync(PLAYERS_FILE)) {
-      fs.writeFileSync(PLAYERS_FILE, "{}", "utf8");
-      return {};
-    }
-    const raw = fs.readFileSync(PLAYERS_FILE, "utf8").trim();
-    return raw ? JSON.parse(raw) : {};
-  } catch (error) {
-    console.error("Ошибка чтения players.json:", error?.message || error);
-    return {};
-  }
-}
-
-let playersData = loadPlayers();
-
-function savePlayers() {
-  try {
-    fs.writeFileSync(PLAYERS_FILE, JSON.stringify(playersData, null, 2), "utf8");
-  } catch (error) {
-    console.error("Ошибка сохранения players.json:", error?.message || error);
-  }
-}
-
-function makeDefaultPlayer(userId, name = "Пользователь") {
-  return {
-    id: String(userId),
-    name,
-    coins: START_BALANCE,
-    bet: 0,
-    wins: 0,
-    loses: 0,
-    gamesPlayed: 0,
-    createdAt: new Date().toISOString(),
-    lastSeen: new Date().toISOString()
-  };
-}
-
-function getPlayer(user) {
-  const userId = String(user.id);
-  if (!playersData[userId]) playersData[userId] = makeDefaultPlayer(userId, getUserName(user));
-  playersData[userId].name = getUserName(user);
-  playersData[userId].lastSeen = new Date().toISOString();
-  savePlayers();
-  return playersData[userId];
-}
-
-function getBalance(chatId, userId) {
-  const userIdStr = String(userId);
-  if (!playersData[userIdStr]) {
-    playersData[userIdStr] = makeDefaultPlayer(userIdStr);
-    savePlayers();
-  }
-  return Math.floor(playersData[userIdStr].coins || 0);
-}
-
-function setBalance(chatId, userId, amount) {
-  const userIdStr = String(userId);
-  if (!playersData[userIdStr]) playersData[userIdStr] = makeDefaultPlayer(userIdStr);
-  playersData[userIdStr].coins = Math.max(0, Math.floor(amount));
-  savePlayers();
-  return playersData[userIdStr].coins;
-}
-
-function addCoins(chatId, userId, amount) {
-  return setBalance(chatId, userId, getBalance(chatId, userId) + amount);
-}
-
-function getBet(chatId, userId) {
-  return Math.floor(playersData[String(userId)]?.bet || 0);
-}
-
-function clearBet(chatId, userId) {
-  const userIdStr = String(userId);
-  if (!playersData[userIdStr]) playersData[userIdStr] = makeDefaultPlayer(userIdStr);
-  playersData[userIdStr].bet = 0;
-  savePlayers();
-}
-
-function setBet(chatId, userId, amount) {
-  const userIdStr = String(userId);
-  if (!playersData[userIdStr]) playersData[userIdStr] = makeDefaultPlayer(userIdStr);
-  playersData[userIdStr].bet = Math.floor(amount);
-  savePlayers();
-}
-
+// Экономика полностью убрана: нет players.json, баланса, ставок и монет
 function applyWin(chatId, user) {
-  const player = getPlayer(user);
-  const bet = getBet(chatId, user.id);
-
-  player.wins = Math.floor(player.wins || 0) + 1;
-  player.gamesPlayed = Math.floor(player.gamesPlayed || 0) + 1;
-
-  if (!bet) {
-    const bonus = 50;
-    const balance = addCoins(chatId, user.id, bonus);
-    savePlayers();
-    return `
-
-🏆 Победа засчитана
-🎁 Бонус без ставки: +${bonus} монет
-💳 Баланс: ${balance}`;
-  }
-
-  const win = Math.floor(bet * WIN_MULTIPLIER);
-  const balance = addCoins(chatId, user.id, win);
-  clearBet(chatId, user.id);
-  savePlayers();
-  return `
-
-💰 Ставка: ${bet} монет
-✅ Победа x${WIN_MULTIPLIER}: +${win}
-💳 Баланс: ${balance}`;
+  return `\n\n🏆 Победа засчитана для ${getUserName(user)}`;
 }
 
 function applyLose(chatId, user) {
-  const player = getPlayer(user);
-  const bet = getBet(chatId, user.id);
-
-  player.loses = Math.floor(player.loses || 0) + 1;
-  player.gamesPlayed = Math.floor(player.gamesPlayed || 0) + 1;
-
-  if (!bet) {
-    savePlayers();
-    return `
-
-💀 Поражение засчитано
-💰 Ставки не было — монеты не списаны
-💳 Баланс: ${player.coins}`;
-  }
-
-  const lose = Math.floor(bet * LOSE_MULTIPLIER);
-  const balance = addCoins(chatId, user.id, -lose);
-  clearBet(chatId, user.id);
-  savePlayers();
-  return `
-
-💰 Ставка: ${bet} монет
-❌ Проигрыш x${LOSE_MULTIPLIER}: -${lose}
-💳 Баланс: ${balance}`;
-}
-
-function getRankEmoji(index) {
-  if (index === 0) return "🥇";
-  if (index === 1) return "🥈";
-  if (index === 2) return "🥉";
-  return `${index + 1}.`;
-}
-
-function formatProfile(user) {
-  const player = getPlayer(user);
-  const winrate = player.gamesPlayed ? Math.round((player.wins / player.gamesPlayed) * 100) : 0;
-  return `👤 Профиль: ${getUserName(user)}
-
-💳 Баланс: ${player.coins} монет
-🎲 Ставка: ${player.bet || 0}
-
-🏆 Побед: ${player.wins}
-💀 Поражений: ${player.loses}
-🎮 Игр: ${player.gamesPlayed}
-📊 Винрейт: ${winrate}%`;
-}
-
-function getTopText() {
-  const rows = Object.values(playersData)
-    .filter(p => p && p.id)
-    .sort((a, b) => Math.floor(b.coins || 0) - Math.floor(a.coins || 0))
-    .slice(0, 10);
-
-  if (!rows.length) return "🏆 Топ пустой. Пусть кто-то напишет Б.";
-
-  return "🏆 ТОП БОГАЧЕЙ ЧАТА\n\n" + rows.map((p, i) => {
-    return `${getRankEmoji(i)} ${p.name || "Игрок"} — ${Math.floor(p.coins || 0)} монет`;
-  }).join("\n");
+  return `\n\n💀 Поражение засчитано для ${getUserName(user)}`;
 }
 
 function getGamesText() {
-  return `🎮 Игры с монетами
+  return `📜 Команды Мини Модера
 
+🤖 Главная:
+модерчик
+команды
+правила
+стоп
+
+🛡 Модерация:
+/ban — бан ответом на сообщение
+/kick — кик ответом на сообщение
+/mute — мут ответом на сообщение
+/unmute — размут ответом на сообщение
+/pin — закрепить сообщение ответом
+/unpin — открепить
+
+🎮 Игры:
 🧮 математика
 📚 викторина
 🎯 угадай слово
@@ -241,37 +115,41 @@ function getGamesText() {
 ✊ кнб камень / кнб ножницы / кнб бумага
 💣 бомба
 
-💰 Команды:
-Б — баланс
-ставка 100
-ставка 200
-ставка все
-топ
-профиль
-ежедневка`;
+😆 Развлечения:
+птичка
+монетка
+кубик
+рулетка
+да или нет
+шар судьбы
+случайный факт
+пара
+совместимость
+выбери
+удача
+настроение
+оценка
+прогноз
+он врет?
+голосование
+правда или действие
+правда
+действие
+кем ты был бы
+дуэль
+битва
+свадьба
+краш
+кто админ
+кто спит
+кто читер
+кто легенда
+кто бот
+
+❌ Без базы данных
+❌ Без players.json
+❌ Без монет и баланса`;
 }
-
-function claimDaily(user) {
-  const player = getPlayer(user);
-  const now = Date.now();
-  const last = Number(player.lastDaily || 0);
-  const day = 24 * 60 * 60 * 1000;
-
-  if (last && now - last < day) {
-    const left = day - (now - last);
-    const hours = Math.floor(left / (60 * 60 * 1000));
-    const minutes = Math.floor((left % (60 * 60 * 1000)) / (60 * 1000));
-    return `⏳ Ежедневку уже забирал. Осталось: ${hours}ч ${minutes}м`;
-  }
-
-  const reward = 250;
-  player.lastDaily = now;
-  player.coins = Math.floor(player.coins || 0) + reward;
-  savePlayers();
-  return `🎁 Ежедневка получена: +${reward} монет\n💳 Баланс: ${player.coins}`;
-}
-
-
 
 const TRUTH_QUESTIONS = [
   "Что ты скрываешь чаще всего? 👀",
@@ -798,6 +676,66 @@ function getRulesText(chatId) {
   return "❌ Сейчас в этом чате нет активной игры.";
 }
 
+
+async function isAdmin(chatId, userId) {
+  try {
+    const member = await bot.getChatMember(chatId, userId);
+    return ["creator", "administrator"].includes(member.status);
+  } catch (error) {
+    return false;
+  }
+}
+
+async function needAdmin(msg) {
+  if (msg.chat.type === "private") {
+    await safeSendMessage(msg.chat.id, "❌ Модерация работает только в группах.");
+    return false;
+  }
+  if (!(await isAdmin(msg.chat.id, msg.from.id))) {
+    await safeSendMessage(msg.chat.id, "❌ Эту команду может использовать только админ.");
+    return false;
+  }
+  return true;
+}
+
+async function muteUser(chatId, userId) {
+  await bot.restrictChatMember(chatId, userId, {
+    permissions: {
+      can_send_messages: false,
+      can_send_audios: false,
+      can_send_documents: false,
+      can_send_photos: false,
+      can_send_videos: false,
+      can_send_video_notes: false,
+      can_send_voice_notes: false,
+      can_send_polls: false,
+      can_send_other_messages: false,
+      can_add_web_page_previews: false,
+      can_change_info: false,
+      can_invite_users: false,
+      can_pin_messages: false
+    }
+  });
+}
+
+async function unmuteUser(chatId, userId) {
+  await bot.restrictChatMember(chatId, userId, {
+    permissions: {
+      can_send_messages: true,
+      can_send_audios: true,
+      can_send_documents: true,
+      can_send_photos: true,
+      can_send_videos: true,
+      can_send_video_notes: true,
+      can_send_voice_notes: true,
+      can_send_polls: true,
+      can_send_other_messages: true,
+      can_add_web_page_previews: true,
+      can_invite_users: true
+    }
+  });
+}
+
 bot.on("message", async (msg) => {
   if (!msg.text) return;
 
@@ -806,52 +744,7 @@ bot.on("message", async (msg) => {
   const lowerText = normalizeText(text);
 
   touchActiveUser(chatId, msg.from);
-  getPlayer(msg.from);
 
-  if (lowerText === "б" || lowerText === "баланс" || lowerText === "профиль") {
-    await safeSendMessage(chatId, formatProfile(msg.from));
-    return;
-  }
-
-  if (lowerText === "топ" || lowerText === "топ богатых" || lowerText === "топ монет") {
-    await safeSendMessage(chatId, getTopText());
-    return;
-  }
-
-  if (lowerText === "игры" || lowerText === "команды") {
-    await safeSendMessage(chatId, getGamesText());
-    return;
-  }
-
-  if (lowerText === "ежедневка" || lowerText === "daily" || lowerText === "дэйли") {
-    await safeSendMessage(chatId, claimDaily(msg.from));
-    return;
-  }
-
-  const betMatch = lowerText.match(/^(ставка|ставить|поставить)\s+(\d+|все)$/);
-  if (betMatch) {
-    const balance = getBalance(chatId, msg.from.id);
-    const amount = betMatch[2] === "все" ? balance : Number(betMatch[2]);
-
-    if (amount <= 0) {
-      await safeSendMessage(chatId, "❌ У тебя нет монет для ставки.");
-      return;
-    }
-
-    if (amount < 10) {
-      await safeSendMessage(chatId, "❌ Минимальная ставка: 10 монет.");
-      return;
-    }
-
-    if (balance < amount) {
-      await safeSendMessage(chatId, `❌ Недостаточно монет. Твой баланс: ${balance}`);
-      return;
-    }
-
-    setBet(chatId, msg.from.id, amount);
-    await safeSendMessage(chatId, `✅ Ставка поставлена: ${amount} монет\n🏆 Победа: x${WIN_MULTIPLIER}\n💀 Проигрыш: x${LOSE_MULTIPLIER} списание`);
-    return;
-  }
 
   if (msg.chat.type === "private") {
     for (const key of Object.keys(activeHangmanPvPGames)) {
@@ -995,6 +888,111 @@ bot.on("message", async (msg) => {
 
   if (/^\/help(@[a-z0-9_]+)?$/i.test(text)) {
     await safeSendMessage(chatId, `📘 Ссылка на список команд бота:\n${HELP_ARTICLE_URL}`);
+    return;
+  }
+
+
+  if (lowerText === "модерчик") {
+    const key = getChatKey(chatId);
+    const available = MODERCHIK_REPLIES.filter(reply => reply !== lastModerReply[key]);
+    const reply = getRandomFromArray(available.length ? available : MODERCHIK_REPLIES);
+    lastModerReply[key] = reply;
+    await safeSendMessage(chatId, reply);
+    return;
+  }
+
+  if (/^\/ban(@[a-z0-9_]+)?$/i.test(text)) {
+    if (!(await needAdmin(msg))) return;
+    if (!msg.reply_to_message) {
+      await safeSendMessage(chatId, "❌ Ответь командой /ban на сообщение пользователя.");
+      return;
+    }
+    await bot.banChatMember(chatId, msg.reply_to_message.from.id);
+    await safeSendMessage(chatId, `🔨 Забанен: ${getUserName(msg.reply_to_message.from)}`);
+    return;
+  }
+
+  if (/^\/kick(@[a-z0-9_]+)?$/i.test(text)) {
+    if (!(await needAdmin(msg))) return;
+    if (!msg.reply_to_message) {
+      await safeSendMessage(chatId, "❌ Ответь командой /kick на сообщение пользователя.");
+      return;
+    }
+    const userId = msg.reply_to_message.from.id;
+    await bot.banChatMember(chatId, userId);
+    await bot.unbanChatMember(chatId, userId);
+    await safeSendMessage(chatId, `👢 Кикнут: ${getUserName(msg.reply_to_message.from)}`);
+    return;
+  }
+
+  if (/^\/mute(@[a-z0-9_]+)?$/i.test(text)) {
+    if (!(await needAdmin(msg))) return;
+    if (!msg.reply_to_message) {
+      await safeSendMessage(chatId, "❌ Ответь командой /mute на сообщение пользователя.");
+      return;
+    }
+    await muteUser(chatId, msg.reply_to_message.from.id);
+    await safeSendMessage(chatId, `🔇 Замучен: ${getUserName(msg.reply_to_message.from)}`);
+    return;
+  }
+
+  if (/^\/unmute(@[a-z0-9_]+)?$/i.test(text)) {
+    if (!(await needAdmin(msg))) return;
+    if (!msg.reply_to_message) {
+      await safeSendMessage(chatId, "❌ Ответь командой /unmute на сообщение пользователя.");
+      return;
+    }
+    await unmuteUser(chatId, msg.reply_to_message.from.id);
+    await safeSendMessage(chatId, `🔊 Размучен: ${getUserName(msg.reply_to_message.from)}`);
+    return;
+  }
+
+  if (/^\/pin(@[a-z0-9_]+)?$/i.test(text)) {
+    if (!(await needAdmin(msg))) return;
+    if (!msg.reply_to_message) {
+      await safeSendMessage(chatId, "❌ Ответь командой /pin на сообщение.");
+      return;
+    }
+    await bot.pinChatMessage(chatId, msg.reply_to_message.message_id);
+    await safeSendMessage(chatId, "📌 Сообщение закреплено.");
+    return;
+  }
+
+  if (/^\/unpin(@[a-z0-9_]+)?$/i.test(text)) {
+    if (!(await needAdmin(msg))) return;
+    await bot.unpinChatMessage(chatId);
+    await safeSendMessage(chatId, "📍 Закреп откреплён.");
+    return;
+  }
+
+  if (lowerText === "дуэль" || lowerText === "битва") {
+    const pair = getTwoRandomActiveUsers(chatId);
+    if (!pair) {
+      await safeSendMessage(chatId, "❌ Нужно хотя бы 2 активных человека в чате.");
+      return;
+    }
+    const winner = getRandomFromArray(pair);
+    await safeSendMessage(chatId, `⚔️ ${lowerText === "дуэль" ? "Дуэль" : "Битва"}!\n\n${getUserName(pair[0])} VS ${getUserName(pair[1])}\n\n🏆 Победил(а): ${getUserName(winner)}`);
+    return;
+  }
+
+  if (lowerText === "свадьба") {
+    const pair = getTwoRandomActiveUsers(chatId);
+    if (!pair) {
+      await safeSendMessage(chatId, "❌ Нужно хотя бы 2 активных человека в чате.");
+      return;
+    }
+    await safeSendMessage(chatId, `💍 Свадьба дня:\n${getUserName(pair[0])} ❤️ ${getUserName(pair[1])}`);
+    return;
+  }
+
+  if (lowerText === "краш") {
+    const picked = getRandomActiveUser(chatId);
+    if (!picked) {
+      await safeSendMessage(chatId, "❌ Нет активных людей в чате.");
+      return;
+    }
+    await safeSendMessage(chatId, `😍 Тайный краш чата:\n${getUserName(picked)}`);
     return;
   }
 
