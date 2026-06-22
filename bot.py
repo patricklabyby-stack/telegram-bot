@@ -96,6 +96,12 @@ def main_menu():
     kb.row('📊 Профиль', '❓ Помощь')
     return kb
 
+def no_group_keyboard(m):
+    # В группах убираем кнопки полностью, чтобы бот работал только текстом.
+    if m.chat.type in ['group', 'supergroup']:
+        return types.ReplyKeyboardRemove()
+    return None
+
 def games_kb():
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton('🏀 Баскетбол', callback_data='game_basket'))
@@ -120,7 +126,7 @@ def start(m):
         return activate_check(m, parts[1].replace('check_', '', 1))
     with LOCK:
         data = load_data(); get_player(data, m.from_user.id, m.from_user.username or ''); save_data(data)
-    markup = main_menu() if m.chat.type == 'private' else None
+    markup = main_menu() if m.chat.type == 'private' else types.ReplyKeyboardRemove()
     bot.send_message(
         m.chat.id,
         "👋 <b>Привет!</b>\n\n"
@@ -136,7 +142,7 @@ def play(m):
     with LOCK:
         data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or ''); save_data(data)
     if m.chat.type != 'private':
-        return bot.send_message(m.chat.id, '🎮 Игры:\n\n🏀 Баскетбол\n🎯 Дартс\n⚽ Футбол\n🎳 Боулинг\n🎰 Казино\n\nВ группе напиши название игры и ставку. Например:\n<code>Баскетбол 100</code>')
+        return bot.send_message(m.chat.id, '🎮 Игры:\n\n🏀 Баскетбол\n🎯 Дартс\n⚽ Футбол\n🎳 Боулинг\n🎰 Казино\n\nВ группе напиши название игры и ставку. Например:\n<code>Баскетбол 100</code>', reply_markup=types.ReplyKeyboardRemove())
     bot.send_message(m.chat.id, f"🎮 <b>ДАВАЙ ИГРАТЬ!</b>\n\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>\n\n👇 Выбери игру:", reply_markup=games_kb())
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('game_') or c.data == 'back_games')
@@ -195,26 +201,26 @@ def make_bet(c):
 def balance(m):
     with LOCK:
         data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or ''); save_data(data)
-    bot.send_message(m.chat.id, f"💰 <b>Твой баланс:</b> {fmt(p['coins'])} m¢")
+    bot.send_message(m.chat.id, f"💰 <b>Твой баланс:</b> {fmt(p['coins'])} m¢", reply_markup=no_group_keyboard(m))
 
 @bot.message_handler(func=lambda m: m.text == '📊 Профиль')
 def profile(m):
     with LOCK:
         data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or ''); save_data(data)
-    bot.send_message(m.chat.id, f"📊 <b>Профиль игрока</b>\n\n👤 Игрок: @{m.from_user.username or 'без username'}\n🆔 ID: <code>{m.from_user.id}</code>\n\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>\n🏆 Лучший баланс: <b>{fmt(p['best_balance'])} m¢</b>\n🎮 Игр сыграно: <b>{p['games']}</b>\n✅ Побед: <b>{p['wins']}</b>\n❌ Поражений: <b>{p['losses']}</b>")
+    bot.send_message(m.chat.id, f"📊 <b>Профиль игрока</b>\n\n👤 Игрок: @{m.from_user.username or 'без username'}\n🆔 ID: <code>{m.from_user.id}</code>\n\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>\n🏆 Лучший баланс: <b>{fmt(p['best_balance'])} m¢</b>\n🎮 Игр сыграно: <b>{p['games']}</b>\n✅ Побед: <b>{p['wins']}</b>\n❌ Поражений: <b>{p['losses']}</b>", reply_markup=no_group_keyboard(m))
 
 @bot.message_handler(func=lambda m: m.text == '🏆 Топ')
 def top(m):
     with LOCK:
         data = load_data(); players = [(int(p.get('coins',0)), p.get('username') or f'ID {uid}') for uid,p in data.get('players',{}).items()]
     players.sort(reverse=True, key=lambda x:x[0])
-    if not players: return bot.send_message(m.chat.id, '🏆 Топ пока пуст.')
+    if not players: return bot.send_message(m.chat.id, '🏆 Топ пока пуст.', reply_markup=no_group_keyboard(m))
     medals = ['🥇','🥈','🥉']; text = '🏆 <b>Топ богатых игроков</b>\n\n'
     for i,(coins,name) in enumerate(players[:10],1):
         prefix = medals[i-1] if i <= 3 else f'{i}.'
         name = name if name.startswith('ID ') else '@' + name
         text += f"{prefix} {name} — <b>{fmt(coins)} m¢</b>\n"
-    bot.send_message(m.chat.id, text)
+    bot.send_message(m.chat.id, text, reply_markup=no_group_keyboard(m))
 
 @bot.message_handler(func=lambda m: m.text == '🎁 Бонус')
 def bonus(m):
@@ -224,9 +230,9 @@ def bonus(m):
         last = int(p.get('last_bonus',0))
         if now - last < cooldown:
             left = cooldown - (now-last); h = left//3600; mm = (left%3600)//60
-            save_data(data); return bot.send_message(m.chat.id, f"⏳ Бонус уже получен.\n\nПриходи через: <b>{h}ч {mm}м</b>")
+            save_data(data); return bot.send_message(m.chat.id, f"⏳ Бонус уже получен.\n\nПриходи через: <b>{h}ч {mm}м</b>", reply_markup=no_group_keyboard(m))
         p['coins'] += reward; p['last_bonus'] = now; p['best_balance'] = max(p['best_balance'], p['coins']); save_data(data)
-    bot.send_message(m.chat.id, f"🎁 <b>Ежедневный бонус получен!</b>\n\n💰 Начислено: <b>{fmt(reward)} m¢</b>\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>")
+    bot.send_message(m.chat.id, f"🎁 <b>Ежедневный бонус получен!</b>\n\n💰 Начислено: <b>{fmt(reward)} m¢</b>\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>", reply_markup=no_group_keyboard(m))
 
 @bot.message_handler(func=lambda m: m.text in ['❓ Помощь', 'Помощь', 'помощь'])
 def help_msg(m):
@@ -238,7 +244,8 @@ def help_msg(m):
         f"❌ При проигрыше теряется ставка.\n"
         f"🎁 Бонус можно получать 1 раз в день.\n"
         f"🧾 Чеки: напиши <b>Создать чек</b> и укажи сумму.\n"
-        f"🏆 Попадай в топ богатых игроков."
+        f"🏆 Попадай в топ богатых игроков.",
+        reply_markup=no_group_keyboard(m)
     )
 
 
@@ -261,7 +268,7 @@ def make_check_link(check_id):
 @bot.message_handler(func=lambda m: (m.text or '').lower() in ['🧾 создать чек', 'создать чек', 'чек'])
 def create_check_start(m):
     if m.chat.type != 'private':
-        return bot.send_message(m.chat.id, '🧾 Чтобы создать чек, напиши мне в ЛС: Создать чек')
+        return bot.send_message(m.chat.id, '🧾 Чтобы создать чек, напиши мне в ЛС: Создать чек', reply_markup=types.ReplyKeyboardRemove())
     with LOCK:
         data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
         p['state'] = 'wait_check_amount'; save_data(data)
@@ -346,7 +353,7 @@ def text_router(m):
     if low in ['играть', '🎮 играть']:
         if m.chat.type == 'private':
             return play(m)
-        return bot.send_message(m.chat.id, '🎮 Игры:\n\n🏀 Баскетбол\n🎯 Дартс\n⚽ Футбол\n🎳 Боулинг\n🎰 Казино\n\nВ группе напиши название игры и ставку. Например:\n<code>Баскетбол 100</code>')
+        return bot.send_message(m.chat.id, '🎮 Игры:\n\n🏀 Баскетбол\n🎯 Дартс\n⚽ Футбол\n🎳 Боулинг\n🎰 Казино\n\nВ группе напиши название игры и ставку. Например:\n<code>Баскетбол 100</code>', reply_markup=types.ReplyKeyboardRemove())
     if low in ['баланс', '💰 баланс']:
         return balance(m)
     if low in ['профиль', '📊 профиль']:
@@ -370,7 +377,7 @@ def text_router(m):
     if parts and parts[0] in game_names:
         game = game_names[parts[0]]
         if len(parts) < 2:
-            return bot.send_message(m.chat.id, '💸 Напиши ставку вместе с игрой. Например: <code>Баскетбол 100</code>')
+            return bot.send_message(m.chat.id, '💸 Напиши ставку вместе с игрой. Например: <code>Баскетбол 100</code>', reply_markup=no_group_keyboard(m))
         bet_raw = parts[1]
         with LOCK:
             data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
@@ -381,7 +388,7 @@ def text_router(m):
             try:
                 bet = int(bet_raw)
             except Exception:
-                return bot.send_message(m.chat.id, '❌ Ставка должна быть числом. Например: <code>Футбол 100</code>')
+                return bot.send_message(m.chat.id, '❌ Ставка должна быть числом. Например: <code>Футбол 100</code>', reply_markup=no_group_keyboard(m))
         return play_text_game(m, game, bet)
 
     if m.chat.type == 'private':
@@ -390,19 +397,19 @@ def text_router(m):
 def play_text_game(m, game, bet):
     info = GAME_INFO.get(game)
     if not info:
-        return bot.send_message(m.chat.id, '❌ Игра не найдена.')
+        return bot.send_message(m.chat.id, '❌ Игра не найдена.', reply_markup=no_group_keyboard(m))
     with LOCK:
         data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
         balance = int(p['coins'])
         if balance <= 0:
             save_data(data)
-            return bot.send_message(m.chat.id, '❌ У тебя 0 m¢. Забери бонус 🎁')
+            return bot.send_message(m.chat.id, '❌ У тебя 0 m¢. Забери бонус 🎁', reply_markup=no_group_keyboard(m))
         if bet <= 0:
             save_data(data)
-            return bot.send_message(m.chat.id, '❌ Ставка должна быть больше 0.')
+            return bot.send_message(m.chat.id, '❌ Ставка должна быть больше 0.', reply_markup=no_group_keyboard(m))
         if bet > balance:
             save_data(data)
-            return bot.send_message(m.chat.id, f'❌ Не хватает m¢.\n\n💰 Баланс: <b>{fmt(balance)} m¢</b>\n💸 Ставка: <b>{fmt(bet)} m¢</b>')
+            return bot.send_message(m.chat.id, f'❌ Не хватает m¢.\n\n💰 Баланс: <b>{fmt(balance)} m¢</b>\n💸 Ставка: <b>{fmt(bet)} m¢</b>', reply_markup=no_group_keyboard(m))
         save_data(data)
     bot.send_message(m.chat.id, f"{info['name']}\n\n💸 Ставка: <b>{fmt(bet)} m¢</b>\n🎲 Бросаем...")
     dice_msg = bot.send_dice(m.chat.id, emoji=info['emoji'])
