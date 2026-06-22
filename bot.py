@@ -1,4 +1,4 @@
-import os, json, time, threading
+import os, json, time, threading, secrets
 from pathlib import Path
 import requests
 import telebot
@@ -9,6 +9,9 @@ TOKEN = os.getenv('TOKEN') or os.getenv('BOT_TOKEN', '')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 PING_URL = os.getenv('PING_URL', 'https://your-app.onrender.com/')
 PING_INTERVAL = 300
+BOT_USERNAME = os.getenv('BOT_USERNAME', '')
+CHECK_MIN = 10
+CHECK_MAX = 1000001
 DATA_FILE = Path('players.json')
 LOCK = threading.Lock()
 START_COINS = 1000
@@ -31,7 +34,7 @@ def fmt(n):
     return f"{int(n):,}".replace(',', "'")
 
 def default_data():
-    return {'players': {}, 'stats': {'total_games': 0}}
+    return {'players': {}, 'checks': {}, 'stats': {'total_games': 0}}
 
 def load_data():
     if not DATA_FILE.exists():
@@ -42,13 +45,14 @@ def load_data():
     except Exception:
         data = default_data()
     data.setdefault('players', {})
+    data.setdefault('checks', {})
     data.setdefault('stats', {})
     data['stats'].setdefault('total_games', 0)
     return data
 
 def save_data(data):
     # Чистим мусор: не сохраняем историю каждой игры, только баланс и статистику.
-    clean = {'players': {}, 'stats': {'total_games': int(data.get('stats', {}).get('total_games', 0))}}
+    clean = {'players': {}, 'checks': {}, 'stats': {'total_games': int(data.get('stats', {}).get('total_games', 0))}}
     for uid, p in data.get('players', {}).items():
         clean['players'][uid] = {
             'username': p.get('username', ''),
@@ -60,17 +64,27 @@ def save_data(data):
             'last_bonus': int(p.get('last_bonus', 0)),
             'current_game': p.get('current_game'),
             'current_bet': int(p.get('current_bet', 0)),
+            'state': p.get('state'),
         }
+    for cid, ch in data.get('checks', {}).items():
+        if not ch.get('activated'):
+            clean['checks'][cid] = {
+                'creator_id': str(ch.get('creator_id', '')),
+                'creator_username': ch.get('creator_username', ''),
+                'amount': int(ch.get('amount', 0)),
+                'created_at': int(ch.get('created_at', time.time())),
+                'activated': False,
+            }
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(clean, f, ensure_ascii=False, indent=2)
 
 def get_player(data, user_id, username=''):
     uid = str(user_id)
     if uid not in data['players']:
-        data['players'][uid] = {'username': username or '', 'coins': START_COINS, 'wins': 0, 'losses': 0, 'games': 0, 'best_balance': START_COINS, 'last_bonus': 0, 'current_game': None, 'current_bet': 0}
+        data['players'][uid] = {'username': username or '', 'coins': START_COINS, 'wins': 0, 'losses': 0, 'games': 0, 'best_balance': START_COINS, 'last_bonus': 0, 'current_game': None, 'current_bet': 0, 'state': None}
     p = data['players'][uid]
     p['username'] = username or p.get('username', '')
-    for k, v in {'coins': START_COINS, 'wins':0, 'losses':0, 'games':0, 'best_balance':START_COINS, 'last_bonus':0, 'current_game':None, 'current_bet':0}.items():
+    for k, v in {'coins': START_COINS, 'wins':0, 'losses':0, 'games':0, 'best_balance':START_COINS, 'last_bonus':0, 'current_game':None, 'current_bet':0, 'state':None}.items():
         p.setdefault(k, v)
     return p
 
@@ -78,6 +92,7 @@ def main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row('🎮 Играть', '💰 Баланс')
     kb.row('🏆 Топ', '🎁 Бонус')
+    kb.row('🧾 Создать чек')
     kb.row('📊 Профиль', '❓ Помощь')
     return kb
 
@@ -100,14 +115,28 @@ def bets_kb(game):
 
 @bot.message_handler(commands=['start'])
 def start(m):
+    parts = (m.text or '').split(maxsplit=1)
+    if len(parts) > 1 and parts[1].startswith('check_'):
+        return activate_check(m, parts[1].replace('check_', '', 1))
     with LOCK:
         data = load_data(); get_player(data, m.from_user.id, m.from_user.username or ''); save_data(data)
-    bot.send_message(m.chat.id, "👋 <b>Привет!</b>\n\nДобро пожаловать в <b>MoneyPlay</b> 🎮\n\nЗдесь ты можешь играть в мини-игры, копить m¢ и соревноваться с друзьями.\n\n🏆 Поднимайся в топ\n💰 Копи монеты\n🎲 Проверяй удачу\n🔥 Стань самым богатым игроком\n\n👇 Нажми «🎮 Играть», чтобы начать!", reply_markup=main_menu())
+    markup = main_menu() if m.chat.type == 'private' else None
+    bot.send_message(
+        m.chat.id,
+        "👋 <b>Привет!</b>\n\n"
+        "Добро пожаловать в <b>MoneyPlay</b> 🎮\n\n"
+        "Здесь ты можешь играть в мини-игры, копить m¢ и соревноваться с друзьями.\n\n"
+        "🏆 Поднимайся в топ\n💰 Копи монеты\n🎲 Проверяй удачу\n🔥 Стань самым богатым игроком\n\n"
+        "👇 Напиши «Играть», чтобы начать!",
+        reply_markup=markup
+    )
 
 @bot.message_handler(func=lambda m: m.text == '🎮 Играть')
 def play(m):
     with LOCK:
         data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or ''); save_data(data)
+    if m.chat.type != 'private':
+        return bot.send_message(m.chat.id, '🎮 Игры:\n\n🏀 Баскетбол\n🎯 Дартс\n⚽ Футбол\n🎳 Боулинг\n🎰 Казино\n\nВ группе напиши название игры и ставку. Например:\n<code>Баскетбол 100</code>')
     bot.send_message(m.chat.id, f"🎮 <b>ДАВАЙ ИГРАТЬ!</b>\n\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>\n\n👇 Выбери игру:", reply_markup=games_kb())
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('game_') or c.data == 'back_games')
@@ -199,9 +228,203 @@ def bonus(m):
         p['coins'] += reward; p['last_bonus'] = now; p['best_balance'] = max(p['best_balance'], p['coins']); save_data(data)
     bot.send_message(m.chat.id, f"🎁 <b>Ежедневный бонус получен!</b>\n\n💰 Начислено: <b>{fmt(reward)} m¢</b>\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>")
 
-@bot.message_handler(func=lambda m: m.text == '❓ Помощь')
+@bot.message_handler(func=lambda m: m.text in ['❓ Помощь', 'Помощь', 'помощь'])
 def help_msg(m):
-    bot.send_message(m.chat.id, f"❓ <b>Помощь</b>\n\n🎮 Играй в мини-игры и копи m¢.\n✅ Победа даёт x{WIN_X} от ставки.\n❌ При проигрыше теряется ставка.\n🎁 Бонус можно получать 1 раз в день.\n\n⚠️ Это игровой бот без выводов и реальных выплат.")
+    bot.send_message(
+        m.chat.id,
+        f"❓ <b>Помощь</b>\n\n"
+        f"🎮 Играй в мини-игры и копи m¢.\n"
+        f"✅ Победа даёт x{WIN_X} от ставки.\n"
+        f"❌ При проигрыше теряется ставка.\n"
+        f"🎁 Бонус можно получать 1 раз в день.\n"
+        f"🧾 Чеки: напиши <b>Создать чек</b> и укажи сумму.\n"
+        f"🏆 Попадай в топ богатых игроков."
+    )
+
+
+def get_bot_username():
+    global BOT_USERNAME
+    if BOT_USERNAME:
+        return BOT_USERNAME.replace('@', '')
+    try:
+        BOT_USERNAME = bot.get_me().username or ''
+    except Exception:
+        BOT_USERNAME = ''
+    return BOT_USERNAME.replace('@', '')
+
+def make_check_link(check_id):
+    username = get_bot_username()
+    if username:
+        return f"https://t.me/{username}?start=check_{check_id}"
+    return f"/start check_{check_id}"
+
+@bot.message_handler(func=lambda m: (m.text or '').lower() in ['🧾 создать чек', 'создать чек', 'чек'])
+def create_check_start(m):
+    if m.chat.type != 'private':
+        return bot.send_message(m.chat.id, '🧾 Чтобы создать чек, напиши мне в ЛС: Создать чек')
+    with LOCK:
+        data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
+        p['state'] = 'wait_check_amount'; save_data(data)
+    bot.send_message(m.chat.id, f"🧾 <b>Создание чека</b>\n\nНапиши сумму чека.\n\nМинимум: <b>{fmt(CHECK_MIN)} m¢</b>\nМаксимум: <b>{fmt(CHECK_MAX)} m¢</b>")
+
+def activate_check(m, check_id):
+    with LOCK:
+        data = load_data()
+        checks = data.setdefault('checks', {})
+        ch = checks.get(check_id)
+        if not ch:
+            save_data(data)
+            return bot.send_message(m.chat.id, '❌ Чек не найден или уже активирован.')
+        if ch.get('activated'):
+            save_data(data)
+            return bot.send_message(m.chat.id, '❌ Этот чек уже активирован.')
+        creator_id = str(ch.get('creator_id'))
+        activator_id = str(m.from_user.id)
+        if creator_id == activator_id:
+            save_data(data)
+            return bot.send_message(m.chat.id, '❌ Нельзя активировать свой чек.')
+        amount = int(ch.get('amount', 0))
+        activator = get_player(data, m.from_user.id, m.from_user.username or '')
+        activator['coins'] += amount
+        activator['best_balance'] = max(int(activator.get('best_balance', 0)), int(activator['coins']))
+        ch['activated'] = True
+        ch['activated_by'] = activator_id
+        ch['activated_username'] = m.from_user.username or ''
+        ch['activated_at'] = int(time.time())
+        # удаляем активированный чек из файла, чтобы не засорять базу
+        checks.pop(check_id, None)
+        save_data(data)
+    bot.send_message(m.chat.id, f"✅ <b>Чек успешно активирован!</b>\n\n💰 Получено: <b>{fmt(amount)} m¢</b>")
+    who = f"@{m.from_user.username}" if m.from_user.username else f"ID {m.from_user.id}"
+    try:
+        bot.send_message(int(creator_id), f"🧾 <b>Твой чек активировали!</b>\n\n👤 Активировал: <b>{who}</b>\n💰 Сумма: <b>{fmt(amount)} m¢</b>")
+    except Exception:
+        pass
+
+@bot.message_handler(func=lambda m: not (m.text or '').startswith('/'), content_types=['text'])
+def text_router(m):
+    text = (m.text or '').strip()
+    low = text.lower()
+
+    # Если пользователь вводит сумму для чека
+    with LOCK:
+        data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
+        state = p.get('state')
+        if state == 'wait_check_amount' and m.chat.type == 'private':
+            cleaned = low.replace('m¢', '').replace('монет', '').replace(' ', '')
+            try:
+                amount = int(cleaned)
+            except Exception:
+                save_data(data)
+                return bot.send_message(m.chat.id, '❌ Напиши сумму числом. Например: 100')
+            if amount < CHECK_MIN:
+                save_data(data)
+                return bot.send_message(m.chat.id, f'❌ Минимальная сумма чека: <b>{fmt(CHECK_MIN)} m¢</b>')
+            if amount > CHECK_MAX:
+                save_data(data)
+                return bot.send_message(m.chat.id, f'❌ Максимальная сумма чека: <b>{fmt(CHECK_MAX)} m¢</b>')
+            if amount > int(p.get('coins', 0)):
+                save_data(data)
+                return bot.send_message(m.chat.id, f"❌ Недостаточно монет.\n\n💰 Твой баланс: <b>{fmt(p.get('coins', 0))} m¢</b>\n🧾 Ты хочешь создать чек на: <b>{fmt(amount)} m¢</b>")
+            check_id = secrets.token_urlsafe(8).replace('-', '').replace('_', '')[:10]
+            while check_id in data.setdefault('checks', {}):
+                check_id = secrets.token_urlsafe(8).replace('-', '').replace('_', '')[:10]
+            p['coins'] = int(p['coins']) - amount
+            p['state'] = None
+            data['checks'][check_id] = {
+                'creator_id': str(m.from_user.id),
+                'creator_username': m.from_user.username or '',
+                'amount': amount,
+                'created_at': int(time.time()),
+                'activated': False,
+            }
+            save_data(data)
+            link = make_check_link(check_id)
+            return bot.send_message(m.chat.id, f"✅ <b>Чек создан!</b>\n\n💰 Сумма: <b>{fmt(amount)} m¢</b>\n💳 С баланса списано: <b>{fmt(amount)} m¢</b>\n\n🔗 Ссылка на чек:\n{link}")
+
+    # Текстовые команды для групп и ЛС
+    if low in ['играть', '🎮 играть']:
+        if m.chat.type == 'private':
+            return play(m)
+        return bot.send_message(m.chat.id, '🎮 Игры:\n\n🏀 Баскетбол\n🎯 Дартс\n⚽ Футбол\n🎳 Боулинг\n🎰 Казино\n\nВ группе напиши название игры и ставку. Например:\n<code>Баскетбол 100</code>')
+    if low in ['баланс', '💰 баланс']:
+        return balance(m)
+    if low in ['профиль', '📊 профиль']:
+        return profile(m)
+    if low in ['топ', '🏆 топ']:
+        return top(m)
+    if low in ['бонус', '🎁 бонус']:
+        return bonus(m)
+    if low in ['помощь', '❓ помощь']:
+        return help_msg(m)
+
+    # Быстрая игра в группе текстом: Баскетбол 100 / Дартс 300 / и т.д.
+    game_names = {
+        'баскетбол': 'basket', '🏀': 'basket',
+        'дартс': 'darts', '🎯': 'darts',
+        'футбол': 'football', '⚽': 'football',
+        'боулинг': 'bowling', '🎳': 'bowling',
+        'казино': 'casino', '🎰': 'casino',
+    }
+    parts = low.split()
+    if parts and parts[0] in game_names:
+        game = game_names[parts[0]]
+        if len(parts) < 2:
+            return bot.send_message(m.chat.id, '💸 Напиши ставку вместе с игрой. Например: <code>Баскетбол 100</code>')
+        bet_raw = parts[1]
+        with LOCK:
+            data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
+            balance_now = int(p.get('coins', 0))
+        if bet_raw in ['все', 'all']:
+            bet = balance_now
+        else:
+            try:
+                bet = int(bet_raw)
+            except Exception:
+                return bot.send_message(m.chat.id, '❌ Ставка должна быть числом. Например: <code>Футбол 100</code>')
+        return play_text_game(m, game, bet)
+
+    if m.chat.type == 'private':
+        bot.send_message(m.chat.id, '👇 Выбери кнопку в меню или напиши: Играть, Профиль, Баланс, Создать чек.', reply_markup=main_menu())
+
+def play_text_game(m, game, bet):
+    info = GAME_INFO.get(game)
+    if not info:
+        return bot.send_message(m.chat.id, '❌ Игра не найдена.')
+    with LOCK:
+        data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
+        balance = int(p['coins'])
+        if balance <= 0:
+            save_data(data)
+            return bot.send_message(m.chat.id, '❌ У тебя 0 m¢. Забери бонус 🎁')
+        if bet <= 0:
+            save_data(data)
+            return bot.send_message(m.chat.id, '❌ Ставка должна быть больше 0.')
+        if bet > balance:
+            save_data(data)
+            return bot.send_message(m.chat.id, f'❌ Не хватает m¢.\n\n💰 Баланс: <b>{fmt(balance)} m¢</b>\n💸 Ставка: <b>{fmt(bet)} m¢</b>')
+        save_data(data)
+    bot.send_message(m.chat.id, f"{info['name']}\n\n💸 Ставка: <b>{fmt(bet)} m¢</b>\n🎲 Бросаем...")
+    dice_msg = bot.send_dice(m.chat.id, emoji=info['emoji'])
+    time.sleep(4)
+    is_win = dice_msg.dice.value in info['win_values']
+    with LOCK:
+        data = load_data(); p = get_player(data, m.from_user.id, m.from_user.username or '')
+        bet = min(bet, int(p['coins']))
+        if is_win:
+            win_amount = int(bet * WIN_X)
+            p['coins'] = int(p['coins']) - bet + win_amount
+            p['wins'] += 1
+            result = f"{info['win_text']}\n\n💸 Ставка: <b>{fmt(bet)} m¢</b>\n🎉 Выигрыш: <b>+{fmt(win_amount)} m¢</b>\n\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>"
+        else:
+            p['coins'] = max(0, int(p['coins']) - bet)
+            p['losses'] += 1
+            result = f"{info['lose_text']}\n\n💸 Ставка: <b>{fmt(bet)} m¢</b>\n📉 Потеряно: <b>{fmt(bet)} m¢</b>\n\n💰 Баланс: <b>{fmt(p['coins'])} m¢</b>"
+        p['games'] += 1
+        p['best_balance'] = max(int(p.get('best_balance', 0)), int(p['coins']))
+        data['stats']['total_games'] = int(data['stats'].get('total_games', 0)) + 1
+        save_data(data)
+    bot.send_message(m.chat.id, result)
 
 @bot.message_handler(commands=['give'])
 def give(m):
@@ -227,10 +450,6 @@ def admin_stats(m):
     with LOCK:
         data = load_data(); users=len(data['players']); total_games=data['stats'].get('total_games',0); total_coins=sum(int(p.get('coins',0)) for p in data['players'].values())
     bot.send_message(m.chat.id, f"📊 <b>Статистика бота</b>\n\n👥 Игроков: <b>{users}</b>\n🎮 Всего игр: <b>{total_games}</b>\n💰 Монет у игроков: <b>{fmt(total_coins)} m¢</b>")
-
-@bot.message_handler(func=lambda m: True)
-def fallback(m):
-    bot.send_message(m.chat.id, '👇 Выбери кнопку в меню.', reply_markup=main_menu())
 
 app = Flask(__name__)
 @app.route('/')
